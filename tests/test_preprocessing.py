@@ -21,7 +21,7 @@ def test_load_data_reads_jsonl_line_by_line(tmp_path, monkeypatch):
     assert preprocessing.load_data() == [{"a": 1}, {"b": 2}]
 
 
-def test_preprocess_text_preserves_procurement_terms():
+def test_preprocess_text_preserves_casing_in_text_and_lowercases_tokens():
     preprocessing = _load_preprocessing_module()
 
     result = preprocessing.preprocess_text(
@@ -32,16 +32,16 @@ def test_preprocess_text_preserves_procurement_terms():
         "GDPR DPA ISO 27001 SOC 2 €50,000 Acme Logistics S.L. three-way-match"
     )
     assert {
-        "GDPR",
-        "DPA",
-        "ISO",
+        "gdpr",
+        "dpa",
+        "iso",
         "27001",
-        "SOC",
+        "soc",
         "2",
         "€50,000",
-        "Acme",
-        "Logistics",
-        "S.L.",
+        "acme",
+        "logistics",
+        "s.l.",
         "three-way-match",
     }.issubset(result["tokens"])
 
@@ -50,13 +50,13 @@ def test_preprocess_data_combines_title_and_text():
     preprocessing = _load_preprocessing_module()
 
     result = preprocessing.preprocess_data(
-        [{"id": "DOC-1", "title": "Supplier DPA", "text": "GDPR applies."}]
+        [{"id": "DOC-1", "title": "Supplier DPA", "text": "GDPR, applies."}]
     )
 
     assert result == [
         {
             "id": "DOC-1",
-            "normalized_text": "Supplier DPA GDPR applies.",
-            "tokens": ["Supplier", "DPA", "GDPR", "applies", "."],
+            "normalized_text": "Supplier DPA GDPR, applies.",
+            "tokens": ["supplier", "dpa", "gdpr", "applies"],
         }
     ]

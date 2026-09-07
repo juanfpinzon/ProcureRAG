@@ -1,2 +1,7 @@
 .venv/
-data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+data/*
+!data/corpus_v0/
+!data/corpus_v0/*.jsonl

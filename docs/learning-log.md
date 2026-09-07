@@ -6,7 +6,7 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 ### What I built or drafted
 
-- 
+- Preprocessing module that loads JSONL corpus rows, combines title + text, normalizes whitespace, preserves display text casing, and emits lowercase retrieval tokens.
 
 ### Course checkpoint completed
 
@@ -21,19 +21,19 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 ### What failed or was confusing
 
-- 
+- Deciding whether preprocessing should preserve casing or lowercase everything.
 
 ### What became clearer
 
-- 
+- Retrieval tokens and display/audit text can have different normalization contracts.
 
 ### What I can now explain in an interview
 
-- 
+- Why lowercasing helps lexical matching but can damage display fidelity and acronym/entity traceability.
 
 ### What remains weak
 
-- 
+- Tokenization decisions around punctuation, legal suffixes like Ltd./Inc., stop-word removal, and whether punctuation tokens should remain for TF-IDF.
 
 ### Next step
 

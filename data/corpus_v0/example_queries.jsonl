@@ -1,0 +1,8 @@
+{"query":"What approval is required for a €60,000 purchase order?","expected_relevant_ids":["POL-001"],"reason":"Tests threshold and currency preservation."}
+{"query":"What checks are needed before onboarding a new high-risk supplier?","expected_relevant_ids":["POL-002"],"reason":"Tests supplier onboarding, KYC, sanctions, due diligence terms."}
+{"query":"Which SaaS suppliers need SOC 2 Type II or ISO 27001 evidence?","expected_relevant_ids":["POL-003"],"reason":"Tests acronym and security-standard preservation."}
+{"query":"How should logistics RFPs balance price and service quality?","expected_relevant_ids":["GUIDE-001"],"reason":"Tests category retrieval and weighted scoring concepts."}
+{"query":"When must Acme Logistics receive renewal notice?","expected_relevant_ids":["CONTRACT-001"],"reason":"Tests supplier name, date, and contract-specific retrieval."}
+{"query":"Can Northstar use company data for model training?","expected_relevant_ids":["CONTRACT-002"],"reason":"Tests semantic match around prohibited use, analytics supplier, and DPA."}
+{"query":"When can we skip the three-bid requirement?","expected_relevant_ids":["SOP-001"],"reason":"Tests synonym-ish retrieval: skip vs exceptions, bid vs competitive sourcing."}
+{"query":"What happens when invoice price variance is over 3%?","expected_relevant_ids":["SOP-002"],"reason":"Tests numeric token preservation and AP domain terms."}

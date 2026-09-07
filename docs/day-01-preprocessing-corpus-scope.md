@@ -84,11 +84,11 @@ Fill the Day 1 entry in `docs/learning-log.md`.
 
 Then answer without notes:
 
-1. Why does preprocessing change retrieval quality?
-2. What is one term you must not remove in a procurement corpus?
+1. Why does preprocessing change retrieval quality? Because its the entry point for our data, if not read and loaded properly will mean issues later on.
+2. What is one term you must not remove in a procurement corpus? Acronyms or supplier names suffixes.
 3. When can lowercasing hurt?
-4. Why might stemming improve recall but hurt precision?
-5. What preprocessing mistake would make BM25 worse tomorrow?
+4. Why might stemming improve recall but hurt precision? Will expand the universe of matching terms, but at same time increasing chances of going on wrong direction (lower precision)
+5. What preprocessing mistake would make BM25 worse tomorrow? Handling punctiations.
 
 ## Hermes review protocol
 

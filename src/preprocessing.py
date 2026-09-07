@@ -1,11 +1,11 @@
 import json
-import os
 import re
+from pathlib import Path
 
-PROJECT_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ProcureRAG")
-DATA_PATH = os.path.join(PROJECT_ROOT, "data", "corpus_v0", "procurement_kb.jsonl")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_PATH = PROJECT_ROOT / "data" / "corpus_v0" / "procurement_kb.jsonl"
 TOKEN_PATTERN = re.compile(
-    r"€\d[\d,.]*|(?:[^\W_]\.){2,}|[^\W_]+(?:-[^\W_]+)*|[^\w\s]",
+    r"€\d[\d,.]*|(?:[^\W_]\.){2,}|[^\W_]+(?:-[^\W_]+)*",
     re.UNICODE,
 )
 
@@ -22,10 +22,10 @@ def load_data():
 
 
 def preprocess_text(text):
-    normalized_text = " ".join(text.lower().split())
+    normalized_text = " ".join(text.split())
     return {
         "normalized_text": normalized_text,
-        "tokens": TOKEN_PATTERN.findall(normalized_text),
+        "tokens": TOKEN_PATTERN.findall(normalized_text.lower()),
     }
 
 
