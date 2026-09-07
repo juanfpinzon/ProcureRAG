@@ -86,7 +86,7 @@ Then answer without notes:
 
 1. Why does preprocessing change retrieval quality? Because its the entry point for our data, if not read and loaded properly will mean issues later on.
 2. What is one term you must not remove in a procurement corpus? Acronyms or supplier names suffixes.
-3. When can lowercasing hurt?
+3. When can lowercasing hurt? Lowercasing can hurt when casing carries meaning: acronyms like PO/RFP/DPA/GDPR, supplier legal names, product names, or display/audit traceability. For retrieval tokens, lowercasing helps matching; for display and evidence, original casing should be preserved.
 4. Why might stemming improve recall but hurt precision? Will expand the universe of matching terms, but at same time increasing chances of going on wrong direction (lower precision)
 5. What preprocessing mistake would make BM25 worse tomorrow? Handling punctiations.
 
