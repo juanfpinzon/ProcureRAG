@@ -60,3 +60,17 @@ def test_preprocess_data_combines_title_and_text():
             "tokens": ["supplier", "dpa", "gdpr", "applies"],
         }
     ]
+
+
+def test_preprocess_text_preserves_procurement_numeric_tokens():
+    preprocessing = _load_preprocessing_module()
+
+    result = preprocessing.preprocess_text(
+        "Threshold €25,000. Variance 3% and SLA 98.5% on 2027-05-12."
+    )
+
+    assert "€25,000" in result["tokens"]
+    assert "€25,000." not in result["tokens"]
+    assert "3%" in result["tokens"]
+    assert "98.5%" in result["tokens"]
+    assert "2027-05-12" in result["tokens"]

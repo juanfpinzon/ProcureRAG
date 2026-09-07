@@ -5,7 +5,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = PROJECT_ROOT / "data" / "corpus_v0" / "procurement_kb.jsonl"
 TOKEN_PATTERN = re.compile(
-    r"€\d[\d,.]*|(?:[^\W_]\.){2,}|[^\W_]+(?:-[^\W_]+)*",
+    # Put domain-specific patterns before the general word pattern so that
+    # punctuation inside amounts, percentages, and dotted acronyms is kept.
+    r"€\d(?:[\d,.]*\d)?|\d+(?:[.,]\d+)?%|(?:[^\W_]\.){2,}|[^\W_]+(?:-[^\W_]+)*",
     re.UNICODE,
 )
 
