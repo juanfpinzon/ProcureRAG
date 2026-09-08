@@ -93,8 +93,8 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 ### Course checkpoint completed
 
-- Boot.dev RAG chapter/lesson:
-- Exercises completed or attempted:
+- Boot.dev RAG chapter/lesson: Completed
+- Exercises completed or attempted: Completed
 
 ### Retrieval artifact
 

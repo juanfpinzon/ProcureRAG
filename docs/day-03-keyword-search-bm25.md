@@ -134,12 +134,32 @@ Fill the Day 3 entry in `docs/learning-log.md`.
 Then answer without notes:
 
 1. What problem does BM25 solve that raw TF-IDF does not?
+
+   **Answer:** BM25 reduces TF-IDF's tendency to over-reward repeated terms and long documents by applying term-frequency saturation and document-length normalization.
+
 2. Why should term frequency saturate instead of increasing linearly forever?
+
+   **Answer:** The first few occurrences show strong relevance; later repetitions often add little new evidence. Saturation prevents verbose documents or keyword stuffing from dominating the ranking.
+
 3. What does document length normalization protect against?
+
+   **Answer:** It protects against long documents receiving more matches simply because they contain more words. A term match in a long document is discounted relative to a short document when appropriate.
+
 4. What do `k1` and `b` control?
+
+   **Answer:** `k1` controls how quickly term-frequency credit saturates. `b` controls the strength of document-length normalization: `0` disables it and `1` applies full normalization.
+
 5. Why is BM25 still lexical, not semantic?
+
+   **Answer:** BM25 matches token overlap and term statistics. It does not understand synonyms, intent, or meaning unless those words literally appear in the query and document.
+
 6. What kind of query would still fail even after BM25?
+
+   **Answer:** A query using different wording from the documents—such as “vendor vetting” when the policy only says “supplier due diligence”—may fail because there is little or no token overlap.
+
 7. How would you explain BM25 to a recruiter in 60 seconds?
+
+   **Answer:** BM25 is a lexical ranking algorithm built on TF-IDF. It rewards query terms that are rare across the corpus, gives credit when they occur in a document, but makes repeated occurrences contribute less and adjusts for document length. `k1` controls term-frequency saturation and `b` controls length normalization. It is fast and interpretable, but it cannot capture semantic similarity or synonyms by itself.
 
 ## Hermes review protocol
 
