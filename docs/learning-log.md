@@ -148,3 +148,75 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 - Compare lexical retrieval failures with the next retrieval approach while
   keeping the TF-IDF and BM25 baselines available for evaluation.
+
+## 2026-09-10 — Day 4: Semantic Search Checkpoint
+
+### What I built or drafted
+
+- Drafted Day 4 route in `docs/day-04-semantic-search-checkpoint.md`.
+- Starting from the Day 3 TF-IDF + BM25 lexical baseline.
+- Added `src/semantic_search.py` with an explainable cosine-similarity
+  retriever, using the small
+  `sentence-transformers/multi-qa-MiniLM-L6-cos-v1` model.
+- Kept model loading separate from retrieval functions so unit tests can use
+  deterministic fake vectors without downloading a model.
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Completed
+- Exercises completed or attempted: Completed for the semantic-search path
+
+### Retrieval artifact or bridge evidence
+
+- Route taken: Primary semantic artifact
+- Model: `multi-qa-MiniLM-L6-cos-v1`, 384-dimensional normalized embeddings
+- Query demonstrated: `What vendor vetting is required before working with a risky supplier?`
+- Expected relevant document: `POL-002`
+- TF-IDF top-1: `SOP-002` (`3.5066`)
+- BM25 top-1: `SOP-002` (`3.2488`)
+- Semantic top-1: `POL-002` (`0.6284`)
+- Five-query top-1 comparison:
+  - high-risk supplier checks → `POL-002` / `POL-002` / `POL-002`
+  - vendor vetting paraphrase → `SOP-002` / `SOP-002` / `POL-002`
+  - Northstar model-training use → `CONTRACT-002` / `CONTRACT-002` / `CONTRACT-002`
+  - SOC 2 / ISO 27001 evidence → `POL-003` / `POL-003` / `POL-003`
+  - invoice variance over `3%` → `SOP-002` / `SOP-002` / `SOP-002`
+  - Result order in each row: TF-IDF / BM25 / semantic
+- Evidence commands:
+  - `./.venv/bin/pytest -q` → `22 passed`
+  - `./.venv/bin/python -m compileall -q src tests` → passed
+  - `./.venv/bin/python src/semantic_search.py` → comparison output above
+
+### What failed or was confusing
+
+- Dense retrieval returns a score for every document, even when the query and
+  document share no exact token. That is useful for paraphrases, but it also
+  means a dense score should not be treated as proof that an exact identifier,
+  amount, acronym, or legal name is present.
+
+### What became clearer
+
+- Normalized embeddings make cosine similarity easy to interpret as vector
+  direction: documents pointing in a similar semantic direction rank higher.
+  This complements lexical precision rather than replacing it.
+
+### What I can now explain in an interview
+
+- An embedding is a numeric vector representation of text where related
+  meanings should be placed near one another. Cosine similarity compares the
+  direction of the query vector with each document vector, so a paraphrase can
+  match even when the exact words differ. TF-IDF and BM25 remain stronger for
+  exact procurement identifiers, standards, percentages, amounts, and legal
+  names. Hybrid retrieval combines both signals because dense and lexical
+  retrieval fail in different ways.
+
+### What remains weak
+
+- Evaluating an embedding model on a larger labeled procurement set, handling
+  long documents, and choosing a defensible hybrid-scoring strategy remain
+  open weaknesses.
+
+### Next step
+
+- Add retrieval evaluation and compare a simple hybrid strategy against the
+  TF-IDF, BM25, and semantic baselines without hiding their individual scores.
