@@ -5,3 +5,5 @@ __pycache__/
 data/*
 !data/corpus_v0/
 !data/corpus_v0/*.jsonl
+!data/corpus_v1/
+!data/corpus_v1/*.jsonl
