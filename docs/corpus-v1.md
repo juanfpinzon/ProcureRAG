@@ -105,7 +105,14 @@ sentences exceed 80 words.
 
 ## Golden query set
 
-93 queries. Every one of the 34 documents is the primary answer for at least one query.
+93 queries. Every one of the 34 documents is *a* primary answer (`relevance_grades`
+value `2`) for at least one query. "Primary" is a set membership, not a rank: 48
+queries have multiple grade-2 documents (see "Multi-document queries" below), and
+within a tied group `expected_relevant_ids` does not promise any particular
+sub-order — only that primaries as a group precede secondaries. Two documents,
+`SOP-008` (Q005, Q006, Q052) and `MEMO-001` (Q061, Q075, Q088, Q093), are always
+tied with another grade-2 document and so never happen to be the first id listed;
+checking "primary" by list position alone will miss them.
 
 | Field | Purpose |
 |---|---|
@@ -114,8 +121,8 @@ sentences exceed 80 words.
 | `query_type` | lookup, threshold, numeric, procedural, conceptual, terminology, supplier_specific, multi_doc |
 | `difficulty` | easy (15) / medium (52) / hard (26) |
 | `expected_answer` | ground-truth answer text, for Week 3 generation evals |
-| `evidence` | `{doc_id, quote}` pairs — **124 quotes, every one verified as a verbatim substring of its document** |
-| `expected_relevant_ids` | v0-compatible name; ordered, primary documents first |
+| `evidence` | `{doc_id, quote}` pairs — **125 quotes, every one verified as a verbatim substring of its document** |
+| `expected_relevant_ids` | v0-compatible name; grade-2 (primary) ids as a group precede grade-1 (secondary) ids, but ties within a group aren't further ordered |
 | `relevance_grades` | `2` = primary, `1` = partially relevant — for nDCG and graded recall |
 | `metadata_filters` | expected filter values, for metadata-filtering exercises |
 | `reason` | v0-compatible name; what the query is designed to test |
@@ -196,10 +203,16 @@ renewal notice before 2027-05-12, no model training without written approval,
 
 - All 34 KB rows and 93 query rows parse as JSON; IDs unique in both files.
 - All `related_ids` resolve to documents in the corpus; no self-references.
-- All 124 evidence quotes verified verbatim against their document text.
+- All 125 evidence quotes verified verbatim against their document text (Q019's
+  POL-005 evidence was originally one quote that joined two table-row
+  sentences across a line break with a space instead of the newline that is
+  actually there; split into two quotes, one per sentence, matching how every
+  other tabular row in the corpus is already evidenced).
 - All `expected_relevant_ids` and `relevance_grades` keys resolve; sets agree.
 - Every `metadata_filters` entry matches at least one gold document.
-- Every document is the primary answer for at least one query.
+- Every document has `relevance_grades` value `2` (primary) for at least one
+  query — checked via the grades, not via `expected_relevant_ids[0]`, since 48
+  queries have tied primaries and list position doesn't break the tie.
 - 25 domain-token probes (`€50,000`, `3%`, `ISO 27001`, `S.L.`, `B.V.`,
   `MSA-ACM-2024-018`, `SUP-100482`, `IR35`, …) survive `TOKEN_PATTERN` intact.
 - `pytest tests/` — 48 passed. `src/` was not modified.
