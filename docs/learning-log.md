@@ -264,23 +264,33 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   `src/chunked_search.py::main()`, for 2 queries. Both granularities returned
   the correct expected document as the top result:
   - `"What happens when invoice price variance is over 3%?"` → `SOP-002`
-    (whole-doc score 0.5687 vs chunk `SOP-002::chunk-0` score 0.6534 — the
+    (whole-doc score 0.5687 vs chunk `SOP-002::chunk-0` score 0.5951 — the
     chunk dropped one trailing sentence unrelated to the variance rule and
     still matched, with a higher score).
   - `"When can we skip the three-bid requirement?"` → `SOP-001` (whole-doc
-    score 0.7019 vs chunk `SOP-001::chunk-0` score 0.4371 — this document is
-    only 3 sentences, so its single chunk is nearly identical to the whole
-    document minus the title; the gap here is mostly noise, not a real
-    precision win).
+    score 0.7019 vs chunk `SOP-001::chunk-0` score 0.7019 — exact tie. This
+    document is only 3 sentences, so its one chunk covers the same body text
+    as the whole document.)
+  - **Correction from review** (see below): my first version of this
+    comparison embedded whole documents as `title + text` but chunks as
+    `text` only, so it wasn't isolating the retrieval unit — a query phrase
+    that happened to match a title (e.g. "three-bid requirement" matching the
+    title "Three-bid requirement exceptions") gave the whole-document side an
+    unfair, unrelated advantage. `build_chunk_semantic_index` now embeds
+    `title + chunk text` too, so both sides share the same embedded-text
+    contract and the only real variable left is how much body text is in the
+    embedding — the actual retrieval unit. The numbers above are post-fix.
   - Caveat worth recording: on this 10-document, 2–5-sentence-per-document
-    toy corpus, whole-document and chunk-level results look similar because
-    documents are already short. The retrieval-unit argument matters far more
-    on realistic multi-page policies/contracts, which this corpus doesn't
-    have yet — matches the doc's warning not to overfit conclusions to the
-    tiny corpus.
+    toy corpus, whole-document and chunk-level results are still close
+    (`SOP-001` is now an exact tie) because documents are already short
+    enough that one chunk nearly equals the whole document. The
+    retrieval-unit argument matters far more on realistic multi-page
+    policies/contracts, which this corpus doesn't have yet — matches the
+    doc's warning not to overfit conclusions to the tiny corpus.
 - Baseline commands:
-  - `./.venv/bin/pytest -q` → `46 passed` (22 pre-existing + 24 new chunking/
-    chunked-search tests)
+  - `./.venv/bin/pytest -q` → `48 passed` (22 pre-existing + 26 new chunking/
+    chunked-search tests, after fixing the title-embedding review finding
+    below and adding edge-case tests for sentence splitting)
   - `./.venv/bin/python -m compileall -q src tests` → passed
   - `./.venv/bin/python src/retrieval.py` → unchanged from Day 3 (TF-IDF/BM25
     still rank `POL-003`, `SOP-001`, `POL-001`/`SOP-002` correctly)
@@ -328,6 +338,20 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   the whole document. It took building it and looking at the actual output to
   realize the comparison only proves the retrieval-unit argument on longer
   documents, and this corpus doesn't have any yet.
+- Bigger one, caught in review, not by me: my first version of
+  `build_chunk_semantic_index` embedded bare chunk text, while the
+  whole-document index (via `preprocess_data`) embeds `title + text`. That's
+  not a controlled comparison - it changes two things at once (retrieval unit
+  *and* whether the title is part of what's embedded), not just the retrieval
+  unit. It surfaced concretely on `"When can we skip the three-bid
+  requirement?"`: the phrase is almost verbatim in `SOP-001`'s title, so the
+  whole-document side got a score boost that had nothing to do with chunking.
+  My own "mostly noise" explanation for that gap was wrong - it was a real,
+  specific confound. Fixed by embedding `title + chunk text` on the chunk
+  side too (same combination `preprocess_data` uses), which is also just
+  correct RAG practice: real chunking pipelines commonly prepend the source
+  title/section heading to each chunk before embedding, precisely because a
+  chunk alone can lose the context that made it findable.
 
 ### What became clearer
 
@@ -385,11 +409,13 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   and I only implemented the whitespace/empty-fragment/unpunctuated-text
   edge cases from it, not the abbreviation-detection part.
 - The whole-document vs chunk-level comparison doesn't yet prove chunking
-  helps *this* corpus, because every document here is short enough that one
-  chunk nearly equals the whole document. I have the mechanism built and
-  tested, but not evidence of it winning on a real precision/recall
-  question - I'd need a genuinely long document (a multi-page MSA or policy)
-  to see the gap the Day 5 doc describes.
+  helps *this* corpus - with the title-embedding confound fixed, `SOP-001`'s
+  whole-doc and chunk scores are now an exact tie (`0.7019` both), because
+  every document here is short enough that one chunk covers the same body
+  text as the whole document. I have the mechanism built, tested, and now
+  controlled correctly, but not evidence of it winning on a real
+  precision/recall question - I'd need a genuinely long document (a
+  multi-page MSA or policy) to see the gap the Day 5 doc describes.
 - No evaluation harness yet - "top-1 is the expected document" is a
   reasonable smoke check, but it isn't the same as measuring
   precision/recall across a labeled query set the way a real retrieval

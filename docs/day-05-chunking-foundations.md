@@ -1,8 +1,11 @@
 # Day 5 — Chunking Foundations for ProcureRAG
 
-Date: 2026-09-11 target; started 2026-09-09 10:28 CEST; corrected 2026-09-09 after Juan’s course-sequencing question  
-Linear: HER-266 — Day 5 loop: Boot.dev Ch5 chunking foundations  
-Related gate: HER-261 — Week 1 gate: Boot.dev foundations + retrieval basics  
+Date: 2026-09-11 target; started 2026-09-09 10:28 CEST; corrected 2026-09-09 after Juan’s course-sequencing question.
+
+Linear: HER-266 — Day 5 loop: Boot.dev Ch5 chunking foundations.
+
+Related gate: HER-261 — Week 1 gate: Boot.dev foundations + retrieval basics.
+
 Project rule: course-driven building, with Juan owning the core retrieval implementation.
 
 ## Course target for today
@@ -67,11 +70,11 @@ Run:
 
 Then answer from memory:
 
-1. What is the current retrieval unit?  
+1. What is the current retrieval unit?
    **Expected:** A whole document from `procurement_kb.jsonl`.
-2. Why is whole-document retrieval acceptable for the tiny corpus but not enough for realistic policies/contracts?  
+2. Why is whole-document retrieval acceptable for the tiny corpus but not enough for realistic policies/contracts?
    **Expected:** Real documents are long; the answer may live in one paragraph or clause, and passing the whole document can waste context or bury the relevant sentence.
-3. Why does chunking belong before hybrid search?  
+3. Why does chunking belong before hybrid search?
    **Expected:** Hybrid combines retrieval signals, but both lexical and dense signals should usually rank retrievable chunks/snippets, not only whole documents.
 
 ### Block 1 — Boot.dev Chapter 5 lessons, 2–2.5h

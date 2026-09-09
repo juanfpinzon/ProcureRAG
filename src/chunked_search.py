@@ -9,7 +9,19 @@ chunks instead.
 Everything else - the embedding model, `cosine_similarity`, the result shape -
 is reused unchanged from `semantic_search.py`. Keeping those identical is what
 makes the whole-document vs chunk-level comparison in `main()` meaningful: the
-only variable that changes between the two searches is the retrieval unit.
+only variable that changes between the two searches should be the retrieval
+unit (whole document vs. chunk) - not also *what text gets embedded*.
+
+That second part matters more than it sounds. `preprocess_data` (in
+`preprocessing.py`) builds each whole document's embedded text as `title +
+text`, so a query phrase that happens to match a document's title (e.g. "the
+three-bid requirement" matching the title "Three-bid requirement exceptions")
+gives the whole-document side a real, if accidental, advantage. If chunk
+embeddings only used chunk body text, the comparison would be scoring "whole
+document with title" against "chunk without title" - two different things
+changing at once, not just the retrieval unit. `build_chunk_semantic_index`
+below embeds `title + chunk text` for exactly this reason, so both sides
+embed text built the same way and the comparison isolates the retrieval unit.
 """
 
 from chunking import chunk_corpus
@@ -47,8 +59,23 @@ def build_chunk_semantic_index(chunks, model):
         return {"chunks": {}, "embeddings": {}}
 
     chunk_ids = [chunk["chunk_id"] for chunk in chunks]
-    chunk_texts = [chunk["text"] for chunk in chunks]
-    chunk_embeddings = _encode(model, chunk_texts)
+
+    # Embed "title + chunk text", the same title/text combination
+    # `preprocessing.preprocess_data` uses to build each *whole document's*
+    # embedded text. `chunk["title"]` is the source document's title, copied
+    # onto every one of its chunks by `chunking.chunk_document`. Without this,
+    # the whole-document index would carry title text the chunk index
+    # doesn't, and a query matching the title would score higher for a reason
+    # that has nothing to do with chunking - see the module docstring above.
+    #
+    # Only the *embedding input* gets the title prefix. `chunk["text"]` itself
+    # (stored below, and what `search_semantic_chunks` returns) stays
+    # body-only, since that's the actual passage a downstream LLM would be
+    # handed - the title is retrieval context, not part of the answer.
+    chunk_embedding_texts = [
+        f"{chunk['title']} {chunk['text']}".strip() for chunk in chunks
+    ]
+    chunk_embeddings = _encode(model, chunk_embedding_texts)
 
     if len(chunk_embeddings) != len(chunk_ids):
         raise ValueError("The embedding model returned the wrong number of vectors")

@@ -55,13 +55,18 @@ def _sample_chunks():
     ]
 
 
-def test_build_chunk_semantic_index_embeds_each_chunk_and_keeps_full_record():
+def test_build_chunk_semantic_index_embeds_title_plus_chunk_text():
     chunked_search = _load_chunked_search_module()
     chunks = _sample_chunks()
     model = FakeEmbeddingModel(
         {
-            "Invoices are matched against purchase order and pricing.": [1.0, 0.0],
-            "A price variance over 3% requires buyer review.": [0.0, 1.0],
+            # The embedding input is "title + chunk text", matching how whole
+            # documents are embedded in semantic_search.py - not the bare
+            # chunk text. That's the fix for the title-vs-no-title confound.
+            "Invoice mismatch handling Invoices are matched against purchase "
+            "order and pricing.": [1.0, 0.0],
+            "Invoice mismatch handling A price variance over 3% requires "
+            "buyer review.": [0.0, 1.0],
         }
     )
 
@@ -69,6 +74,12 @@ def test_build_chunk_semantic_index_embeds_each_chunk_and_keeps_full_record():
 
     assert index["embeddings"]["SOP-002::chunk-1"] == [0.0, 1.0]
     assert index["chunks"]["SOP-002::chunk-1"]["document_id"] == "SOP-002"
+    # The stored/returned chunk text itself stays title-free - only the
+    # embedding input got the title prefix.
+    assert (
+        index["chunks"]["SOP-002::chunk-1"]["text"]
+        == "A price variance over 3% requires buyer review."
+    )
 
 
 def test_build_chunk_semantic_index_handles_no_chunks():
@@ -86,8 +97,11 @@ def test_search_semantic_chunks_ranks_by_cosine_and_traces_back_to_document():
     chunks = _sample_chunks()
     model = FakeEmbeddingModel(
         {
-            "Invoices are matched against purchase order and pricing.": [1.0, 0.0],
-            "A price variance over 3% requires buyer review.": [0.0, 1.0],
+            "Invoice mismatch handling Invoices are matched against purchase "
+            "order and pricing.": [1.0, 0.0],
+            "Invoice mismatch handling A price variance over 3% requires "
+            "buyer review.": [0.0, 1.0],
+            # The query itself is embedded as-is (no title to prefix).
             "What happens when invoice price variance is over 3%?": [0.0, 1.0],
         }
     )
@@ -108,8 +122,10 @@ def test_search_semantic_chunks_handles_empty_query_and_non_positive_top_k():
     chunks = _sample_chunks()
     model = FakeEmbeddingModel(
         {
-            "Invoices are matched against purchase order and pricing.": [1.0, 0.0],
-            "A price variance over 3% requires buyer review.": [0.0, 1.0],
+            "Invoice mismatch handling Invoices are matched against purchase "
+            "order and pricing.": [1.0, 0.0],
+            "Invoice mismatch handling A price variance over 3% requires "
+            "buyer review.": [0.0, 1.0],
         }
     )
     index = chunked_search.build_chunk_semantic_index(chunks, model)
