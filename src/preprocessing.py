@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATA_PATH = PROJECT_ROOT / "data" / "corpus_v0" / "procurement_kb.jsonl"
+DATA_PATH = PROJECT_ROOT / "data" / "corpus_v1" / "procurement_kb.jsonl"
 TOKEN_PATTERN = re.compile(
     # Put domain-specific patterns before the general word pattern so that
     # punctuation inside amounts, percentages, and dotted acronyms is kept.

@@ -43,7 +43,7 @@ def _encode(model, texts):
     return model.encode(
         list(texts),
         normalize_embeddings=True,
-        show_progress_bar=False,
+        show_progress_bar=True,
     )
 
 
