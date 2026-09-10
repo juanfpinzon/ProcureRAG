@@ -434,40 +434,182 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 ### What I built or drafted
 
-_TODO: Fill in after building the hybrid search artifact._
+- Drafted Day 6 route in `docs/day-06-hybrid-search-foundations.md`.
+- Starting from the Day 5 chunking artifact and the Day 2–4 lexical/semantic
+  baselines (unchanged — Day 6 only adds a module that consumes their
+  output).
+- Artifact attempted or built: Block 3A, `src/hybrid_search.py` — a
+  `HybridSearch` class that takes a BM25 result list and a semantic result
+  list (whole-document `{id, score}` shape, same as Day 3/4) and fuses them
+  two ways: `rrf(k=60)` (Reciprocal Rank Fusion) and `weighted(alpha=0.5)`
+  (min-max normalization + alpha-weighted blend). Both methods preserve each
+  candidate's raw per-method scores (and, for `weighted`, the normalized
+  scores too) on every result, for debuggability. Plus `tests/test_hybrid_search.py`.
 
 ### Course checkpoint completed
 
-_TODO: Fill in which Boot.dev Chapter 6 lessons you completed._
+- Boot.dev RAG chapter/lesson: Chapter 6 — Hybrid Search — completed all 5
+  lessons (Keyword vs. Semantic Search, Hybrid Search, Score Normalization,
+  Weighted Combination, Reciprocal Rank Fusion).
+- Exercises completed or attempted: Completed.
+
+| Lesson | Plain-English takeaway | Procurement example | Implementation implication |
+|---|---|---|---|
+| Keyword vs. Semantic | Lexical matches exact tokens; dense matches meaning. Neither is a superset of the other. | "SOC 2 Type II" (BM25 wins) vs. "which suppliers need evidence" (semantic wins) | Need both signals, not a "better" single retriever. |
+| Hybrid Search | Combine both retrievers' outputs into one ranking instead of picking one. | A query that mixes an exact PO number with a paraphrase needs both. | `HybridSearch` takes two already-ranked lists as input; it doesn't re-retrieve. |
+| Score Normalization | Raw scores from different retrievers live on different, incomparable scales. | BM25 `17.8` vs. cosine `0.41` for the same query — can't average directly. | Min-max normalize each retriever's scores to `[0,1]` *before* blending with alpha. |
+| Weighted Combination | `hybrid = alpha*semantic_norm + (1-alpha)*lexical_norm`. Alpha is a tunable dial. | `alpha=0.2` to make exact-identifier queries dominate in a procurement system. | Normalization must happen per-retriever, over that retriever's own candidate set, before blending. |
+| RRF | `score(d) = sum(1/(k+rank_i(d)))` — uses only rank position, never raw score. | Works even when BM25 returns nothing (OOV query) but semantic returns something for everything. | No normalization step at all; only one parameter (`k`, default 60) to reason about. |
 
 ### Hybrid search artifact / retrieval evidence
 
-_TODO: Fill in after running the demo. Include:_
-- _RRF fusion results for the comparison queries_
-- _Weighted combination results for the comparison queries_
-- _Which queries hybrid beats both single methods on_
-- _Baseline command output (pytest, compile, demo)_
+- Route taken: Block 3A, primary hybrid search artifact.
+- Ran `src/hybrid_search.py main()` over the real 34-document v1 corpus and
+  the Day 4 `COMPARISON_CASES` queries (real BM25 index, real cached
+  `multi-qa-MiniLM-L6-cos-v1` embeddings — no synthetic data):
+  - `"What checks are needed before onboarding a new high-risk supplier?"` →
+    BM25 top-1 `POL-002` (correct), semantic top-1 `POL-002` (correct), RRF
+    top-1 `POL-002`, weighted top-1 `POL-002`. Both single methods already
+    agreed; hybrid just confirms.
+  - `"What vendor vetting is required before working with a risky supplier?"`
+    → BM25 top-1 `CONTRACT-006` (**wrong**), semantic top-1 `POL-002`
+    (correct). RRF top-1 came out `CONTRACT-006` — **wrong**, an exact tie
+    (`0.0164` both) broken by alphabetical document id instead of relevance.
+    Weighted combination has the same exact tie (`0.5000` both) with the same
+    wrong winner. See "What failed or was confusing" below.
+  - `"Can Northstar use company data for model training?"` → both single
+    methods correct (`CONTRACT-002`); RRF and weighted both correct too.
+  - `"Which SaaS suppliers need SOC 2 Type II or ISO 27001 evidence?"` → both
+    single methods correct (`POL-003`); RRF and weighted both correct.
+  - `"What happens when invoice price variance is over 3%?"` → BM25 top-1
+    `FAQ-002` (**wrong** — "variance" and "3%" both appear in an unrelated
+    FAQ), semantic top-1 `SOP-002` (correct). RRF top-1 `SOP-002` (correct,
+    `0.0325` vs. `0.0164`), weighted top-1 `SOP-002` (correct, `0.8844` vs.
+    `0.5000`). **This is the real, on-corpus case where hybrid recovers from
+    a single method's mistake** — BM25 alone gets it wrong; both fusion
+    methods get it right by trusting the (correct) semantic signal.
+  - None of these 5 queries has *both* single methods failing at once on
+    this corpus — see the "Hybrid beats both" test note below.
+- Constructed test case (`tests/test_hybrid_search.py`,
+  `test_hybrid_beats_both_single_methods_on_an_identifier_plus_paraphrase_query`):
+  hand-built ranks where the correct record is runner-up (rank 2) in *both*
+  lists, while two different distractor documents each win one list and rank
+  last in the other. RRF and weighted combination both correctly rank the
+  runner-up-in-both document first. This is the general "hybrid beats both"
+  failure mode the Day 6 doc describes; the real v1 corpus at this size just
+  didn't happen to produce a live example of it for these 5 queries.
+- Baseline commands:
+  - `./.venv/bin/pytest -q` → `57 passed` (48 pre-existing + 9 new hybrid
+    search tests)
+  - `./.venv/bin/python -m compileall -q src tests` → passed
+  - `./.venv/bin/python src/retrieval.py` → unchanged from Day 3
+  - `./.venv/bin/python src/semantic_search.py` → unchanged from Day 4
+  - `./.venv/bin/python src/chunked_search.py` → unchanged from Day 5
+  - `./.venv/bin/python src/hybrid_search.py` → comparison output above
 
 ### What failed or was confusing
 
-_TODO: Fill in._
+- The `"vendor vetting"` query exposed a real RRF/weighted failure, not just
+  a hypothetical one: `CONTRACT-006` (BM25 rank 1, absent from semantic's
+  top-3) and `POL-002` (absent from BM25's top-3, semantic rank 1) land on
+  an *exact* fused-score tie under both RRF and weighted combination — each
+  has exactly one term contributing, and `1/(k+1)` is `1/(k+1)` regardless of
+  which retriever it came from. My tie-break rule (sort by score, then by
+  document id) picked `CONTRACT-006` only because `"CONTRACT-006" <
+  "POL-002"` alphabetically — that's not a relevance judgment, it's
+  incidental. I initially expected fusion to "obviously" fix every case where
+  one retriever finds the right answer, and this showed that's false: fusion
+  only helps when the correct document has *some* signal in both lists (even
+  a weak one) to add to. A document entirely absent from one retriever's
+  top-k is competing on one term only, and ties among one-term candidates are
+  resolved arbitrarily. A real system would need a wider top-k per retriever
+  (so more borderline-relevant documents get *some* score on both sides) or
+  a smarter tie-break to make this case reliable.
 
 ### What became clearer
 
-_TODO: Fill in._
+- RRF's `k` parameter is not just a "how much does rank matter" dial in the
+  abstract — I could show numerically (and then confirm on real v1-corpus
+  ranks, in `test_rrf_k_parameter_changes_lower_rank_order_but_not_top1`)
+  that a small `k` rewards a document with one excellent rank and one poor
+  rank, while a large `k` rewards a document with a better *sum* of ranks
+  across both lists, even if neither rank is great. This falls directly out
+  of `1/(k+r)` being convex in `r`: for a fixed rank sum, an unbalanced split
+  scores higher than a balanced split, and how much higher shrinks as `k`
+  grows. `k=60` (the standard default) makes that unbalanced-vs-balanced gap
+  small but not zero — which is exactly the corpus case I used for the test.
+- Min-max normalization being monotonic is what makes `alpha=0.0` and
+  `alpha=1.0` clean, provable degenerate cases rather than approximations:
+  since normalization only rescales (never reorders) a single retriever's
+  own scores, multiplying the *other* side by zero reproduces that
+  retriever's exact ranking, not just something close to it.
+- Why the two fusion methods are meant to be compared, not just implemented
+  side by side: RRF is "robust and un-tunable" (no normalization step, one
+  parameter that rarely needs adjusting) at the cost of ranking a document
+  entirely on ordinal position, while weighted combination stays
+  interpretable ("73% semantic, 27% lexical") and tunable, at the cost of
+  needing a normalization step that can behave oddly with outliers or, as
+  above, produce the same kind of exact tie RRF can.
 
 ### What I can now explain in an interview
 
-_TODO: Fill in. Expected shape:_
-- _Why raw BM25 scores and cosine similarities cannot be directly averaged (different scales)._
-- _How RRF sidesteps the normalization problem by using only ranks._
-- _What the α weight controls in weighted combination (0 = pure lexical, 1 = pure semantic)._
-- _When to prefer RRF vs. weighted combination._
+- Why raw BM25 scores and cosine similarities cannot be directly averaged:
+  BM25 is an unbounded positive real whose magnitude depends on corpus
+  statistics (document frequency, average length); cosine similarity from a
+  normalized embedding model is bounded to roughly `[0,1]`. Averaging `17.8`
+  and `0.41` lets the larger-magnitude number dominate for a reason that has
+  nothing to do with relevance.
+- How RRF sidesteps the normalization problem: it never looks at the raw
+  score at all, only the rank position within each retriever's own list —
+  `score(d) = sum(1/(k+rank_i(d)))`. "1st place" means the same thing whether
+  the underlying number was a BM25 score or a cosine similarity, so there's
+  nothing to rescale.
+- What the alpha weight in weighted combination controls: the balance
+  between semantic and lexical, after both sides are min-max normalized onto
+  `[0,1]`. `alpha=0.0` is pure lexical (semantic term zeroed out),
+  `alpha=1.0` is pure semantic (lexical term zeroed out), `alpha=0.5` is
+  equal weight; both extremes exactly reproduce that single retriever's own
+  ranking, not just something close to it, because normalization is
+  monotonic.
+- When to prefer RRF vs. weighted combination: RRF when you want something
+  robust and effectively tuning-free (one parameter, `k`, that rarely needs
+  adjusting) and don't need the score itself to mean anything; weighted
+  combination when you need to explicitly bias toward exact-match or
+  paraphrase signals (e.g. `alpha=0.2` for a procurement system where exact
+  identifiers should dominate) or want an interpretable score.
+- Why hybrid search matters for procurement queries with exact identifiers:
+  a query like `"What approval is required for a €60,000 purchase order?"`
+  has two parts — an exact amount BM25 is built to catch, and a paraphrased
+  intent ("approval required") semantic search is built to catch. Neither
+  retriever alone reliably covers both parts of the same query; fusion lets
+  the system get credit for whichever signal actually fired, per document.
 
 ### What remains weak
 
-_TODO: Fill in._
+- The exact-tie failure mode documented above (two single-term candidates,
+  one per retriever, resolved by alphabetical id instead of relevance) is a
+  real gap, not a hypothetical one — it happened on this corpus's actual
+  data. I have it identified and tested (so it can't regress silently), but
+  I haven't fixed it; a real fix would need either a wider per-retriever
+  top-k before fusing, or a tie-break informed by something other than
+  document id (e.g. prefer whichever candidate exists in *more* lists, or
+  fall back to the raw score of whichever list it did appear in).
+- Hybrid search here still operates over whole documents, not chunks. Block
+  2's design note says the fusion math is retrieval-unit-agnostic (and
+  `HybridSearch` is written generically enough to take chunk results via
+  `id_key="chunk_id"`), but I haven't actually run it end-to-end over
+  `chunked_search.py`'s chunk-level output yet — that's untested, not just
+  undone.
+- No evaluation harness yet — same gap Day 5 ended on. "Hybrid gets the
+  right top-1" is still a smoke check on 5 queries plus one constructed
+  example, not precision/recall over the `data/corpus_v1/example_queries.jsonl`
+  golden set.
 
 ### Next step
 
-- Day 7: hybrid consolidation — metadata filtering, procurement edge cases, golden query set v1, baseline eval table.
+- Day 7: hybrid consolidation — metadata filtering, procurement edge cases,
+  golden query set v1, baseline eval table. Worth folding in: run hybrid
+  search (RRF and weighted) against `example_queries.jsonl`'s
+  `expected_relevant_ids`/`relevance_grades` to get an actual precision/recall
+  number instead of single-query smoke checks, and decide the tie-break fix
+  for the exact-tie gap found today before treating hybrid as "done."
