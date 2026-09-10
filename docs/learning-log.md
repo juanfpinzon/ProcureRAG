@@ -500,24 +500,51 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   - None of these 5 queries has *both* single methods failing at once on
     this corpus — see the "Hybrid beats both" test note below.
 - Chunk-level hybrid search evidence, same `main()` run, now over Day 5's
-  570 chunks (34 documents) instead of whole documents, using the Day 5
-  `chunked_search.COMPARISON_QUERIES`:
+  570 chunks (34 documents) instead of whole documents — after a follow-up
+  fix, using the *same five* `COMPARISON_CASES` queries as the whole-document
+  section above, not the narrower 2-query `chunked_search.COMPARISON_QUERIES`
+  set (the demo originally used different query counts for the two sections,
+  which made them harder to compare — see below):
+  - `"What checks are needed before onboarding a new high-risk supplier?"` →
+    BM25-over-chunks top-1 `FAQ-002::chunk-12` (**wrong document**),
+    semantic-over-chunks top-1 `POL-002::chunk-1` (correct). RRF top-1 came
+    out `FAQ-002::chunk-12` — **wrong**, an exact tie (`0.0164` both) broken
+    by alphabetical chunk id (`"FAQ-002..." < "POL-002..."`). Weighted has
+    the same exact tie (`0.5000` both) with the same wrong winner. **This is
+    the same exact-tie failure mode from the whole-document "vendor vetting"
+    query above, now hit by a different query at chunk granularity** —
+    concrete evidence (not just a hypothesis) that fusing over a smaller
+    unit doesn't remove the underlying cause: a candidate with only one
+    retriever's signal, tied against another candidate with only the other
+    retriever's signal.
+  - `"What vendor vetting is required before working with a risky
+    supplier?"` → BM25-over-chunks top-1 `SOP-001::chunk-5` (wrong),
+    semantic-over-chunks top-1 `POL-002::chunk-6` (correct). RRF top-1
+    `POL-002::chunk-6` — correct, but for the same reason as the failure
+    above: another exact tie (`0.0164` both), this time broken *correctly*
+    only because `"POL-002..." < "SOP-001..."` alphabetically. Same
+    mechanism, opposite outcome by luck of the id ordering, not because the
+    tie-break got any smarter.
+  - `"Can Northstar use company data for model training?"` and `"Which SaaS
+    suppliers need SOC 2 Type II or ISO 27001 evidence?"` → both single
+    methods already agree on the same chunk in each case
+    (`CONTRACT-002::chunk-3`, `POL-003::chunk-4`); RRF and weighted both
+    correct, no tie involved.
   - `"What happens when invoice price variance is over 3%?"` → BM25-over-
-    chunks top-1 `FAQ-002::chunk-12` (**wrong document** — a different
-    chunk restating the same 3%/€50/5-unit tolerances), semantic-over-
-    chunks top-1 `SOP-002::chunk-3` (correct). RRF top-1 `SOP-002::chunk-3`
-    (correct, `0.0325` vs. `0.0323` — close, but right), weighted top-1
-    `SOP-002::chunk-3` (correct, `0.7964` vs. `0.5000`). **The chunk-level
-    mirror of the whole-document recovery case above** — BM25 alone still
-    gets distracted by the same near-duplicate phrasing at chunk
-    granularity, and both fusion methods still recover the right chunk from
-    semantic's signal.
-  - `"When can we skip the three-bid requirement?"` → both single methods
-    already agree (`SOP-001::chunk-1`); RRF and weighted both correct too.
-  - This confirms Block 2's design note in practice, not just in theory: the
-    fusion math genuinely didn't change between whole-document and
-    chunk-level use — only which retrievers fed it and `id_key="chunk_id"`
-    did.
+    chunks top-1 `FAQ-002::chunk-12` (wrong — a different chunk restating
+    the same 3%/€50/5-unit tolerances), semantic-over-chunks top-1
+    `SOP-002::chunk-3` (correct). RRF top-1 `SOP-002::chunk-3` (correct,
+    `0.0325` vs. `0.0323` — a real margin, not a tie), weighted top-1
+    `SOP-002::chunk-3` (correct, `0.7964` vs. `0.5000`). The chunk-level
+    mirror of the whole-document recovery case: BM25 alone still gets
+    distracted by the same near-duplicate phrasing at chunk granularity, and
+    both fusion methods still recover the right chunk because there's an
+    actual score gap here, not a tie.
+  - Net: 4 of 5 queries land on the correct top-1 chunk; the one failure is
+    the exact-tie mode, not a new problem. This confirms Block 2's design
+    note in practice, not just in theory — the fusion math genuinely didn't
+    change between whole-document and chunk-level use, *including its known
+    weakness*.
 - Constructed test case (`tests/test_hybrid_search.py`,
   `test_hybrid_beats_both_single_methods_on_an_identifier_plus_paraphrase_query`):
   hand-built ranks where the correct record is runner-up (rank 2) in *both*
@@ -638,10 +665,19 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   I haven't fixed it; a real fix would need either a wider per-retriever
   top-k before fusing, or a tie-break informed by something other than
   document id (e.g. prefer whichever candidate exists in *more* lists, or
-  fall back to the raw score of whichever list it did appear in). This
-  applies at chunk level too now, not just whole documents — fusing over a
+  fall back to the raw score of whichever list it did appear in). Confirmed
+  this isn't specific to whole-document fusion: after aligning the
+  chunk-level demo to use the same five queries as the whole-document
+  section (previously it only ran 2 easier queries), the `"high-risk
+  supplier"` query hit the identical failure at chunk granularity — and the
+  `"vendor vetting"` chunk-level query only came out *correct* because
+  `"POL-002..."` happened to sort before `"SOP-001..."` alphabetically, not
+  because anything about the tie-break is actually reliable. Fusing over a
   smaller unit doesn't remove the underlying cause (a candidate with only
-  one retriever's signal).
+  one retriever's signal); if anything, seeing it hit 2 of 5 queries once
+  chunk-level got the same query coverage as whole-document is a stronger
+  signal this needs fixing before Day 7 treats hybrid as done, not a weaker
+  one.
 - The chunk-level integration tests freeze real semantic-model scores (so
   the test suite doesn't need to load a model) guarded by only a chunk-count
   assertion (`len(chunks) == 570`). That guard catches a document being

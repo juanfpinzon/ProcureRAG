@@ -291,11 +291,11 @@ def main() -> None:
     variance threshold) where BM25 alone is already strong, but a paraphrase
     of the same question could easily have broken it.
 
-    Then repeats the comparison at chunk level (Day 5's `chunking.py` +
-    `chunked_search.py`) instead of whole documents, to show that
-    `HybridSearch` is retrieval-unit-agnostic - the only thing that changes
-    is which retrievers feed it and `id_key="chunk_id"`, not the fusion math
-    itself.
+    Then repeats the *same* five queries at chunk level (Day 5's
+    `chunking.py` + `chunked_search.py`) instead of whole documents, to show
+    that `HybridSearch` is retrieval-unit-agnostic - the only thing that
+    changes is which retrievers feed it and `id_key="chunk_id"`, not the
+    fusion math itself, and not the queries either.
     """
     from preprocessing import load_data
     from retrieval import build_index, search_bm25
@@ -347,9 +347,14 @@ def main() -> None:
             )
 
     # --- Chunk-level hybrid search --------------------------------------
+    # Same COMPARISON_CASES queries as the whole-document section above -
+    # deliberately not chunked_search.COMPARISON_QUERIES (only 2 queries,
+    # picked for Day 5's narrower whole-doc-vs-chunk comparison). Reusing
+    # the same five queries here is what makes this a real side-by-side: the
+    # only thing that should differ between the two sections is the
+    # retrieval unit, not also which queries were asked.
     from chunking import chunk_corpus
     from chunked_search import (
-        COMPARISON_QUERIES,
         build_chunk_lexical_index,
         build_chunk_semantic_index,
         search_bm25_chunks,
@@ -361,11 +366,11 @@ def main() -> None:
     chunk_lexical_index = build_chunk_lexical_index(chunks)
     chunk_semantic_index = build_chunk_semantic_index(chunks, model)
 
-    for case in COMPARISON_QUERIES:
+    for case in COMPARISON_CASES:
         query = case["query"]
-        expected_document_id = case["expected_document_id"]
+        expected_id = case["expected_id"]
         print(f"\nQuery: {query}")
-        print(f"Expected document: {expected_document_id}")
+        print(f"Expected document: {expected_id}")
 
         chunk_bm25_results = search_bm25_chunks(chunk_lexical_index, query, top_k=3)
         chunk_semantic_results = search_semantic_chunks(
@@ -416,13 +421,13 @@ def main() -> None:
             if chunk_rrf_results
             else None
         )
-        if rrf_top1_document == expected_document_id and expected_document_id not in (
+        if rrf_top1_document == expected_id and expected_id not in (
             bm25_top1_document,
             semantic_top1_document,
         ):
             print(
                 f"  -> Hybrid recovered the expected document "
-                f"({expected_document_id}); neither single method ranked a "
+                f"({expected_id}); neither single method ranked a "
                 "chunk from it first."
             )
 
