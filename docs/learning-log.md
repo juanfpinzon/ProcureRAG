@@ -429,3 +429,45 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 - Then compare lexical (TF-IDF/BM25), semantic, and hybrid search over
   chunks - not whole documents - with actual evaluation evidence, before
   moving toward source-cited answer generation.
+
+## 2026-09-10 — Day 6: Hybrid Search Foundations
+
+### What I built or drafted
+
+_TODO: Fill in after building the hybrid search artifact._
+
+### Course checkpoint completed
+
+_TODO: Fill in which Boot.dev Chapter 6 lessons you completed._
+
+### Hybrid search artifact / retrieval evidence
+
+_TODO: Fill in after running the demo. Include:_
+- _RRF fusion results for the comparison queries_
+- _Weighted combination results for the comparison queries_
+- _Which queries hybrid beats both single methods on_
+- _Baseline command output (pytest, compile, demo)_
+
+### What failed or was confusing
+
+_TODO: Fill in._
+
+### What became clearer
+
+_TODO: Fill in._
+
+### What I can now explain in an interview
+
+_TODO: Fill in. Expected shape:_
+- _Why raw BM25 scores and cosine similarities cannot be directly averaged (different scales)._
+- _How RRF sidesteps the normalization problem by using only ranks._
+- _What the α weight controls in weighted combination (0 = pure lexical, 1 = pure semantic)._
+- _When to prefer RRF vs. weighted combination._
+
+### What remains weak
+
+_TODO: Fill in._
+
+### Next step
+
+- Day 7: hybrid consolidation — metadata filtering, procurement edge cases, golden query set v1, baseline eval table.
