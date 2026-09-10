@@ -440,11 +440,20 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   output).
 - Artifact attempted or built: Block 3A, `src/hybrid_search.py` — a
   `HybridSearch` class that takes a BM25 result list and a semantic result
-  list (whole-document `{id, score}` shape, same as Day 3/4) and fuses them
-  two ways: `rrf(k=60)` (Reciprocal Rank Fusion) and `weighted(alpha=0.5)`
+  list (default `{id, score}` shape, same as Day 3/4) and fuses them two
+  ways: `rrf(k=60)` (Reciprocal Rank Fusion) and `weighted(alpha=0.5)`
   (min-max normalization + alpha-weighted blend). Both methods preserve each
   candidate's raw per-method scores (and, for `weighted`, the normalized
   scores too) on every result, for debuggability. Plus `tests/test_hybrid_search.py`.
+- Follow-up pass after a review of the first version: fixed a real bug (see
+  "What failed or was confusing" below), then extended `HybridSearch` to
+  chunks — `src/chunked_search.py` gained `build_chunk_lexical_index` /
+  `search_bm25_chunks` (BM25 over chunks, the missing counterpart to Day 5's
+  chunk-level semantic search — reuses `retrieval.calculate_bm25_idf`
+  rather than reimplementing BM25's IDF a second time), and
+  `hybrid_search.py main()` now runs a second, chunk-level comparison using
+  `HybridSearch(..., id_key="chunk_id")` against the same two chunks the
+  Day 5 comparison used.
 
 ### Course checkpoint completed
 
@@ -490,6 +499,25 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
     methods get it right by trusting the (correct) semantic signal.
   - None of these 5 queries has *both* single methods failing at once on
     this corpus — see the "Hybrid beats both" test note below.
+- Chunk-level hybrid search evidence, same `main()` run, now over Day 5's
+  570 chunks (34 documents) instead of whole documents, using the Day 5
+  `chunked_search.COMPARISON_QUERIES`:
+  - `"What happens when invoice price variance is over 3%?"` → BM25-over-
+    chunks top-1 `FAQ-002::chunk-12` (**wrong document** — a different
+    chunk restating the same 3%/€50/5-unit tolerances), semantic-over-
+    chunks top-1 `SOP-002::chunk-3` (correct). RRF top-1 `SOP-002::chunk-3`
+    (correct, `0.0325` vs. `0.0323` — close, but right), weighted top-1
+    `SOP-002::chunk-3` (correct, `0.7964` vs. `0.5000`). **The chunk-level
+    mirror of the whole-document recovery case above** — BM25 alone still
+    gets distracted by the same near-duplicate phrasing at chunk
+    granularity, and both fusion methods still recover the right chunk from
+    semantic's signal.
+  - `"When can we skip the three-bid requirement?"` → both single methods
+    already agree (`SOP-001::chunk-1`); RRF and weighted both correct too.
+  - This confirms Block 2's design note in practice, not just in theory: the
+    fusion math genuinely didn't change between whole-document and
+    chunk-level use — only which retrievers fed it and `id_key="chunk_id"`
+    did.
 - Constructed test case (`tests/test_hybrid_search.py`,
   `test_hybrid_beats_both_single_methods_on_an_identifier_plus_paraphrase_query`):
   hand-built ranks where the correct record is runner-up (rank 2) in *both*
@@ -498,14 +526,18 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   runner-up-in-both document first. This is the general "hybrid beats both"
   failure mode the Day 6 doc describes; the real v1 corpus at this size just
   didn't happen to produce a live example of it for these 5 queries.
-- Baseline commands:
-  - `./.venv/bin/pytest -q` → `57 passed` (48 pre-existing + 9 new hybrid
-    search tests)
+- Baseline commands (after the review follow-up pass):
+  - `./.venv/bin/pytest -q` → `64 passed` (48 pre-existing + 11 hybrid
+    search tests + 5 new chunk-level-BM25 tests in `test_chunked_search.py`)
   - `./.venv/bin/python -m compileall -q src tests` → passed
   - `./.venv/bin/python src/retrieval.py` → unchanged from Day 3
   - `./.venv/bin/python src/semantic_search.py` → unchanged from Day 4
-  - `./.venv/bin/python src/chunked_search.py` → unchanged from Day 5
-  - `./.venv/bin/python src/hybrid_search.py` → comparison output above
+  - `./.venv/bin/python src/chunked_search.py` → unchanged from Day 5 (its
+    own `main()` still only runs the whole-doc-vs-chunk semantic comparison;
+    the new BM25-over-chunks functions are exercised by `hybrid_search.py`'s
+    `main()` and by tests instead)
+  - `./.venv/bin/python src/hybrid_search.py` → whole-document comparison
+    output above, plus the chunk-level comparison output above
 
 ### What failed or was confusing
 
@@ -525,6 +557,19 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   resolved arbitrarily. A real system would need a wider top-k per retriever
   (so more borderline-relevant documents get *some* score on both sides) or
   a smarter tie-break to make this case reliable.
+- Caught in review, not by me: `_ranks_by_position` and `_scores_by_id` (the
+  two helpers `rrf()`/`weighted()` use to re-key a result list by id)
+  hardcoded `result["id"]` instead of using `HybridSearch`'s own `id_key`.
+  The constructor already accepted `id_key="chunk_id"` and the class
+  docstring already claimed chunk support — but that claim was untested and,
+  it turned out, wrong: the first real chunk-level call would have raised
+  `KeyError: 'id'` immediately, since chunk results are keyed by
+  `"chunk_id"`, not `"id"`. I'd written "the class is written generically
+  enough to support chunks" in this log before ever actually calling it that
+  way — asserting a capability I hadn't exercised. Fixed by giving both
+  helpers an `id_key` parameter (default `"id"`) and having `HybridSearch`
+  pass its own `id_key` through everywhere, instead of assuming `"id"`; the
+  chunk-level section added below is what actually exercises it now.
 
 ### What became clearer
 
@@ -593,13 +638,17 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   I haven't fixed it; a real fix would need either a wider per-retriever
   top-k before fusing, or a tie-break informed by something other than
   document id (e.g. prefer whichever candidate exists in *more* lists, or
-  fall back to the raw score of whichever list it did appear in).
-- Hybrid search here still operates over whole documents, not chunks. Block
-  2's design note says the fusion math is retrieval-unit-agnostic (and
-  `HybridSearch` is written generically enough to take chunk results via
-  `id_key="chunk_id"`), but I haven't actually run it end-to-end over
-  `chunked_search.py`'s chunk-level output yet — that's untested, not just
-  undone.
+  fall back to the raw score of whichever list it did appear in). This
+  applies at chunk level too now, not just whole documents — fusing over a
+  smaller unit doesn't remove the underlying cause (a candidate with only
+  one retriever's signal).
+- The chunk-level integration tests freeze real semantic-model scores (so
+  the test suite doesn't need to load a model) guarded by only a chunk-count
+  assertion (`len(chunks) == 570`). That guard catches a document being
+  added, removed, or re-chunked differently — it would *not* catch a
+  document's text being edited in a way that happens to produce the same
+  chunk count. It's a real but narrow gap in how "stale" gets detected, not
+  a correctness gap in the fusion logic itself.
 - No evaluation harness yet — same gap Day 5 ended on. "Hybrid gets the
   right top-1" is still a smoke check on 5 queries plus one constructed
   example, not precision/recall over the `data/corpus_v1/example_queries.jsonl`

@@ -135,3 +135,76 @@ def test_search_semantic_chunks_handles_empty_query_and_non_positive_top_k():
         chunked_search.search_semantic_chunks(index, "query", model, top_k=0) == []
     )
     assert chunked_search.search_semantic_chunks({}, "query", model) == []
+
+
+# ---------------------------------------------------------------------------
+# Day 6: build_chunk_lexical_index / search_bm25_chunks - BM25 over chunks,
+# the chunk-level counterpart to the semantic search above.
+# ---------------------------------------------------------------------------
+
+
+def test_build_chunk_lexical_index_indexes_title_plus_chunk_text():
+    chunked_search = _load_chunked_search_module()
+    chunks = _sample_chunks()
+
+    index = chunked_search.build_chunk_lexical_index(chunks)
+
+    # Both sample chunks share the title "Invoice mismatch handling", so
+    # "invoice" should be indexed against both chunks - the same
+    # title-inclusion behaviour `build_chunk_semantic_index` uses, applied to
+    # the lexical index instead of the embedding input.
+    assert index["inverted_index"]["invoice"] == {
+        "SOP-002::chunk-0": 1,
+        "SOP-002::chunk-1": 1,
+    }
+    assert index["document_frequency"]["invoice"] == 2
+    # "price"/"variance" only appear in chunk-1's body text, not the shared
+    # title, so they should not be indexed against chunk-0 at all.
+    assert "SOP-002::chunk-0" not in index["inverted_index"]["variance"]
+    assert index["chunk_count"] == 2
+    assert index["chunk_lengths"]["SOP-002::chunk-0"] == 11
+    assert index["average_chunk_length"] == pytest.approx(11.0)
+
+
+def test_build_chunk_lexical_index_handles_no_chunks():
+    chunked_search = _load_chunked_search_module()
+
+    index = chunked_search.build_chunk_lexical_index([])
+
+    assert index["chunk_count"] == 0
+    assert index["average_chunk_length"] == 0.0
+
+
+def test_search_bm25_chunks_ranks_by_bm25_score_and_traces_back_to_document():
+    chunked_search = _load_chunked_search_module()
+    index = chunked_search.build_chunk_lexical_index(_sample_chunks())
+
+    # "price" and "variance" only appear in chunk-1's body - chunk-1 should
+    # outrank chunk-0 even though both chunks share the query's other terms
+    # via their common title.
+    results = chunked_search.search_bm25_chunks(
+        index, "price variance", top_k=2
+    )
+
+    assert results[0]["chunk_id"] == "SOP-002::chunk-1"
+    assert results[0]["document_id"] == "SOP-002"
+    assert results[0]["text"] == "A price variance over 3% requires buyer review."
+    assert results[0]["score"] > 0
+
+
+def test_search_bm25_chunks_handles_empty_unknown_and_limited_queries():
+    chunked_search = _load_chunked_search_module()
+    index = chunked_search.build_chunk_lexical_index(_sample_chunks())
+
+    assert chunked_search.search_bm25_chunks(index, "") == []
+    assert chunked_search.search_bm25_chunks(index, "zzzz-not-in-corpus") == []
+    assert chunked_search.search_bm25_chunks(index, "invoice", top_k=0) == []
+    assert len(chunked_search.search_bm25_chunks(index, "invoice", top_k=1)) == 1
+
+
+def test_bm25_chunks_handles_an_empty_chunk_set():
+    chunked_search = _load_chunked_search_module()
+    index = chunked_search.build_chunk_lexical_index([])
+
+    assert chunked_search.score_bm25_chunks(index, "invoice") == {}
+    assert chunked_search.search_bm25_chunks(index, "invoice") == []

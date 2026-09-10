@@ -39,7 +39,7 @@ Two ways to combine the two rankings that both avoid that trap:
 """
 
 
-def _ranks_by_position(results):
+def _ranks_by_position(results, id_key="id"):
     """Return {id: rank}, where rank 1 is the first (best) item in the list.
 
     `results` is assumed to already be ranked best-first - exactly the shape
@@ -47,13 +47,18 @@ def _ranks_by_position(results):
     Reading off rank from list position (instead of re-sorting by score) is
     what lets Reciprocal Rank Fusion below combine a BM25 list and a semantic
     list without ever looking at their raw score values.
+
+    `id_key` defaults to `"id"` (the whole-document result shape) but
+    `HybridSearch` passes its own `id_key` through here too, so this works
+    the same way for chunk results keyed by `"chunk_id"`.
     """
-    return {result["id"]: rank for rank, result in enumerate(results, start=1)}
+    return {result[id_key]: rank for rank, result in enumerate(results, start=1)}
 
 
-def _scores_by_id(results):
-    """Return {id: score} for a ranked result list."""
-    return {result["id"]: result["score"] for result in results}
+def _scores_by_id(results, id_key="id"):
+    """Return {id: score} for a ranked result list. See `_ranks_by_position`
+    for what `id_key` is for."""
+    return {result[id_key]: result["score"] for result in results}
 
 
 def min_max_normalize(scores):
@@ -82,9 +87,18 @@ def min_max_normalize(scores):
     maximum = max(values)
     spread = maximum - minimum
 
-    # Every score is identical (including the common case of a single
-    # candidate). There is no spread to normalize against, and (0 - 0) / 0
-    # would divide by zero, so every score maps to 0.0 instead.
+    # Every score is identical, including the common case of a single
+    # candidate (a list of one has no spread by definition). There is no
+    # spread to normalize against, and (0 - 0) / 0 would divide by zero, so
+    # every score maps to 0.0 instead.
+    #
+    # Practical consequence for `weighted()` below: a retriever that only
+    # returned one candidate (or several candidates that happen to tie)
+    # normalizes that candidate to 0.0, the same as if it were entirely
+    # absent. It contributes nothing to the hybrid score on that side
+    # regardless of alpha - there was nothing to discriminate on in the
+    # first place, so treating it as "no information" is correct, not a
+    # bug, but it is easy to misread as a broken weight.
     if spread == 0:
         return {document_id: 0.0 for document_id in scores}
 
@@ -109,15 +123,6 @@ class HybridSearch:
         self.semantic_results = semantic_results
         self.id_key = id_key
 
-    def _ranks_and_scores(self):
-        """Re-key both input lists by `id_key` so the fusion methods below
-        can look either one up by document id in O(1) instead of scanning."""
-        bm25_by_id = {result[self.id_key]: result for result in self.bm25_results}
-        semantic_by_id = {
-            result[self.id_key]: result for result in self.semantic_results
-        }
-        return bm25_by_id, semantic_by_id
-
     def rrf(self, k=60, top_k=3):
         """Reciprocal Rank Fusion: rank by combined rank position, not score.
 
@@ -141,9 +146,10 @@ class HybridSearch:
         if top_k <= 0:
             return []
 
-        bm25_ranks = _ranks_by_position(self.bm25_results)
-        semantic_ranks = _ranks_by_position(self.semantic_results)
-        bm25_by_id, semantic_by_id = self._ranks_and_scores()
+        bm25_ranks = _ranks_by_position(self.bm25_results, self.id_key)
+        semantic_ranks = _ranks_by_position(self.semantic_results, self.id_key)
+        bm25_scores = _scores_by_id(self.bm25_results, self.id_key)
+        semantic_scores = _scores_by_id(self.semantic_results, self.id_key)
 
         all_ids = set(bm25_ranks) | set(semantic_ranks)
         fused_results = []
@@ -161,11 +167,12 @@ class HybridSearch:
                     # Per-method raw scores are kept alongside the fused
                     # score purely for debugging/inspection - "why did this
                     # document rank where it did?" - not used in the RRF math
-                    # itself, which only reads rank position above.
-                    "bm25_score": bm25_by_id.get(document_id, {}).get("score"),
-                    "semantic_score": semantic_by_id.get(document_id, {}).get(
-                        "score"
-                    ),
+                    # itself, which only reads rank position above. `.get`
+                    # returns None (not 0.0) for a document absent from that
+                    # retriever's list, so a real low score is never
+                    # confused with "no signal from this retriever".
+                    "bm25_score": bm25_scores.get(document_id),
+                    "semantic_score": semantic_scores.get(document_id),
                 }
             )
 
@@ -187,21 +194,28 @@ class HybridSearch:
         might use something like `alpha=0.2` to lean lexical.
 
         A document missing from one retriever's result list is treated as a
-        normalized score of 0.0 for that side (the same "worst score in this
-        list" value the lowest-ranked *present* document would get) rather
-        than being dropped - it can still rank via whichever side it does
-        have a score on.
+        normalized score of 0.0 for that side rather than being dropped - see
+        the inline comment below for why 0.0 specifically, not an epsilon or
+        the average.
         """
         if top_k <= 0:
             return []
 
-        bm25_normalized = min_max_normalize(_scores_by_id(self.bm25_results))
-        semantic_normalized = min_max_normalize(_scores_by_id(self.semantic_results))
-        bm25_by_id, semantic_by_id = self._ranks_and_scores()
+        bm25_scores = _scores_by_id(self.bm25_results, self.id_key)
+        semantic_scores = _scores_by_id(self.semantic_results, self.id_key)
+        bm25_normalized = min_max_normalize(bm25_scores)
+        semantic_normalized = min_max_normalize(semantic_scores)
 
         all_ids = set(bm25_normalized) | set(semantic_normalized)
         combined_results = []
         for document_id in all_ids:
+            # A document absent from one retriever's list defaults to 0.0 on
+            # that side - the normalized floor `min_max_normalize` already
+            # gives that retriever's own worst-scored candidate (min maps to
+            # 0.0), not an arbitrary placeholder like an epsilon or the
+            # average would be. It can still rank via whichever side it does
+            # have a score on; see `min_max_normalize`'s docstring for the
+            # single-candidate-list edge case this same default covers.
             lexical_normalized_score = bm25_normalized.get(document_id, 0.0)
             semantic_normalized_score = semantic_normalized.get(document_id, 0.0)
             hybrid_score = (
@@ -217,10 +231,8 @@ class HybridSearch:
                     # a result can be explained as e.g. "73% semantic match,
                     # 27% lexical match" - the interpretability weighted
                     # combination offers that RRF's rank-only score does not.
-                    "bm25_score": bm25_by_id.get(document_id, {}).get("score"),
-                    "semantic_score": semantic_by_id.get(document_id, {}).get(
-                        "score"
-                    ),
+                    "bm25_score": bm25_scores.get(document_id),
+                    "semantic_score": semantic_scores.get(document_id),
                     "bm25_score_normalized": lexical_normalized_score,
                     "semantic_score_normalized": semantic_normalized_score,
                 }
@@ -245,6 +257,30 @@ def _print_results(results, id_key="id"):
         )
 
 
+def _print_chunk_results(results, chunks_by_id):
+    """Print a fused chunk-level result list.
+
+    `HybridSearch`'s fused output only ever carries the id and per-method
+    scores (see the module docstring) - it never copies through the extra
+    fields a particular retriever's result happened to have, like a chunk's
+    `document_id` or `text`. That's deliberate: the fusion math is generic
+    over whatever `id_key` names, so it has no way to know which extra
+    fields, if any, are worth carrying along. For display, this looks
+    `document_id` back up from either chunk index by `chunk_id` instead.
+    """
+    for result in results:
+        chunk_id = result["chunk_id"]
+        document_id = chunks_by_id[chunk_id]["document_id"]
+        bm25_score = result["bm25_score"]
+        semantic_score = result["semantic_score"]
+        bm25_display = f"{bm25_score:.4f}" if bm25_score is not None else "-"
+        semantic_display = f"{semantic_score:.4f}" if semantic_score is not None else "-"
+        print(
+            f"  {chunk_id} (doc={document_id}): hybrid={result['score']:.4f} "
+            f"(bm25={bm25_display}, semantic={semantic_display})"
+        )
+
+
 def main() -> None:
     """Run BM25, semantic, RRF, and weighted search side by side.
 
@@ -254,6 +290,12 @@ def main() -> None:
     particular the identifier-heavy queries (SOC 2 / ISO 27001, the 3%
     variance threshold) where BM25 alone is already strong, but a paraphrase
     of the same question could easily have broken it.
+
+    Then repeats the comparison at chunk level (Day 5's `chunking.py` +
+    `chunked_search.py`) instead of whole documents, to show that
+    `HybridSearch` is retrieval-unit-agnostic - the only thing that changes
+    is which retrievers feed it and `id_key="chunk_id"`, not the fusion math
+    itself.
     """
     from preprocessing import load_data
     from retrieval import build_index, search_bm25
@@ -269,6 +311,7 @@ def main() -> None:
     model = load_embedding_model()
     semantic_index = build_semantic_index(data, model)
 
+    print("=== Whole-document hybrid search ===")
     for case in COMPARISON_CASES:
         query = case["query"]
         expected_id = case["expected_id"]
@@ -301,6 +344,86 @@ def main() -> None:
             print(
                 f"  -> Hybrid recovered the expected document ({expected_id}); "
                 "neither single method ranked it first."
+            )
+
+    # --- Chunk-level hybrid search --------------------------------------
+    from chunking import chunk_corpus
+    from chunked_search import (
+        COMPARISON_QUERIES,
+        build_chunk_lexical_index,
+        build_chunk_semantic_index,
+        search_bm25_chunks,
+        search_semantic_chunks,
+    )
+
+    print("\n\n=== Chunk-level hybrid search ===")
+    chunks = chunk_corpus(data)
+    chunk_lexical_index = build_chunk_lexical_index(chunks)
+    chunk_semantic_index = build_chunk_semantic_index(chunks, model)
+
+    for case in COMPARISON_QUERIES:
+        query = case["query"]
+        expected_document_id = case["expected_document_id"]
+        print(f"\nQuery: {query}")
+        print(f"Expected document: {expected_document_id}")
+
+        chunk_bm25_results = search_bm25_chunks(chunk_lexical_index, query, top_k=3)
+        chunk_semantic_results = search_semantic_chunks(
+            chunk_semantic_index, query, model, top_k=3
+        )
+        bm25_top1_document = (
+            chunk_lexical_index["chunks"][chunk_bm25_results[0]["chunk_id"]][
+                "document_id"
+            ]
+            if chunk_bm25_results
+            else None
+        )
+        semantic_top1_document = (
+            chunk_semantic_index["chunks"][chunk_semantic_results[0]["chunk_id"]][
+                "document_id"
+            ]
+            if chunk_semantic_results
+            else None
+        )
+
+        print(
+            f"BM25 top-1 chunk: {chunk_bm25_results[0]['chunk_id']} "
+            f"(doc={bm25_top1_document})"
+        )
+        print(
+            f"Semantic top-1 chunk: {chunk_semantic_results[0]['chunk_id']} "
+            f"(doc={semantic_top1_document})"
+        )
+
+        # `id_key="chunk_id"` is the only difference from the whole-document
+        # case above - the RRF/weighted math is identical either way.
+        chunk_hybrid = HybridSearch(
+            chunk_bm25_results, chunk_semantic_results, id_key="chunk_id"
+        )
+
+        chunk_rrf_results = chunk_hybrid.rrf(k=60, top_k=3)
+        print("RRF (k=60):")
+        _print_chunk_results(chunk_rrf_results, chunk_lexical_index["chunks"])
+
+        chunk_weighted_results = chunk_hybrid.weighted(alpha=0.5, top_k=3)
+        print("Weighted (alpha=0.5):")
+        _print_chunk_results(chunk_weighted_results, chunk_lexical_index["chunks"])
+
+        rrf_top1_document = (
+            chunk_lexical_index["chunks"][chunk_rrf_results[0]["chunk_id"]][
+                "document_id"
+            ]
+            if chunk_rrf_results
+            else None
+        )
+        if rrf_top1_document == expected_document_id and expected_document_id not in (
+            bm25_top1_document,
+            semantic_top1_document,
+        ):
+            print(
+                f"  -> Hybrid recovered the expected document "
+                f"({expected_document_id}); neither single method ranked a "
+                "chunk from it first."
             )
 
 

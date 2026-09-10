@@ -22,9 +22,23 @@ document with title" against "chunk without title" - two different things
 changing at once, not just the retrieval unit. `build_chunk_semantic_index`
 below embeds `title + chunk text` for exactly this reason, so both sides
 embed text built the same way and the comparison isolates the retrieval unit.
+
+Day 6 addition: `build_chunk_lexical_index` / `search_bm25_chunks` add the
+chunk-level counterpart to the semantic search above - BM25 over chunks
+instead of whole documents. It's the same reason this module keeps
+`build_chunk_semantic_index` here rather than in `semantic_search.py`: the
+retrieval unit changed (chunk, not document), but the ranking math itself
+didn't, so it's reused directly from `retrieval.py` (`calculate_bm25_idf`)
+rather than reimplemented. This is what lets `hybrid_search.HybridSearch`
+combine BM25 and semantic signals over chunks the same way it already does
+over whole documents - see `hybrid_search.py`'s `main()`.
 """
 
+from collections import Counter
+
 from chunking import chunk_corpus
+from preprocessing import preprocess_text
+from retrieval import calculate_bm25_idf
 from semantic_search import cosine_similarity
 
 MAX_SENTENCES = 3
@@ -117,6 +131,123 @@ def search_semantic_chunks(index, query, model, top_k=3):
 
     ranked_scores = sorted(
         score_query_semantic_chunks(index, query, model).items(),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return [
+        {
+            "chunk_id": chunk_id,
+            "document_id": index["chunks"][chunk_id]["document_id"],
+            "text": index["chunks"][chunk_id]["text"],
+            "score": score,
+        }
+        for chunk_id, score in ranked_scores[:top_k]
+    ]
+
+
+def build_chunk_lexical_index(chunks):
+    """Build a BM25 inverted index over chunks instead of whole documents.
+
+    Mirrors `retrieval.build_index`, keyed by `chunk_id` instead of
+    `document_id`, over a much smaller "document" - one chunk instead of one
+    whole record. Indexed text is `title + chunk text`, the same combination
+    `build_chunk_semantic_index` above uses and for the same reason: whole-
+    document BM25 (via `preprocessing.preprocess_data`) also indexes `title +
+    text`, so a query phrase that happens to match a title doesn't get an
+    unfair, chunking-unrelated advantage on one side of a lexical-vs-semantic
+    or whole-document-vs-chunk comparison.
+    """
+    chunk_records = {}
+    inverted_index = {}
+    chunk_lengths = {}
+
+    for chunk in chunks:
+        chunk_id = chunk["chunk_id"]
+        chunk_records[chunk_id] = chunk
+
+        combined_text = f"{chunk['title']} {chunk['text']}".strip()
+        tokens = preprocess_text(combined_text)["tokens"]
+        chunk_lengths[chunk_id] = len(tokens)
+
+        term_counts = Counter(tokens)
+        for token, term_count in term_counts.items():
+            postings = inverted_index.setdefault(token, {})
+            postings[chunk_id] = term_count
+
+    document_frequency = {
+        token: len(postings) for token, postings in inverted_index.items()
+    }
+    chunk_count = len(chunk_records)
+    average_chunk_length = (
+        sum(chunk_lengths.values()) / chunk_count if chunk_count else 0.0
+    )
+
+    return {
+        "chunks": chunk_records,
+        "inverted_index": inverted_index,
+        "document_frequency": document_frequency,
+        "chunk_count": chunk_count,
+        "chunk_lengths": chunk_lengths,
+        "average_chunk_length": average_chunk_length,
+    }
+
+
+def score_bm25_chunks(index, query, k1=1.5, b=0.75):
+    """BM25 scoring over a chunk-level index.
+
+    Identical formula to `retrieval.score_query_bm25` - term-frequency
+    saturation via `k1`, length normalization via `b` against the chunk
+    set's average length - with "chunk" standing in for "document"
+    throughout. Reuses `retrieval.calculate_bm25_idf` rather than
+    recomputing the same IDF formula a second time.
+    """
+    query_terms = list(dict.fromkeys(preprocess_text(query)["tokens"]))
+    scores = {}
+    chunk_count = index["chunk_count"]
+    average_chunk_length = index["average_chunk_length"]
+
+    if not query_terms or chunk_count == 0 or average_chunk_length == 0:
+        return scores
+
+    for token in query_terms:
+        postings = index["inverted_index"].get(token)
+        if not postings:
+            continue
+
+        document_frequency = index["document_frequency"][token]
+        inverse_document_frequency = calculate_bm25_idf(
+            chunk_count, document_frequency
+        )
+
+        for chunk_id, chunk_term_frequency in postings.items():
+            chunk_length = index["chunk_lengths"][chunk_id]
+            length_normalization = 1 - b + b * chunk_length / average_chunk_length
+
+            # Same term-frequency saturation as retrieval.py: the numerator
+            # grows with term frequency, but the denominator makes each
+            # additional repetition contribute less.
+            term_frequency_saturation = (chunk_term_frequency * (k1 + 1)) / (
+                chunk_term_frequency + k1 * length_normalization
+            )
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + (
+                inverse_document_frequency * term_frequency_saturation
+            )
+
+    return scores
+
+
+def search_bm25_chunks(index, query, top_k=3, k1=1.5, b=0.75):
+    """Return the highest-scoring chunks for a query via BM25.
+
+    Same result shape as `search_semantic_chunks` (`chunk_id`, `document_id`,
+    `text`, `score`), so both chunk-level retrievers can feed
+    `hybrid_search.HybridSearch` the same way whole-document `search_bm25`
+    and `search_semantic` already do.
+    """
+    if top_k <= 0:
+        return []
+
+    ranked_scores = sorted(
+        score_bm25_chunks(index, query, k1=k1, b=b).items(),
         key=lambda item: (-item[1], item[0]),
     )
     return [

@@ -234,13 +234,32 @@ def test_rrf_and_weighted_agree_on_top1_on_v1_corpus():
     retrieval = _load_module("retrieval")
 
     query = "What happens when invoice price variance is over 3%?"
-    bm25_index = retrieval.build_index(retrieval.load_data())
+    corpus = retrieval.load_data()
+
+    # This test's frozen semantic scores below were captured against a
+    # specific snapshot of the corpus (34 documents, 2026-09-10). They don't
+    # get silently re-validated by anything else in this file, so a change
+    # to `data/corpus_v1` (a document added/removed/reworded) could make
+    # them stale without any test failing to say so - this guard at least
+    # catches a document being added or removed. It would *not* catch a
+    # document's text being edited in place; re-run `src/hybrid_search.py`'s
+    # `main()` and refresh the frozen scores below if that ever happens.
+    assert len(corpus) == 34, (
+        "data/corpus_v1 document count changed - the frozen semantic scores "
+        "below may be stale. Re-run `./.venv/bin/python src/hybrid_search.py` "
+        "and refresh them."
+    )
+
+    bm25_index = retrieval.build_index(corpus)
     bm25_results = retrieval.search_bm25(bm25_index, query, top_k=3)
 
     # BM25 alone gets this wrong: FAQ-002 mentions "variance" and "3%" too,
     # and outranks the document that actually states the rule.
     assert bm25_results[0]["id"] == "FAQ-002"
 
+    # Captured 2026-09-10 from a real run of the cached
+    # sentence-transformers/multi-qa-MiniLM-L6-cos-v1 model against the query
+    # above and the full v1 corpus (see docs/learning-log.md's Day 6 entry).
     semantic_results = [
         {"id": "SOP-002", "score": 0.47533282773384916},
         {"id": "CONTRACT-003", "score": 0.27717761715340944},
@@ -275,9 +294,24 @@ def test_rrf_k_parameter_changes_lower_rank_order_but_not_top1_on_v1_corpus():
     retrieval = _load_module("retrieval")
 
     query = "Can Northstar use company data for model training?"
-    bm25_index = retrieval.build_index(retrieval.load_data())
+    corpus = retrieval.load_data()
+
+    # Same corpus-drift guard as `test_rrf_and_weighted_agree_on_top1_on_v1_corpus`
+    # above - catches the frozen semantic scores below going stale because a
+    # document was added or removed, though not because one was edited in
+    # place.
+    assert len(corpus) == 34, (
+        "data/corpus_v1 document count changed - the frozen semantic scores "
+        "below may be stale. Re-run `./.venv/bin/python src/hybrid_search.py` "
+        "and refresh them."
+    )
+
+    bm25_index = retrieval.build_index(corpus)
     bm25_results = retrieval.search_bm25(bm25_index, query, top_k=6)
 
+    # Captured 2026-09-10 from a real run of the cached
+    # sentence-transformers/multi-qa-MiniLM-L6-cos-v1 model against the query
+    # above and the full v1 corpus (see docs/learning-log.md's Day 6 entry).
     semantic_results = [
         {"id": "CONTRACT-002", "score": 0.4968832632160464},
         {"id": "CONTRACT-006", "score": 0.3285422838019914},
@@ -298,6 +332,102 @@ def test_rrf_k_parameter_changes_lower_rank_order_but_not_top1_on_v1_corpus():
 
     assert small_k_order.index("CONTRACT-006") < small_k_order.index("POL-003")
     assert large_k_order.index("POL-003") < large_k_order.index("CONTRACT-006")
+
+
+# ---------------------------------------------------------------------------
+# Chunk-level hybrid search (id_key="chunk_id")
+# ---------------------------------------------------------------------------
+
+
+def test_hybrid_search_supports_chunk_level_results_via_id_key():
+    """`HybridSearch` is retrieval-unit-agnostic: passing `id_key="chunk_id"`
+    fuses chunk-level results the same way it fuses whole-document results by
+    default.
+
+    This also regression-tests a bug caught in review: `_ranks_by_position`
+    and `_scores_by_id` used to hardcode `result["id"]` instead of respecting
+    `id_key`, which would have raised a `KeyError` the first time this was
+    tried on chunk results (chunk results are keyed by `"chunk_id"`, not
+    `"id"`).
+    """
+    hybrid_search = _load_hybrid_search_module()
+
+    bm25_results = [
+        {"chunk_id": "SOP-002::chunk-1", "document_id": "SOP-002", "score": 9.0},
+        {"chunk_id": "SOP-002::chunk-0", "document_id": "SOP-002", "score": 3.0},
+    ]
+    semantic_results = [
+        {"chunk_id": "SOP-002::chunk-1", "document_id": "SOP-002", "score": 0.8},
+        {"chunk_id": "SOP-002::chunk-0", "document_id": "SOP-002", "score": 0.2},
+    ]
+
+    hybrid = hybrid_search.HybridSearch(
+        bm25_results, semantic_results, id_key="chunk_id"
+    )
+
+    rrf_results = hybrid.rrf(top_k=2)
+    assert rrf_results[0]["chunk_id"] == "SOP-002::chunk-1"
+    assert "id" not in rrf_results[0]
+
+    weighted_results = hybrid.weighted(top_k=2)
+    assert weighted_results[0]["chunk_id"] == "SOP-002::chunk-1"
+    assert "id" not in weighted_results[0]
+
+
+def test_chunk_level_hybrid_recovers_the_right_chunk_on_v1_corpus():
+    """The whole-document version of this property
+    (`test_rrf_and_weighted_agree_on_top1_on_v1_corpus`) repeated at chunk
+    granularity: BM25-over-chunks alone gets this query wrong (a chunk from
+    the wrong document mentions the same numbers), semantic-over-chunks gets
+    it right, and both fusion methods recover the right chunk.
+
+    Chunk-level BM25 (`chunked_search.search_bm25_chunks`) is computed live -
+    still pure Python, no model needed. Chunk-level semantic scores are
+    frozen from a real run of the cached `multi-qa-MiniLM-L6-cos-v1` model
+    (see `src/hybrid_search.py`'s `main()`, 2026-09-10).
+    """
+    hybrid_search = _load_hybrid_search_module()
+    chunking = _load_module("chunking")
+    chunked_search = _load_module("chunked_search")
+    retrieval = _load_module("retrieval")
+
+    query = "What happens when invoice price variance is over 3%?"
+    corpus = retrieval.load_data()
+    chunks = chunking.chunk_corpus(corpus)
+
+    # Same purpose as the whole-document corpus-drift guards above: this
+    # catches the frozen semantic scores below going stale because chunking
+    # produced a different chunk set (a document added/removed/reworded, or
+    # the chunking parameters changing) - not a document being edited into
+    # producing the exact same chunk count by coincidence.
+    assert len(chunks) == 570, (
+        "data/corpus_v1 chunking output changed - the frozen semantic chunk "
+        "scores below may be stale. Re-run "
+        "`./.venv/bin/python src/hybrid_search.py` and refresh them."
+    )
+
+    lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+    bm25_results = chunked_search.search_bm25_chunks(lexical_index, query, top_k=3)
+
+    # BM25-over-chunks alone gets this wrong, the same way whole-document
+    # BM25 did: a chunk from FAQ-002 restates the same tolerances and
+    # outranks the SOP-002 chunk that actually states the rule.
+    assert bm25_results[0]["chunk_id"] == "FAQ-002::chunk-12"
+
+    semantic_results = [
+        {"chunk_id": "SOP-002::chunk-3", "score": 0.6965974167398016},
+        {"chunk_id": "SOP-002::chunk-4", "score": 0.6172845695066638},
+        {"chunk_id": "FAQ-002::chunk-12", "score": 0.4949384152337939},
+    ]
+
+    hybrid = hybrid_search.HybridSearch(
+        bm25_results, semantic_results, id_key="chunk_id"
+    )
+
+    rrf_top1 = hybrid.rrf(top_k=1)[0]["chunk_id"]
+    weighted_top1 = hybrid.weighted(top_k=1)[0]["chunk_id"]
+
+    assert rrf_top1 == weighted_top1 == "SOP-002::chunk-3"
 
 
 # ---------------------------------------------------------------------------
