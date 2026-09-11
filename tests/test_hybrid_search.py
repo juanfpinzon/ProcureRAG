@@ -431,6 +431,193 @@ def test_chunk_level_hybrid_recovers_the_right_chunk_on_v1_corpus():
 
 
 # ---------------------------------------------------------------------------
+# Day 7: metadata filtering
+# ---------------------------------------------------------------------------
+
+
+def test_matches_filters_requires_every_field_to_match():
+    hybrid_search = _load_hybrid_search_module()
+
+    metadata = {"doc_type": "policy", "region": "Global", "supplier": None}
+
+    # Both fields match.
+    assert hybrid_search.matches_filters(
+        metadata, {"doc_type": "policy", "region": "Global"}
+    )
+    # One field matches, the other doesn't - AND semantics, not OR: a
+    # partial match is not a match.
+    assert not hybrid_search.matches_filters(
+        metadata, {"doc_type": "policy", "region": "EMEA"}
+    )
+    # No filters at all always matches (the "no filter requested" case).
+    assert hybrid_search.matches_filters(metadata, {})
+
+
+def test_matches_filters_treats_list_valued_fields_as_membership_not_equality():
+    hybrid_search = _load_hybrid_search_module()
+
+    # risk_tags is list-valued in the real v1 corpus - matching means the
+    # filter value is *one of* the tags, not that the tags list equals the
+    # filter value exactly.
+    metadata = {"risk_tags": ["kyc", "sanctions", "fraud"]}
+
+    assert hybrid_search.matches_filters(metadata, {"risk_tags": "kyc"})
+    assert not hybrid_search.matches_filters(metadata, {"risk_tags": "sox"})
+
+
+def test_filter_ranked_results_drops_non_matching_documents_and_preserves_rank_order():
+    hybrid_search = _load_hybrid_search_module()
+
+    # A ranked BM25-shaped result list where the best-ranked document
+    # (DOC-A) does not match the filter, but the 3rd-ranked one (DOC-C) does.
+    results = [
+        {"id": "DOC-A", "score": 9.0},
+        {"id": "DOC-B", "score": 7.0},
+        {"id": "DOC-C", "score": 5.0},
+        {"id": "DOC-D", "score": 1.0},
+    ]
+    metadata_index = {
+        "DOC-A": {"doc_type": "contract-summary"},
+        "DOC-B": {"doc_type": "contract-summary"},
+        "DOC-C": {"doc_type": "policy"},
+        "DOC-D": {"doc_type": "policy"},
+    }
+
+    filtered = hybrid_search.filter_ranked_results(
+        results, metadata_index, {"doc_type": "policy"}, top_k=3
+    )
+
+    # DOC-A and DOC-B are gone; DOC-C and DOC-D survive in their original
+    # relative rank order (DOC-C still ahead of DOC-D).
+    assert [result["id"] for result in filtered] == ["DOC-C", "DOC-D"]
+
+
+def test_filter_ranked_results_filters_the_full_list_before_slicing_to_top_k():
+    """Regression test for the ordering decision documented in
+    `filter_ranked_results`: filtering must happen on the full ranked list,
+    not after an early truncation, or a correct-but-lower-ranked document
+    would be lost before the filter ever saw it.
+    """
+    hybrid_search = _load_hybrid_search_module()
+
+    # The one matching document (DOC-D) is ranked 4th. A "truncate to top_k
+    # first, then filter" implementation would only ever look at the first
+    # `top_k=3` entries here (DOC-A/B/C, none of which match) and miss it.
+    results = [
+        {"id": "DOC-A", "score": 9.0},
+        {"id": "DOC-B", "score": 7.0},
+        {"id": "DOC-C", "score": 5.0},
+        {"id": "DOC-D", "score": 1.0},
+    ]
+    metadata_index = {
+        "DOC-A": {"doc_type": "contract-summary"},
+        "DOC-B": {"doc_type": "contract-summary"},
+        "DOC-C": {"doc_type": "contract-summary"},
+        "DOC-D": {"doc_type": "policy"},
+    }
+
+    filtered = hybrid_search.filter_ranked_results(
+        results, metadata_index, {"doc_type": "policy"}, top_k=3
+    )
+
+    assert [result["id"] for result in filtered] == ["DOC-D"]
+
+
+def test_filter_ranked_results_looks_up_chunk_metadata_via_parent_document():
+    """Chunk results carry no metadata of their own (see `chunking.py`) -
+    filtering must join back to the parent document via `document_id`."""
+    hybrid_search = _load_hybrid_search_module()
+
+    chunk_results = [
+        {"chunk_id": "CONTRACT-001::chunk-0", "document_id": "CONTRACT-001"},
+        {"chunk_id": "POL-001::chunk-2", "document_id": "POL-001"},
+    ]
+    metadata_index = {
+        "CONTRACT-001": {"doc_type": "contract-summary", "supplier": "Acme Logistics S.L."},
+        "POL-001": {"doc_type": "policy", "supplier": None},
+    }
+
+    filtered = hybrid_search.filter_ranked_results(
+        chunk_results,
+        metadata_index,
+        {"supplier": "Acme Logistics S.L."},
+        id_key="chunk_id",
+        document_id_key="document_id",
+        top_k=3,
+    )
+
+    assert [result["chunk_id"] for result in filtered] == ["CONTRACT-001::chunk-0"]
+
+
+def test_metadata_filter_can_remove_the_correct_document_and_change_the_top1():
+    """The failure mode Day 7's design doc asks to make visible: a wrong (or
+    simply unmet) filter value removes the correct document from the
+    candidate set entirely - it does not get a lower score, it disappears,
+    and whatever ranks next among the remaining candidates becomes top-1.
+    """
+    hybrid_search = _load_hybrid_search_module()
+
+    # DOC-A is the best-ranked (and, for this test, the "correct") result.
+    results = [
+        {"id": "DOC-A", "score": 9.0},
+        {"id": "DOC-B", "score": 4.0},
+    ]
+    metadata_index = {
+        "DOC-A": {"region": "EMEA"},
+        "DOC-B": {"region": "Americas"},
+    }
+
+    unfiltered_top1 = hybrid_search.filter_ranked_results(
+        results, metadata_index, {}, top_k=1
+    )[0]["id"]
+    assert unfiltered_top1 == "DOC-A"
+
+    # A filter for the wrong region removes DOC-A outright - DOC-B (a worse
+    # match by score, but the only one that still matches) becomes top-1
+    # instead of the ranking merely reordering around DOC-A.
+    filtered_for_wrong_region = hybrid_search.filter_ranked_results(
+        results, metadata_index, {"region": "Americas"}, top_k=1
+    )
+    assert [r["id"] for r in filtered_for_wrong_region] == ["DOC-B"]
+
+    # A filter that matches nothing at all returns an empty list, not an
+    # error and not a fallback to the unfiltered ranking.
+    filtered_for_no_match = hybrid_search.filter_ranked_results(
+        results, metadata_index, {"region": "APAC"}, top_k=1
+    )
+    assert filtered_for_no_match == []
+
+
+def test_build_metadata_index_and_filter_on_the_real_v1_corpus():
+    """The synthetic tests above check `filter_ranked_results`'s logic in
+    isolation; this checks the same function against real BM25 output and
+    real corpus metadata, the way `hybrid_search.run_edge_case_comparison`
+    actually uses it.
+    """
+    hybrid_search = _load_hybrid_search_module()
+    retrieval = _load_module("retrieval")
+
+    corpus = retrieval.load_data()
+    metadata_index = hybrid_search.build_metadata_index(corpus)
+
+    bm25_index = retrieval.build_index(corpus)
+    # Q001 in the v1 golden set: "What approval is required for a EUR
+    # 60,000 purchase order?", filtered to doc_type=policy. Its correct
+    # document, POL-001, is itself a policy, so filtering should keep it
+    # at top-1 rather than removing it.
+    query = "What approval is required for a EUR 60,000 purchase order?"
+    bm25_results = retrieval.search_bm25(bm25_index, query, top_k=15)
+
+    filtered = hybrid_search.filter_ranked_results(
+        bm25_results, metadata_index, {"doc_type": "policy"}, top_k=3
+    )
+
+    assert filtered, "expected at least one policy document to survive filtering"
+    for result in filtered:
+        assert metadata_index[result["id"]]["doc_type"] == "policy"
+
+
+# ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
 

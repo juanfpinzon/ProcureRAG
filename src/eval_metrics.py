@@ -1,0 +1,264 @@
+"""Day 7: turn ranked retrieval results into P@1 / R@5 / MRR numbers.
+
+Every module before this one (`retrieval.py`, `semantic_search.py`,
+`chunked_search.py`, `hybrid_search.py`) answers "what does this method
+retrieve for one query?" and Day 6's `main()` demos showed that qualitatively
+- five queries, printed side by side, eyeballed for which method got the
+right document first. That is a demo, not evidence: it does not say how
+often each method is right, only that it was right *this time*.
+
+This module is the other half: given a ranked list of retrieved document ids
+and the *known* relevant ids for a query (`data/corpus_v1/example_queries.jsonl`'s
+`expected_relevant_ids` - see `docs/corpus-v1.md`), compute the three metrics
+Day 7's design doc asks for, then average them across a whole query set to
+get one number per retrieval method. That is what turns "hybrid seemed to
+help on this query" into "hybrid's R@5 across 93 queries is X".
+
+**What "relevant" means here.** `expected_relevant_ids` also has a companion
+field, `relevance_grades` (2 = primary, 1 = partially relevant), for graded
+metrics like nDCG. This module deliberately does not use it - every id in
+`expected_relevant_ids` (primary and secondary together) counts as equally
+"relevant" for P@1/R@5/MRR, a *binary* relevance judgment. That is a real
+simplification (a primary match and a secondary match count the same), kept
+because it is what corpus_v1.md's own baseline table already used and it is
+enough to compare six retrieval methods against each other. Building a
+graded metric on top of `relevance_grades` is exactly the kind of thing
+`docs/corpus-v1.md`'s "suggested next steps" leaves for later.
+
+**Why these three metrics and not more.** P@1, R@5, and MRR are the three
+Day 7's design doc names, and each answers a different question a
+procurement stakeholder would actually ask:
+
+- P@1 - "if I only look at the first answer, is it right?"
+- R@5 - "if I'm willing to skim five results, how much of what I need is
+  there?" (most queries have 1-4 relevant documents - see `docs/corpus-v1.md`
+  - so R@5 is rarely saturated the way R@1 trivially would be)
+- MRR - "on average, how far do I have to scroll before I hit something
+  useful?" - rewards a relevant result at rank 1 fully, rank 2 half credit,
+  and so on, which P@1 (all-or-nothing at rank 1) and R@5 (all-or-nothing
+  membership in the top 5) cannot capture on their own.
+"""
+
+
+def precision_at_1(retrieved_ids, relevant_ids):
+    """1.0 if the first retrieved id is relevant, else 0.0.
+
+    `retrieved_ids` is a ranked list, best result first - exactly the shape
+    every retriever in this repo already returns (`[r["id"] for r in ...]`).
+    An empty `retrieved_ids` (no results at all for the query) scores 0.0,
+    same as any other wrong top-1: there was no correct answer to show.
+    """
+    if not retrieved_ids:
+        return 0.0
+    return 1.0 if retrieved_ids[0] in relevant_ids else 0.0
+
+
+def recall_at_k(retrieved_ids, relevant_ids, k=5):
+    """Fraction of the known relevant ids that appear anywhere in the top k.
+
+        recall@k = |{retrieved top k} intersect {relevant}| / |relevant|
+
+    Returns `None`, not `0.0`, when `relevant_ids` is empty - there is no
+    ground truth to measure recall against, so "0% recall" would misreport a
+    query that has no gold answer as a retrieval failure. Every query in the
+    v1 golden set has at least one relevant id (see `docs/corpus-v1.md`'s
+    verification notes), so this should not trigger in practice; it is
+    defensive, not something today's evaluation relies on hitting.
+    """
+    if not relevant_ids:
+        return None
+
+    top_k_ids = set(retrieved_ids[:k])
+    found = len(top_k_ids & set(relevant_ids))
+    return found / len(relevant_ids)
+
+
+def reciprocal_rank(retrieved_ids, relevant_ids):
+    """1 / (rank of the first relevant id); 0.0 if none of `retrieved_ids`
+    is relevant.
+
+    Rank is 1-indexed (the first result is "rank 1"), matching how a person
+    would actually count down a results list. A relevant result at rank 1
+    scores 1.0, rank 2 scores 0.5, rank 10 scores 0.1, and so on - MRR
+    rewards a relevant result appearing *early* far more than it punishes it
+    appearing merely somewhere in a long list.
+    """
+    for rank, document_id in enumerate(retrieved_ids, start=1):
+        if document_id in relevant_ids:
+            return 1.0 / rank
+    return 0.0
+
+
+def rollup_chunks_to_documents(chunk_results, document_id_key="document_id"):
+    """Turn a ranked chunk-result list into a ranked, de-duplicated document-id list.
+
+    Day 7's design note (Block 2) sets the chunk-to-document scoring rule
+    deliberately simply: "a chunk hit counts for its document_id; do not
+    overcomplicate." Concretely: walk the ranked chunks best-first, and the
+    first time a document is seen (via its best-ranked chunk), record it -
+    that becomes the document's position in the rolled-up ranking. A later,
+    lower-ranked chunk from a document already recorded adds nothing further
+    (no "average the chunk ranks" or "sum chunk scores" - a document either
+    has already earned its place from an earlier, better chunk, or it
+    hasn't yet).
+
+    This is what lets "Dense chunk->document retrieval" be scored with the
+    exact same `precision_at_1`/`recall_at_k`/`reciprocal_rank` functions
+    above as the whole-document methods: those functions only know about
+    ranked document ids, and this function is the adapter that produces one
+    from chunk-level search output.
+    """
+    seen_document_ids = set()
+    document_ids = []
+    for chunk_result in chunk_results:
+        document_id = chunk_result[document_id_key]
+        if document_id not in seen_document_ids:
+            seen_document_ids.add(document_id)
+            document_ids.append(document_id)
+    return document_ids
+
+
+def evaluate_method(retrieve_fn, queries, k_for_recall=5):
+    """Run `retrieve_fn` over every query and average P@1 / R@5 / MRR.
+
+    `retrieve_fn(query_row) -> [document_id, ...]` (ranked, best first) is
+    the one thing each caller adapts per method - see `main()` below for six
+    small closures, one per retrieval method, all built from functions
+    already defined in `retrieval.py`/`semantic_search.py`/`chunked_search.py`/
+    `hybrid_search.py`. `query_row` is one row from
+    `hybrid_search.load_example_queries()`, so `retrieve_fn` reads
+    `query_row["query"]` and this function reads `query_row["expected_relevant_ids"]`.
+
+    Returns one dict per method: the method scored, how many queries it was
+    evaluated over, and the three averaged metrics - ready to become one row
+    of `docs/eval-report.md`'s baseline table.
+    """
+    precision_scores = []
+    recall_scores = []
+    reciprocal_rank_scores = []
+
+    for query_row in queries:
+        relevant_ids = query_row["expected_relevant_ids"]
+        retrieved_ids = retrieve_fn(query_row)
+
+        precision_scores.append(precision_at_1(retrieved_ids, relevant_ids))
+        reciprocal_rank_scores.append(reciprocal_rank(retrieved_ids, relevant_ids))
+
+        recall_score = recall_at_k(retrieved_ids, relevant_ids, k=k_for_recall)
+        if recall_score is not None:
+            recall_scores.append(recall_score)
+
+    return {
+        "n_queries": len(queries),
+        "p_at_1": sum(precision_scores) / len(precision_scores),
+        "r_at_5": sum(recall_scores) / len(recall_scores) if recall_scores else 0.0,
+        "mrr": sum(reciprocal_rank_scores) / len(reciprocal_rank_scores),
+    }
+
+
+def main() -> None:
+    """Build every index once, then evaluate all six Day 7 baseline rows
+    over the full 93-query v1 golden set and print a markdown-ready table.
+
+    This is the script that produced the numbers in `docs/eval-report.md` -
+    re-run it after any change to the corpus, the query set, or the
+    retrieval/fusion code, and refresh that table if the numbers move.
+    """
+    from chunked_search import build_chunk_semantic_index, search_semantic_chunks
+    from chunking import chunk_corpus
+    from hybrid_search import CANDIDATE_POOL_SIZE, HybridSearch, load_example_queries
+    from preprocessing import load_data
+    from retrieval import build_index, search, search_bm25
+    from semantic_search import build_semantic_index, load_embedding_model, search_semantic
+
+    data = load_data()
+    queries = load_example_queries()
+
+    # Every retriever's *index* is built exactly once and reused for all 93
+    # queries - only the (cheap, corpus-independent) query encoding happens
+    # per query below. `search_bm25`/`search_semantic` are called fresh
+    # inside each closure rather than cached, since each method needs its
+    # own `top_k`/candidate-pool shape; for 93 short queries on this small
+    # corpus that repetition costs a modest amount of wall-clock time, not
+    # correctness, and keeping each method's closure self-contained and
+    # readable is worth more here than shaving that time off.
+    bm25_index = build_index(data)
+    model = load_embedding_model()
+    semantic_index = build_semantic_index(data, model)
+    chunks = chunk_corpus(data)
+    chunk_semantic_index = build_chunk_semantic_index(chunks, model)
+
+    # How deep each method's *final* ranked list goes before P@1/R@5/MRR are
+    # computed. 10 comfortably covers R@5 (which only looks at the top 5
+    # anyway) while giving MRR room to find a relevant document that landed
+    # just past rank 5 instead of silently scoring 0.0 for it.
+    RETRIEVAL_DEPTH = 10
+
+    def tfidf_retrieve(query_row):
+        results = search(bm25_index, query_row["query"], top_k=RETRIEVAL_DEPTH)
+        return [result["id"] for result in results]
+
+    def bm25_retrieve(query_row):
+        results = search_bm25(bm25_index, query_row["query"], top_k=RETRIEVAL_DEPTH)
+        return [result["id"] for result in results]
+
+    def dense_retrieve(query_row):
+        results = search_semantic(
+            semantic_index, query_row["query"], model, top_k=RETRIEVAL_DEPTH
+        )
+        return [result["id"] for result in results]
+
+    def dense_chunk_retrieve(query_row):
+        # Ask for more chunks than RETRIEVAL_DEPTH documents, since several
+        # top-ranked chunks often come from the same document and get
+        # collapsed to one entry by rollup_chunks_to_documents - requesting
+        # only RETRIEVAL_DEPTH chunks could under-fill the rolled-up list.
+        chunk_results = search_semantic_chunks(
+            chunk_semantic_index, query_row["query"], model, top_k=CANDIDATE_POOL_SIZE
+        )
+        return rollup_chunks_to_documents(chunk_results)[:RETRIEVAL_DEPTH]
+
+    def hybrid_rrf_retrieve(query_row):
+        bm25_results = search_bm25(
+            bm25_index, query_row["query"], top_k=CANDIDATE_POOL_SIZE
+        )
+        semantic_results = search_semantic(
+            semantic_index, query_row["query"], model, top_k=CANDIDATE_POOL_SIZE
+        )
+        hybrid = HybridSearch(bm25_results, semantic_results)
+        return [result["id"] for result in hybrid.rrf(top_k=RETRIEVAL_DEPTH)]
+
+    def hybrid_weighted_retrieve(query_row):
+        bm25_results = search_bm25(
+            bm25_index, query_row["query"], top_k=CANDIDATE_POOL_SIZE
+        )
+        semantic_results = search_semantic(
+            semantic_index, query_row["query"], model, top_k=CANDIDATE_POOL_SIZE
+        )
+        hybrid = HybridSearch(bm25_results, semantic_results)
+        return [result["id"] for result in hybrid.weighted(top_k=RETRIEVAL_DEPTH)]
+
+    methods = [
+        ("TF-IDF (document)", tfidf_retrieve),
+        ("BM25 (document)", bm25_retrieve),
+        ("Dense (document)", dense_retrieve),
+        ("Dense chunk->document", dense_chunk_retrieve),
+        ("Hybrid RRF (document)", hybrid_rrf_retrieve),
+        ("Hybrid weighted (document)", hybrid_weighted_retrieve),
+    ]
+
+    print(f"v1 baseline: {len(queries)} queries, {len(data)} documents, "
+          f"{len(chunks)} chunks, retrieval depth={RETRIEVAL_DEPTH}, "
+          f"candidate pool={CANDIDATE_POOL_SIZE}\n")
+    print(f"| {'Method':<27} | {'P@1':>5} | {'R@5':>5} | {'MRR':>5} |")
+    print(f"|{'-'*29}|{'-'*7}|{'-'*7}|{'-'*7}|")
+    for name, retrieve_fn in methods:
+        result = evaluate_method(retrieve_fn, queries)
+        print(
+            f"| {name:<27} | {result['p_at_1']:.3f} | "
+            f"{result['r_at_5']:.3f} | {result['mrr']:.3f} |"
+        )
+
+
+if __name__ == "__main__":
+    main()

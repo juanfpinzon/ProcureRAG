@@ -36,7 +36,77 @@ Two ways to combine the two rankings that both avoid that trap:
    blends the two normalized scores with a tunable weight alpha. This keeps
    the scores themselves interpretable ("70% semantic, 30% lexical") at the
    cost of an extra normalization step and a weight that has to be chosen.
+
+Day 7 adds two things on top of the Day 6 fusion math above, both driven by
+`docs/day-07-hybrid-consolidation-evals.md`:
+
+1. `CANDIDATE_POOL_SIZE` (below) - a mitigation for the exact-tie weakness
+   Day 6 found: a candidate present in only one retriever's *narrow* top-k
+   list can tie exactly with another candidate present in only the other
+   retriever's list, and the tie then falls back to alphabetical id, which
+   carries no relevance information. See the constant's docstring for what
+   this does and does not fix - it is a real but partial mitigation, not a
+   claim that ties are now impossible.
+2. Metadata filtering (`build_metadata_index`, `matches_filters`,
+   `filter_ranked_results` below) - restricting candidates to documents that
+   match fields like `doc_type`, `region`, or `supplier` before they reach
+   `HybridSearch`. This still fuses "already-ranked lists" exactly as
+   before; filtering only decides *which* ranked lists go in.
 """
+
+import json
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_QUERIES_PATH = PROJECT_ROOT / "data" / "corpus_v1" / "example_queries.jsonl"
+
+# How many results each retriever (`search_bm25`, `search_semantic`, ...)
+# should be asked for *before* the caller fuses them with `HybridSearch`,
+# regardless of how many fused results the caller ultimately wants back.
+#
+# Day 6 found a real exact-tie pathology: if both retrievers are only asked
+# for their top 3, a candidate that is genuinely the *best* result for one
+# retriever but happens to fall just outside the other retriever's top 3 is
+# indistinguishable, score-wise, from a candidate that is completely absent
+# from that retriever's ranking - RRF and weighted combination both treat
+# "not in the list I was given" as "no signal from this side" either way
+# (see `_ranks_by_position` and `weighted`'s docstring). Two such candidates
+# - one strong-on-BM25-only, one strong-on-semantic-only - can land on the
+# exact same fused score and get resolved by alphabetical document id, which
+# has nothing to do with relevance.
+#
+# Asking each retriever for more candidates up front (15, against a
+# 34-document corpus) before fusing gives a candidate that was previously
+# "invisible" on one side a real chance to show up somewhere further down
+# that side's list too, contributing a small but genuine term instead of
+# nothing. Verified this empirically on the Day 6 "vendor vetting" case
+# (`docs/eval-report.md` has the numbers): the exact tie is gone at pool=15.
+# It is *not* a complete fix, though - the same investigation found that
+# widening the pool does not make the fused ranking *correct* when a
+# document is missing from a retriever's list for a real reason (e.g. BM25
+# finds zero shared vocabulary between "vendor vetting" and the correct
+# policy document's actual wording) rather than merely a too-small top_k.
+# That remaining gap is a reranking problem (Day 8), not a wider-top_k one.
+CANDIDATE_POOL_SIZE = 15
+
+
+def load_example_queries(path=EXAMPLE_QUERIES_PATH):
+    """Load the v1 golden query set - one JSON object per line.
+
+    This is `data/corpus_v1/example_queries.jsonl`, the file Day 7's design
+    note (`docs/day-07-hybrid-consolidation-evals.md`, Block 2) names as the
+    canonical query source, kept as-is rather than copied into a separate
+    `data/golden_queries.jsonl`. Each row carries `query_id`, `query`,
+    `expected_relevant_ids`, `relevance_grades`, `metadata_filters`, and
+    more - see `docs/corpus-v1.md` for the full field list.
+    """
+    queries = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                queries.append(json.loads(line))
+    return queries
 
 
 def _ranks_by_position(results, id_key="id"):
@@ -244,6 +314,258 @@ class HybridSearch:
         return ranked[:top_k]
 
 
+# ---------------------------------------------------------------------------
+# Day 7: metadata filtering
+#
+# The v1 corpus rows carry operational metadata - `doc_type`, `category`,
+# `region`, `supplier`, `risk_tags`, and more (see `docs/corpus-v1.md`) - that
+# `preprocessing.preprocess_data` strips away before BM25/semantic search
+# ever see a document; those functions only keep `id` plus whatever they need
+# to score text (tokens, or an embedding). That is correct for scoring, but
+# it means neither retriever has any way to honour "for EMEA" or "policy
+# only" - a semantically perfect match in the wrong region is still wrong.
+#
+# Design decisions for Day 7 (see `docs/day-07-hybrid-consolidation-evals.md`,
+# Block 2, for the questions these answer):
+#
+# - **Filter timing**: after scoring, before truncating to the caller's
+#   final `top_k`. `filter_ranked_results` below expects the *full* ranked
+#   list a retriever produced (call `search_bm25`/`search_semantic` with a
+#   generous `top_k`, e.g. `CANDIDATE_POOL_SIZE`), drops non-matching
+#   entries, and only then slices to the requested size. Filtering the
+#   corpus *before* building the BM25/semantic index instead was rejected:
+#   BM25's IDF and average-document-length statistics would then depend on
+#   which filter was applied, so the same document could score differently
+#   for the same query under different filters - confusing, and unnecessary
+#   at this corpus's size (34 documents), where scoring everything and
+#   filtering after is effectively free.
+# - **Document level, not chunk level**: a chunk (see `chunking.py`) carries
+#   only `chunk_id`, `document_id`, `text`, and `title` - none of the
+#   metadata fields a filter checks. A chunk is filtered by its *parent
+#   document's* metadata, looked up through `document_id`.
+# - **When a filter removes the correct document**: it disappears from the
+#   result list, exactly like any other non-matching candidate - a filter
+#   cannot recover a document it has already excluded. `main()`'s
+#   `run_edge_case_comparison` below includes a deliberately wrong filter
+#   value on a real query to make this failure mode visible.
+# ---------------------------------------------------------------------------
+
+
+def build_metadata_index(data):
+    """Return {document_id: raw_corpus_row}, for metadata lookups.
+
+    `data` is the raw list of corpus rows from `preprocessing.load_data()` -
+    the same input `retrieval.build_index` and
+    `semantic_search.build_semantic_index` take. Unlike those, which reduce
+    each row to tokens or an embedding, this keeps every original field
+    (`doc_type`, `category`, `region`, `supplier`, `risk_tags`, ...) so
+    `matches_filters` below has something to check.
+    """
+    return {row["id"]: row for row in data}
+
+
+def matches_filters(metadata, filters):
+    """Return True if one document's metadata satisfies every filter.
+
+    `filters` is a small `{field: expected_value}` dict, e.g.
+    `{"doc_type": "policy"}` or `{"region": "EMEA", "doc_type": "contract-summary"}`.
+    A document must match every key present in `filters` (logical AND) -
+    there is no OR or numeric-range support (e.g. "annual_value_eur over
+    100000"). That is a real limitation, kept out deliberately: the v1 query
+    set's `metadata_filters` field never needs more than equality-per-field
+    to prove the filtering contract, so anything past that would be
+    speculative complexity with no exercised test case.
+
+    `risk_tags` is the one list-valued field in the v1 corpus (e.g.
+    `["kyc", "sanctions", ...]`). For a list-valued field, "matches" means
+    the expected value is a *member of* the list, not that the whole list
+    equals the expected value - `{"risk_tags": "kyc"}` should match a
+    document whose `risk_tags` contains `"kyc"` among other tags, not only a
+    document whose entire tag list is exactly `["kyc"]`.
+    """
+    for field, expected_value in filters.items():
+        actual_value = metadata.get(field)
+        if isinstance(actual_value, list):
+            if expected_value not in actual_value:
+                return False
+        elif actual_value != expected_value:
+            return False
+    return True
+
+
+def filter_ranked_results(
+    results, metadata_index, filters, id_key="id", document_id_key=None, top_k=3
+):
+    """Keep only the ranked results whose document matches `filters`, then
+    slice to `top_k` - see the section docstring above for the timing and
+    document-level design decisions this implements.
+
+    `results` should be the *full* ranked list a retriever produced (e.g.
+    `search_bm25(index, query, top_k=CANDIDATE_POOL_SIZE)`), not something
+    already truncated to the caller's final desired size - filtering after
+    truncation risks silently losing a correct document that matched the
+    filter but ranked just outside a too-small pre-filter cut.
+
+    `document_id_key=None` (the default) means `results` are whole-document
+    results, so `id_key` ("id" by default) already names the document id
+    directly. Pass `document_id_key="document_id"` for chunk results, whose
+    own `id_key` (`"chunk_id"`) is not a document id - each chunk is then
+    filtered by its parent document's metadata instead of its own (chunks
+    carry no metadata of their own; see the section docstring above).
+
+    An empty `filters` dict is the common "no filter requested" case and is
+    handled first as a fast path: every result passes, so this only slices
+    to `top_k` without doing per-result metadata lookups.
+    """
+    if not filters:
+        return results[:top_k]
+
+    filtered = []
+    for result in results:
+        lookup_id = result[document_id_key] if document_id_key else result[id_key]
+        metadata = metadata_index.get(lookup_id)
+        if metadata is not None and matches_filters(metadata, filters):
+            filtered.append(result)
+
+    return filtered[:top_k]
+
+
+# ---------------------------------------------------------------------------
+# Day 7: edge-case comparison on hand-picked v1 queries
+# ---------------------------------------------------------------------------
+
+# 10 queries from `data/corpus_v1/example_queries.jsonl`, chosen by
+# `query_id` (not re-typed, so they can never drift from the actual golden
+# file) to cover the query shapes Day 7's design doc asks for:
+#
+#   Q001 - exact currency threshold, + a `doc_type` metadata filter
+#   Q089 - near-synonym pair ("sole source" vs "single source"), + a
+#          `doc_type` filter
+#   Q053 - supplier-specific, + a `supplier` filter
+#   Q014 - vocabulary gap ("uptime" is the corpus's word; a paraphrase would
+#          say "availability"), no filter
+#   Q009 - exact numeric threshold (a shareholding percentage), no filter
+#   Q005 - multi-document (answer spans 3 separate documents)
+#   Q093 - multi-document and intentionally hard: three DIFFERENT numeric
+#          answers depending on which contract, from the "sole confident
+#          number is wrong" family docs/corpus-v1.md calls out
+#   Q011 - exact standards/acronyms (SOC 2, ISO 27001), + a `category` filter
+#   Q067 - vocabulary gap ("contractor" vs the corpus's "contingent worker"),
+#          + a `category` filter
+#   Q071 - domain-specific scenario phrasing, + a `category` filter
+EDGE_CASE_QUERY_IDS = [
+    "Q001", "Q089", "Q053", "Q014", "Q009",
+    "Q005", "Q093", "Q011", "Q067", "Q071",
+]
+
+
+def run_edge_case_comparison():
+    """Print BM25 vs dense vs hybrid (RRF/weighted) top-1 for 10 v1 queries.
+
+    This is the Block 3A "comparison function" and "edge-case comparison"
+    output in one: each retriever runs with `CANDIDATE_POOL_SIZE` candidates
+    (the Day 7 tie mitigation - see that constant's docstring), a query's own
+    `metadata_filters` are applied when present (via `filter_ranked_results`
+    above), and a checkmark shows whether each method's top-1 is a known
+    relevant document (`expected_relevant_ids`). The real numbers this
+    produced, plus which queries landed in each of "BM25 wins" / "dense
+    wins" / "hybrid wins" / "hybrid still fails", are written up in
+    `docs/eval-report.md` - this function is what generated them, not a
+    duplicate of them, so re-running it is how to check they are still
+    accurate after any change to the corpus or the fusion code.
+    """
+    from preprocessing import load_data
+    from retrieval import build_index, search_bm25
+    from semantic_search import build_semantic_index, load_embedding_model, search_semantic
+
+    data = load_data()
+    bm25_index = build_index(data)
+    model = load_embedding_model()
+    semantic_index = build_semantic_index(data, model)
+    metadata_index = build_metadata_index(data)
+    queries_by_id = {query["query_id"]: query for query in load_example_queries()}
+
+    def top1(results):
+        return results[0]["id"] if results else "(none)"
+
+    def mark(document_id, relevant_ids):
+        return "correct" if document_id in relevant_ids else "MISS"
+
+    for query_id in EDGE_CASE_QUERY_IDS:
+        query_row = queries_by_id[query_id]
+        query = query_row["query"]
+        relevant_ids = set(query_row["expected_relevant_ids"])
+        filters = query_row["metadata_filters"]
+
+        bm25_results = search_bm25(bm25_index, query, top_k=CANDIDATE_POOL_SIZE)
+        semantic_results = search_semantic(
+            semantic_index, query, model, top_k=CANDIDATE_POOL_SIZE
+        )
+
+        # Apply the query's own metadata filter, if it has one - this is the
+        # same `filter_ranked_results` a real filtered search would call,
+        # exercised here on real BM25/semantic output rather than synthetic
+        # data (see `tests/test_hybrid_search.py` for the synthetic-data
+        # tests of `filter_ranked_results` itself).
+        if filters:
+            bm25_results = filter_ranked_results(
+                bm25_results, metadata_index, filters, top_k=CANDIDATE_POOL_SIZE
+            )
+            semantic_results = filter_ranked_results(
+                semantic_results, metadata_index, filters, top_k=CANDIDATE_POOL_SIZE
+            )
+
+        hybrid = HybridSearch(bm25_results, semantic_results)
+        rrf_results = hybrid.rrf(top_k=3)
+        weighted_results = hybrid.weighted(top_k=3)
+
+        bm25_top1 = top1(bm25_results)
+        semantic_top1 = top1(semantic_results)
+        rrf_top1 = top1(rrf_results)
+        weighted_top1 = top1(weighted_results)
+
+        filter_note = f"  filter={filters}" if filters else ""
+        print(f"\n{query_id}: {query}{filter_note}")
+        print(f"  expected (primary+secondary): {sorted(relevant_ids)}")
+        print(f"  BM25 top-1:     {bm25_top1:<15} {mark(bm25_top1, relevant_ids)}")
+        print(f"  Dense top-1:    {semantic_top1:<15} {mark(semantic_top1, relevant_ids)}")
+        print(f"  RRF top-1:      {rrf_top1:<15} {mark(rrf_top1, relevant_ids)}")
+        print(f"  Weighted top-1: {weighted_top1:<15} {mark(weighted_top1, relevant_ids)}")
+
+    # --- Metadata-filter failure mode -------------------------------------
+    # Q001's real filter (`doc_type: policy`) keeps its correct document,
+    # POL-001, since POL-001 *is* a policy - that alone doesn't show what
+    # happens when a filter is wrong. Re-running the same query's BM25
+    # results through a deliberately mismatched filter does: POL-001 is not
+    # a contract-summary, so it is removed - not re-ranked, removed - and
+    # cannot come back no matter how the remaining candidates are scored.
+    print("\n--- Metadata filter failure mode (Q001, deliberately wrong filter) ---")
+    query_row = queries_by_id["Q001"]
+    query = query_row["query"]
+    correct_filter = query_row["metadata_filters"]
+    wrong_filter = {"doc_type": "contract-summary"}
+
+    bm25_results = search_bm25(bm25_index, query, top_k=CANDIDATE_POOL_SIZE)
+    correctly_filtered = filter_ranked_results(
+        bm25_results, metadata_index, correct_filter, top_k=3
+    )
+    wrongly_filtered = filter_ranked_results(
+        bm25_results, metadata_index, wrong_filter, top_k=3
+    )
+
+    print(f"Q001: {query}")
+    print(f"  unfiltered BM25 top-1:                  {top1(bm25_results)}")
+    print(f"  filter={correct_filter} (the query's real filter) -> top-1: {top1(correctly_filtered)}")
+    print(
+        f"  filter={wrong_filter} (deliberately wrong) -> "
+        f"results: {[r['id'] for r in wrongly_filtered]}"
+    )
+    print(
+        "  -> POL-001 is the correct document but is not a contract-summary, "
+        "so the wrong filter removes it before scoring ever mattered."
+    )
+
+
 def _print_results(results, id_key="id"):
     """Print a fused result list with its per-method scores for inspection."""
     for result in results:
@@ -430,6 +752,10 @@ def main() -> None:
                 f"({expected_id}); neither single method ranked a "
                 "chunk from it first."
             )
+
+    # --- Day 7: edge-case comparison + metadata filtering -----------------
+    print("\n\n=== Day 7: edge-case comparison (metadata filtering) ===")
+    run_edge_case_comparison()
 
 
 if __name__ == "__main__":

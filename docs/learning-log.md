@@ -705,66 +705,251 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 
 - Drafted Day 7 route in `docs/day-07-hybrid-consolidation-evals.md`.
 - Starting from the Day 6 hybrid search artifact and the v1 corpus/query set.
-- Artifact attempted or built: _TODO: Fill in. Include whether you implemented metadata filtering, updated comparison output, created/updated `docs/eval-report.md`, and established `data/golden_queries.jsonl` or used `data/corpus_v1/example_queries.jsonl` as canonical._
+- Artifact built:
+  - `src/hybrid_search.py` — added `CANDIDATE_POOL_SIZE` (the Day 6 exact-tie
+    mitigation), `load_example_queries`, metadata filtering
+    (`build_metadata_index`, `matches_filters`, `filter_ranked_results`), and
+    `run_edge_case_comparison` (10 hand-picked v1 queries, BM25/dense/RRF/
+    weighted top-1 side by side, plus a deliberate wrong-filter failure-mode
+    demo). `HybridSearch` itself (the RRF/weighted math) is unchanged.
+  - `src/eval_metrics.py` (new) — `precision_at_1`, `recall_at_k`,
+    `reciprocal_rank`, `rollup_chunks_to_documents`, `evaluate_method`, and a
+    `main()` that builds every index once and evaluates all six baseline
+    rows over the full 93-query v1 set.
+  - `docs/eval-report.md` (new) — the full baseline table plus the metadata
+    filtering contract, tie-break decision (with the actual before/after
+    numbers), and edge-case findings.
+  - `data/golden_queries.jsonl` — **not created**. `data/corpus_v1/example_queries.jsonl`
+    is used directly as the canonical query source (see `docs/eval-report.md`
+    for why); introducing a second file would just be one more thing that
+    could drift out of sync with it.
+  - `tests/test_hybrid_search.py` — 7 new tests for `matches_filters` and
+    `filter_ranked_results` (AND logic, list-valued `risk_tags` membership,
+    filter-before-slice ordering, chunk→parent-document lookup, the
+    filter-removes-correct-document failure mode, and one test against the
+    real corpus).
+  - `tests/test_eval_metrics.py` (new) — 9 tests for the metric functions
+    and the chunk→document rollup, using small hand-computed examples so
+    they don't depend on the corpus or a model.
 
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 6 — Hybrid Search consolidation/review.
-  - Lesson 1: `Keyword vs. Semantic Search` — _TODO: Fill in completed/attempted._
-  - Lesson 2: `Hybrid Search` — _TODO: Fill in completed/attempted._
-  - Lesson 3: `Score Normalization` — _TODO: Fill in completed/attempted._
-  - Lesson 4: `Weighted Combination` — _TODO: Fill in completed/attempted._
-  - Lesson 5: `Reciprocal Rank Fusion` — _TODO: Fill in completed/attempted._
-- Companion source: Beyond Naive RAG hybrid/failure-mode sections — _TODO: Fill in notes or mark deferred._
-- Optional conceptual source: freeCodeCamp RAG From Scratch RAG-Fusion/HyDE — _TODO: Fill in if reviewed; otherwise mark deferred._
-- Exercises completed or attempted: _TODO: Fill in._
+  - Lesson 1: `Keyword vs. Semantic Search` — _TODO (Juan): mark completed/attempted on boot.dev._
+  - Lesson 2: `Hybrid Search` — _TODO (Juan): mark completed/attempted on boot.dev._
+  - Lesson 3: `Score Normalization` — _TODO (Juan): mark completed/attempted on boot.dev._
+  - Lesson 4: `Weighted Combination` — _TODO (Juan): mark completed/attempted on boot.dev._
+  - Lesson 5: `Reciprocal Rank Fusion` — _TODO (Juan): mark completed/attempted on boot.dev._
+- Companion source: Beyond Naive RAG hybrid/failure-mode sections — _TODO (Juan): notes or mark deferred._
+- Optional conceptual source: freeCodeCamp RAG From Scratch RAG-Fusion/HyDE — _TODO (Juan): mark reviewed or deferred._
+
+I (Claude Code) cannot attest to boot.dev platform completion directly — that
+part is Juan's own record, left as-is rather than assumed done.
 
 ### Hybrid consolidation / retrieval-eval evidence
 
-- Golden query source:
-  - _TODO: Fill in. Did you use `data/corpus_v1/example_queries.jsonl` as canonical, create `data/golden_queries.jsonl`, or curate a subset? Include query count._
-- Metadata filtering contract:
-  - Supported fields: _TODO: Fill in (`doc_type`, `category`, `region`, `supplier`, `risk_tags`, etc.)._
-  - Filter timing: _TODO: Fill in pre-retrieval vs post-retrieval vs wrapper filtering._
-  - Chunk behavior: _TODO: Fill in how chunk hits map back to document IDs._
-- Edge-case comparison:
-  - BM25 wins on: _TODO: Fill in query IDs/examples and why._
-  - Dense wins on: _TODO: Fill in query IDs/examples and why._
-  - Hybrid wins on: _TODO: Fill in query IDs/examples and why._
-  - Hybrid still fails or ties on: _TODO: Fill in query IDs/examples and why._
-- Eval table created/updated in `docs/eval-report.md`:
-  - TF-IDF document P@1 / R@5 / MRR: _TODO: Fill in._
-  - BM25 document P@1 / R@5 / MRR: _TODO: Fill in._
-  - Dense document P@1 / R@5 / MRR: _TODO: Fill in._
-  - Dense chunk→document P@1 / R@5 / MRR: _TODO: Fill in._
-  - Hybrid RRF P@1 / R@5 / MRR: _TODO: Fill in._
-  - Hybrid weighted P@1 / R@5 / MRR: _TODO: Fill in._
-- Baseline commands:
-  - `./.venv/bin/pytest -q` → _TODO: Fill in real output._
-  - `./.venv/bin/python -m compileall -q src tests` → _TODO: Fill in real output._
-  - `./.venv/bin/python -m ruff check .` or `ruff check .` → _TODO: Fill in real output or explain unavailable command._
-  - `./.venv/bin/python src/hybrid_search.py` → _TODO: Fill in summary of comparison output._
+- **Golden query source**: `data/corpus_v1/example_queries.jsonl`, 93 queries,
+  used directly (see `docs/eval-report.md`, "Golden query source").
+- **Metadata filtering contract**:
+  - Supported fields: any field on a raw corpus row (`doc_type`, `category`,
+    `region`, `supplier`, `risk_tags`, ...) via equality, with list-valued
+    fields (`risk_tags`) matched by membership. Multiple filter fields
+    combine with AND.
+  - Filter timing: after scoring, before truncating to the caller's final
+    `top_k` — each retriever contributes a wide candidate list
+    (`CANDIDATE_POOL_SIZE=15`), non-matching candidates are dropped from
+    that full list, and only then is it sliced down. Rejected filtering the
+    corpus before building the BM25 index: it would make IDF/avg-length
+    statistics depend on which filter was active, so the same query against
+    the same document could score differently per filter — confusing, and
+    free to avoid at 34 documents.
+  - Chunk behavior: a chunk carries no metadata of its own; it is filtered
+    by its parent document's metadata via `document_id`
+    (`filter_ranked_results(..., document_id_key="document_id")`).
+  - Failure mode, measured not assumed: applying a deliberately wrong filter
+    to Q001 removes its correct document (POL-001) entirely and silently —
+    no error, a different (wrong) document becomes top-1 instead. See
+    `docs/eval-report.md` for the exact output.
+- **Edge-case comparison** (full detail and query IDs in `docs/eval-report.md`):
+  - BM25 wins on 10/93 queries (dense's top-1 wrong, BM25's correct) —
+    e.g. Q009 (exact shareholding percentage), Q042 (exact card spending
+    limit).
+  - Dense wins on 8/93 queries — e.g. Q014 ("uptime", vocabulary/paraphrase
+    gap), Q002 (definitional question, little lexical overlap).
+  - Hybrid wins, measured at two bars: strict ("both single methods wrong,
+    hybrid correct") = 0/93 on this corpus, same finding Day 6 already
+    suspected on its 5-query demo, now confirmed on the full set. Weaker but
+    real ("hybrid's top-1 differs from both single methods' own top-1, and
+    is correct") = 2/93 for RRF (Q009, Q042), 1/93 for weighted (Q042).
+  - Hybrid still fails on Q014 — dense alone is correct, but *both* RRF and
+    weighted land on a wrong, moderately-consistent-on-both-sides distractor
+    instead. Same structural cause as the tie-break finding below.
+- **Eval table** (full 93-query set, `docs/eval-report.md` has the write-up):
+
+  | Method | Unit | P@1 | R@5 | MRR |
+  |---|---|---|---|---|
+  | TF-IDF | document | 0.871 | 0.787 | 0.924 |
+  | BM25 | document | 0.860 | 0.754 | 0.910 |
+  | Dense | document | 0.839 | 0.673 | 0.900 |
+  | Dense | chunk→document | 0.925 | 0.768 | 0.954 |
+  | Hybrid RRF | document | 0.860 | 0.763 | 0.922 |
+  | Hybrid weighted (α=0.5) | document | 0.882 | 0.775 | 0.938 |
+
+  Headline finding: whole-document hybrid beats every individual
+  whole-document method, but chunk-level dense retrieval *alone* still beats
+  whole-document hybrid on every metric — the retrieval unit matters more
+  than fusion did here. Chunk-level hybrid is the obvious next baseline, not
+  built today (kept to the six required rows).
+
+- **Tie-break decision (Day 6 weakness)**: widened the per-retriever
+  candidate pool fed into `HybridSearch` before fusing (3 → 15), instead of
+  changing `HybridSearch`'s own tie-break rule. Measured on the Day 6
+  "vendor vetting" query: at pool=3 the fused top-1 (CONTRACT-006) was tied
+  with the correct document (POL-002) and won only alphabetically; at
+  pool=15 the tie is gone, but the new sole winner (SOP-007) is *still
+  wrong* — POL-002 never appears anywhere in BM25's top 15 at all (a real
+  lexical gap, not a too-narrow-`top_k` artifact), so widening the pool
+  can't manufacture a signal that genuinely isn't there. Full numbers and
+  the "what this fixes vs. doesn't fix" breakdown are in
+  `docs/eval-report.md`.
+- **Baseline commands** (real output, captured 2026-09-11):
+
+  ```
+  $ ./.venv/bin/pytest -q
+  ........................................................................ [ 88%]
+  .........                                                                [100%]
+  81 passed in 0.20s
+
+  $ ./.venv/bin/python -m compileall -q src tests
+  (no output — clean compile)
+
+  $ ./.venv/bin/python -m ruff check .
+  No module named ruff — not installed in .venv; not run.
+
+  $ ./.venv/bin/python src/eval_metrics.py
+  v1 baseline: 93 queries, 34 documents, 570 chunks, retrieval depth=10, candidate pool=15
+
+  | Method                      |   P@1 |   R@5 |   MRR |
+  |-----------------------------|-------|-------|-------|
+  | TF-IDF (document)           | 0.871 | 0.787 | 0.924 |
+  | BM25 (document)             | 0.860 | 0.754 | 0.910 |
+  | Dense (document)            | 0.839 | 0.673 | 0.900 |
+  | Dense chunk->document       | 0.925 | 0.768 | 0.954 |
+  | Hybrid RRF (document)       | 0.860 | 0.763 | 0.922 |
+  | Hybrid weighted (document)  | 0.882 | 0.775 | 0.938 |
+  ```
+
+  `./.venv/bin/python src/hybrid_search.py` output (Day 6 comparisons plus
+  the new Day 7 edge-case section) is long-form; full transcript wasn't
+  pasted here, but every number it prints is reproducible by re-running it
+  and is summarized above and in `docs/eval-report.md`.
 
 ### What failed or was confusing
 
-- _TODO: Fill in. Prompts: Which queries did hybrid not improve? Did metadata filtering remove any correct answers? Did alpha or RRF tie behavior surprise you?_
+- The pool-size investigation initially looked like a clean "fix": widening
+  `CANDIDATE_POOL_SIZE` from 3 to 15 does make the Day 6 exact tie disappear.
+  It took actually inspecting per-retriever ranks (not just the fused
+  top-1) to notice the new winner was *also wrong* — the fix removes the
+  arbitrary-alphabetical-tiebreak defect but doesn't touch the deeper cause
+  (RRF favoring cross-retriever consensus over one retriever's strong,
+  correct, single-sided signal). Easy to have stopped at "tie gone, ship
+  it" and missed that the ranking was still bad for a different reason.
+- Metadata filtering removing the correct document is "obviously true" in
+  the abstract, but seeing it happen *silently* (no error, no empty-result
+  signal, just a different, wrong top-1) on a real query (Q001 with a
+  deliberately wrong filter) made the actual operational risk concrete in a
+  way the abstract description didn't.
+- Weighted combination and RRF disagreeing on Q009's top-1 (`POL-002` for
+  RRF, `FAQ-002` for weighted — both technically correct, since the query
+  has 3 valid answers) was a good reminder that "hybrid agrees with itself"
+  is not something to assume; the two fusion methods use genuinely
+  different information (rank position vs. normalized magnitude) and can
+  legitimately land on different, individually-defensible answers.
 
 ### What became clearer
 
-- _TODO: Fill in. Prompts: What is now clearer about procurement-specific BM25 wins, dense wins, hybrid wins, and why evals are needed before reranking?_
+- BM25 wins and dense wins are not evenly split by query "type" label in the
+  corpus — they're driven by whether the specific words in the query happen
+  to overlap with the specific words in the answer, which correlates with
+  but isn't identical to `query_type` (e.g. some `numeric` queries are
+  BM25-favorable because the number itself is the differentiator; others
+  aren't, if the surrounding phrasing is paraphrased).
+- Why evals matter before reranking: the eval table's least comfortable
+  finding (chunk-level dense alone beats whole-document hybrid) is exactly
+  the kind of thing a demo of 5 queries would never surface, because none of
+  Day 6's comparison queries happened to expose it. Reranking or any other
+  Day 8+ improvement built on top of whole-document hybrid, without this
+  table, would have been optimizing the wrong retrieval unit.
+- The Day 6 "exact tie" bug and the Q014 "hybrid still fails" case are the
+  *same underlying phenomenon* wearing two different hats: RRF (and, more
+  weakly, weighted combination) structurally reward being decent-on-both
+  sides over being excellent-on-one-side. A tie is just the most visible
+  symptom of that; a confident wrong answer (Q014) is the same cause without
+  the visible symptom, which makes it more dangerous, not less.
 
 ### What I can now explain in an interview
 
-- _TODO: Explain when BM25 beats dense retrieval in procurement RAG._
-- _TODO: Explain when dense retrieval beats BM25._
-- _TODO: Explain why hybrid search can still tie or fail._
-- _TODO: Explain what metadata filtering adds beyond scoring._
-- _TODO: Explain P@1, R@5, and MRR in plain English._
+- **When BM25 beats dense in procurement RAG**: exact identifiers, numbers,
+  and rare tokens — a supplier ID, a currency threshold, a percentage. Two
+  real v1 examples: Q009 (a specific shareholding percentage) and Q042 (a
+  specific spending limit). Dense embeddings compress these into a
+  general "this is about compliance thresholds" direction and can confuse
+  one exact number for a topically-similar but wrong document.
+- **When dense beats BM25**: paraphrase and vocabulary mismatch between the
+  query and the answer's actual wording. Q014 ("uptime" vs. the corpus's
+  actual phrasing) and Q002 (a conceptual "is it X or Y" question with
+  little lexical overlap with its answer sentence) are both cases where
+  BM25's top-1 was wrong and dense's was right.
+- **Why hybrid can still tie or fail**: fusion only combines the candidate
+  signal each retriever actually produced. RRF sums rank positions; a
+  document present in only one list contributes only one term, and — this
+  is the sharper version I can now state precisely — RRF's rank-sum formula
+  structurally favors a document that is moderately ranked by *both*
+  retrievers over one that is the best result of *one* retriever and absent
+  from the other. Measured concretely on Q014: dense alone is correct, but
+  both RRF and weighted pick a worse, both-sides-moderate distractor
+  instead. Widening the candidate pool fed into fusion removes artificial
+  ties caused by too-narrow top-k, but does not fix this structural
+  preference — that needs a reranker, or better lexical recall, not more
+  candidates.
+- **What metadata filtering adds beyond scoring**: it's a hard constraint on
+  the candidate *set*, not another signal blended into the score. A
+  semantically perfect match in the wrong document type/region/supplier
+  should not just rank lower — it should be unreachable, because a
+  procurement user filtering "policy only" wants that guarantee, not a soft
+  preference. The real risk it introduces: a *wrong* filter value fails
+  silently, returning a confident but incorrect top-1 rather than an error —
+  demonstrated concretely on Q001 in `docs/eval-report.md`.
+- **P@1, R@5, MRR in plain English**: P@1 — is the very first answer right?
+  R@5 — of everything actually relevant, how much shows up if I'm willing to
+  skim 5 results? MRR — on average, how far down the list is the first
+  useful thing, with an answer at rank 1 counting fully and one at rank 2
+  counting half as much, and so on?
 
 ### What remains weak
 
-- _TODO: Fill in. Likely candidates: reranking, full retrieval metrics over all 93 queries, graded relevance/nDCG, metadata-filter evaluation, tie-break strategy._
+- Chunk-level hybrid fusion is not in the baseline table yet, despite being
+  the table's own strongest signal for where the next real gain is (chunk
+  dense alone already beats whole-document hybrid on every metric).
+- Binary relevance only (`expected_relevant_ids`); `relevance_grades`
+  (1 = secondary, 2 = primary) is unused, so a primary-document hit and a
+  secondary-document hit currently score identically.
+- The RRF-favors-consensus-over-strength finding (Q014, and the tie-break
+  investigation) is now measured and understood, but not fixed — it's an
+  argued case for reranking next, not a patch applied today.
+- Metadata filtering supports equality (plus list membership for tag-style
+  fields) only — no OR, no numeric ranges (e.g. `annual_value_eur` over a
+  threshold). Not exercised by any v1 query, so not built.
 
 ### Next step
 
-- Day 8: move from first-stage hybrid retrieval toward reranking and a stronger evaluation harness, using the Day 7 baseline table and golden query source as the comparison line.
+- Day 8: move from first-stage hybrid retrieval toward reranking and a
+  stronger evaluation harness, using the Day 7 baseline table and golden
+  query source as the comparison line. Two concrete leads from today's
+  findings, in priority order: (1) chunk-level hybrid as the missing
+  seventh baseline row, since chunk-dense-alone already beats
+  whole-document-hybrid — reranking on the wrong retrieval unit would be
+  solving the wrong problem first; (2) a reranker or graded-relevance metric
+  aimed specifically at the RRF-favors-consensus pattern surfaced by Q014
+  and the tie-break investigation, since that is a structural blind spot in
+  first-stage fusion, not a tuning problem `alpha` or `k` can solve away.
