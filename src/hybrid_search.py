@@ -330,15 +330,22 @@ class HybridSearch:
 #
 # - **Filter timing**: after scoring, before truncating to the caller's
 #   final `top_k`. `filter_ranked_results` below expects the *full* ranked
-#   list a retriever produced (call `search_bm25`/`search_semantic` with a
-#   generous `top_k`, e.g. `CANDIDATE_POOL_SIZE`), drops non-matching
-#   entries, and only then slices to the requested size. Filtering the
-#   corpus *before* building the BM25/semantic index instead was rejected:
-#   BM25's IDF and average-document-length statistics would then depend on
-#   which filter was applied, so the same document could score differently
-#   for the same query under different filters - confusing, and unnecessary
-#   at this corpus's size (34 documents), where scoring everything and
-#   filtering after is effectively free.
+#   list a retriever produced - call `search_bm25`/`search_semantic` with
+#   `top_k=len(data)` (the whole 34-document corpus), drop non-matching
+#   entries, and only then slice to the requested size. **This is a
+#   different pool size from `CANDIDATE_POOL_SIZE`** (15, sized for the
+#   fusion tie-mitigation concern below) - reusing that constant here as a
+#   stand-in for "generous" was a real bug caught in review: filtering only
+#   the top 15 silently dropped a genuinely relevant document (POL-005,
+#   ranked 20th) that filtering the full list finds. See
+#   `filter_ranked_results`'s own docstring for the full story and the
+#   regression test that locks this in. Filtering the corpus *before*
+#   building the BM25/semantic index instead was rejected for a different
+#   reason: BM25's IDF and average-document-length statistics would then
+#   depend on which filter was applied, so the same document could score
+#   differently for the same query under different filters - confusing, and
+#   unnecessary at this corpus's size (34 documents), where scoring
+#   everything and filtering after is effectively free.
 # - **Document level, not chunk level**: a chunk (see `chunking.py`) carries
 #   only `chunk_id`, `document_id`, `text`, and `title` - none of the
 #   metadata fields a filter checks. A chunk is filtered by its *parent
@@ -400,11 +407,24 @@ def filter_ranked_results(
     slice to `top_k` - see the section docstring above for the timing and
     document-level design decisions this implements.
 
-    `results` should be the *full* ranked list a retriever produced (e.g.
-    `search_bm25(index, query, top_k=CANDIDATE_POOL_SIZE)`), not something
-    already truncated to the caller's final desired size - filtering after
-    truncation risks silently losing a correct document that matched the
-    filter but ranked just outside a too-small pre-filter cut.
+    `results` should be the *full* ranked list a retriever produced - on
+    this corpus, that means calling `search_bm25`/`search_semantic` with
+    `top_k=len(data)` (all 34 documents), not something already truncated to
+    a smaller size. **`CANDIDATE_POOL_SIZE` is not "the full list" and must
+    not be passed here as a stand-in for it** - that constant exists solely
+    for the fusion tie-mitigation concern (see its own docstring), and 15 is
+    smaller than the corpus. A real review finding on this exact mistake:
+    the first version of `run_edge_case_comparison` below filtered only
+    `CANDIDATE_POOL_SIZE` candidates, and on Q007 ("What checks are needed
+    before onboarding a new high-risk supplier?", filter `doc_type:
+    policy`) that silently dropped POL-005 - a real relevant document that
+    ranks 20th in BM25's raw ordering, outside the top 15 but well inside
+    the full 34-document corpus.
+    `tests/test_hybrid_search.py::test_filtering_a_narrow_candidate_pool_can_lose_a_relevant_document_that_filtering_the_full_list_finds`
+    reproduces this with real data as a permanent regression check.
+    Filtering after truncating to any size smaller than the full corpus
+    risks the same silent loss - a correct document that matched the filter
+    but ranked just outside whatever cut was chosen.
 
     `document_id_key=None` (the default) means `results` are whole-document
     results, so `id_key` ("id" by default) already names the document id
@@ -464,9 +484,11 @@ def run_edge_case_comparison():
 
     This is the Block 3A "comparison function" and "edge-case comparison"
     output in one: each retriever runs with `CANDIDATE_POOL_SIZE` candidates
-    (the Day 7 tie mitigation - see that constant's docstring), a query's own
-    `metadata_filters` are applied when present (via `filter_ranked_results`
-    above), and a checkmark shows whether each method's top-1 is a known
+    when a query has no filter (the Day 7 tie mitigation - see that
+    constant's docstring), or the *full* corpus when it does, since
+    `filter_ranked_results` needs the full ranked list to filter correctly
+    (see that function's docstring for why `CANDIDATE_POOL_SIZE` is not a
+    substitute). A checkmark shows whether each method's top-1 is a known
     relevant document (`expected_relevant_ids`). The real numbers this
     produced, plus which queries landed in each of "BM25 wins" / "dense
     wins" / "hybrid wins" / "hybrid still fails", are written up in
@@ -485,6 +507,12 @@ def run_edge_case_comparison():
     metadata_index = build_metadata_index(data)
     queries_by_id = {query["query_id"]: query for query in load_example_queries()}
 
+    # Only used when a query has a metadata filter - `filter_ranked_results`
+    # needs the *full* ranked list (see its docstring), not
+    # `CANDIDATE_POOL_SIZE`. Cheap at 34 documents; see the docstring above
+    # for the real bug this fixes.
+    full_corpus_size = len(data)
+
     def top1(results):
         return results[0]["id"] if results else "(none)"
 
@@ -497,16 +525,22 @@ def run_edge_case_comparison():
         relevant_ids = set(query_row["expected_relevant_ids"])
         filters = query_row["metadata_filters"]
 
-        bm25_results = search_bm25(bm25_index, query, top_k=CANDIDATE_POOL_SIZE)
+        # Retrieve deep enough to filter correctly: the full corpus when a
+        # filter needs to see every candidate, or just `CANDIDATE_POOL_SIZE`
+        # (the Day 7 tie mitigation) when there's nothing to filter.
+        retrieval_pool = full_corpus_size if filters else CANDIDATE_POOL_SIZE
+        bm25_results = search_bm25(bm25_index, query, top_k=retrieval_pool)
         semantic_results = search_semantic(
-            semantic_index, query, model, top_k=CANDIDATE_POOL_SIZE
+            semantic_index, query, model, top_k=retrieval_pool
         )
 
         # Apply the query's own metadata filter, if it has one - this is the
         # same `filter_ranked_results` a real filtered search would call,
         # exercised here on real BM25/semantic output rather than synthetic
         # data (see `tests/test_hybrid_search.py` for the synthetic-data
-        # tests of `filter_ranked_results` itself).
+        # tests of `filter_ranked_results` itself). Filtered back down to
+        # `CANDIDATE_POOL_SIZE` afterward so the fusion step below still
+        # fuses over the same-sized candidate set either way.
         if filters:
             bm25_results = filter_ranked_results(
                 bm25_results, metadata_index, filters, top_k=CANDIDATE_POOL_SIZE
@@ -545,7 +579,10 @@ def run_edge_case_comparison():
     correct_filter = query_row["metadata_filters"]
     wrong_filter = {"doc_type": "contract-summary"}
 
-    bm25_results = search_bm25(bm25_index, query, top_k=CANDIDATE_POOL_SIZE)
+    # Full corpus here too, same reason as the loop above - filtering a
+    # narrower list risks silently losing a matching document instead of
+    # demonstrating the filter's actual (removed-on-purpose) behavior.
+    bm25_results = search_bm25(bm25_index, query, top_k=full_corpus_size)
     correctly_filtered = filter_ranked_results(
         bm25_results, metadata_index, correct_filter, top_k=3
     )

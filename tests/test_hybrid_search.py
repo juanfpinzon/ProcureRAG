@@ -144,6 +144,14 @@ def test_weighted_alpha_extremes_degrade_to_single_method_rankings():
     scores (it only rescales, never reorders), so multiplying the *other*
     side's normalized score by zero should reproduce that single retriever's
     own ranking exactly.
+
+    Caveat, demonstrated concretely in the next test: this exact-reproduction
+    claim holds because `bm25_results` and `semantic_results` here both cover
+    the *same* three ids - a symmetric candidate set. With an asymmetric set
+    (a document present in only one retriever's list), that document still
+    enters `weighted()`'s output - via the 0.0 default the docstring above
+    describes - even at the alpha extreme that should exclude it entirely,
+    which plain `search_bm25`/`search_semantic` alone never would.
     """
     hybrid_search = _load_hybrid_search_module()
 
@@ -169,6 +177,50 @@ def test_weighted_alpha_extremes_degrade_to_single_method_rankings():
         result["id"] for result in hybrid.weighted(alpha=1.0, top_k=3)
     ]
     assert semantic_only_ranking == ["DOC-C", "DOC-B", "DOC-A"]
+
+
+def test_weighted_alpha_zero_can_still_surface_a_candidate_bm25_never_returned():
+    """Caveat on the "alpha extremes degrade exactly to single-method
+    ranking" claim in the test above: that only holds up to however many
+    candidates the *dominant* retriever's own list contained, and only when
+    both input lists cover the same ids. `weighted()`'s fused candidate set
+    is the union of both input lists (see `weighted`'s docstring on the
+    "absent defaults to 0.0" rule) - a document with zero BM25 signal still
+    enters an `alpha=0.0` ranking at that 0.0 floor, tied with BM25's own
+    worst-scored candidate, instead of being excluded the way calling
+    `search_bm25` alone would exclude it.
+    """
+    hybrid_search = _load_hybrid_search_module()
+
+    bm25_results = [
+        {"id": "DOC-A", "score": 10.0},
+        {"id": "DOC-B", "score": 2.0},
+    ]
+    # DOC-C has real semantic signal but never appears in BM25's own result
+    # list at all - zero lexical overlap with the query, at any top_k.
+    semantic_results = [
+        {"id": "DOC-C", "score": 0.9},
+        {"id": "DOC-A", "score": 0.5},
+    ]
+    assert {result["id"] for result in bm25_results} == {"DOC-A", "DOC-B"}
+
+    hybrid = hybrid_search.HybridSearch(bm25_results, semantic_results)
+
+    # Asking for only as many results as BM25 itself had, the "degrades
+    # exactly" claim still holds - there's no room for DOC-C to appear.
+    lexical_only_top2 = [
+        result["id"] for result in hybrid.weighted(alpha=0.0, top_k=2)
+    ]
+    assert lexical_only_top2 == ["DOC-A", "DOC-B"]
+
+    # Asking for one more result than BM25 itself had breaks it: DOC-C
+    # appears at alpha=0.0 ("pure lexical") even though pure BM25 search
+    # would never have returned it, at any top_k, because it isn't in BM25's
+    # result list to begin with.
+    lexical_only_top3 = [
+        result["id"] for result in hybrid.weighted(alpha=0.0, top_k=3)
+    ]
+    assert lexical_only_top3 == ["DOC-A", "DOC-B", "DOC-C"]
 
 
 # ---------------------------------------------------------------------------
@@ -603,18 +655,79 @@ def test_build_metadata_index_and_filter_on_the_real_v1_corpus():
     bm25_index = retrieval.build_index(corpus)
     # Q001 in the v1 golden set: "What approval is required for a EUR
     # 60,000 purchase order?", filtered to doc_type=policy. Its correct
-    # document, POL-001, is itself a policy, so filtering should keep it
-    # at top-1 rather than removing it.
+    # document, POL-001, is itself a policy - and it is already BM25's
+    # unfiltered top-1 (checked below), so filtering should keep it at
+    # top-1 rather than just "somewhere among the survivors".
     query = "What approval is required for a EUR 60,000 purchase order?"
-    bm25_results = retrieval.search_bm25(bm25_index, query, top_k=15)
+    # The full corpus, not a narrow top_k - see filter_ranked_results'
+    # docstring and the regression test below for why that distinction is
+    # load-bearing, not stylistic.
+    bm25_results = retrieval.search_bm25(bm25_index, query, top_k=len(corpus))
+    assert bm25_results[0]["id"] == "POL-001"
 
     filtered = hybrid_search.filter_ranked_results(
         bm25_results, metadata_index, {"doc_type": "policy"}, top_k=3
     )
 
     assert filtered, "expected at least one policy document to survive filtering"
+    assert filtered[0]["id"] == "POL-001", (
+        "POL-001 was already BM25's unfiltered top-1 and is itself a "
+        "policy - filtering should not have displaced it"
+    )
     for result in filtered:
         assert metadata_index[result["id"]]["doc_type"] == "policy"
+
+
+def test_filtering_a_narrow_candidate_pool_can_lose_a_relevant_document_that_filtering_the_full_list_finds():
+    """Regression test for a real review finding on Day 7's first version of
+    `run_edge_case_comparison`: it filtered only `CANDIDATE_POOL_SIZE=15`
+    candidates - the pool size chosen for the *tie-mitigation* concern (see
+    that constant's docstring) - not the full ranked list
+    `filter_ranked_results` actually expects (see its docstring).
+
+    On Q007 ("What checks are needed before onboarding a new high-risk
+    supplier?", filter `doc_type: policy`), the correct secondary document
+    `POL-005` ranks 20th in BM25's raw ordering for this query - inside the
+    full 34-document corpus, but outside the top 15. Filtering only the top
+    15 silently drops it before the filter ever sees it; filtering the full
+    corpus finds it. This is exactly the "filter after truncation loses a
+    correct document" failure `filter_ranked_results`'s docstring warns
+    about, just caused by the *caller* truncating too early rather than the
+    function itself.
+    """
+    hybrid_search = _load_hybrid_search_module()
+    retrieval = _load_module("retrieval")
+
+    corpus = retrieval.load_data()
+    metadata_index = hybrid_search.build_metadata_index(corpus)
+    bm25_index = retrieval.build_index(corpus)
+
+    query = "What checks are needed before onboarding a new high-risk supplier?"
+    filters = {"doc_type": "policy"}
+
+    narrow_results = retrieval.search_bm25(
+        bm25_index, query, top_k=hybrid_search.CANDIDATE_POOL_SIZE
+    )
+    full_results = retrieval.search_bm25(bm25_index, query, top_k=len(corpus))
+
+    # Confirms the setup actually reproduces the gap this test is checking
+    # for, rather than silently passing because the corpus changed under it.
+    full_ranks = {result["id"]: rank for rank, result in enumerate(full_results, start=1)}
+    assert full_ranks["POL-005"] == 20, (
+        "POL-005's raw BM25 rank for this query has changed - re-check "
+        "whether it still falls outside CANDIDATE_POOL_SIZE before trusting "
+        "the rest of this test"
+    )
+
+    filtered_from_narrow_pool = hybrid_search.filter_ranked_results(
+        narrow_results, metadata_index, filters, top_k=10
+    )
+    filtered_from_full_list = hybrid_search.filter_ranked_results(
+        full_results, metadata_index, filters, top_k=10
+    )
+
+    assert "POL-005" not in {r["id"] for r in filtered_from_narrow_pool}
+    assert "POL-005" in {r["id"] for r in filtered_from_full_list}
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,21 @@
-"""Day 7: turn ranked retrieval results into P@1 / R@5 / MRR numbers.
+"""Day 7: turn ranked retrieval results into P@1 / R@5 / MRR@10 numbers.
+
+**This evaluates raw text retrieval only - metadata filtering is not
+applied here.** `query_row["metadata_filters"]` is never read by `main()`'s
+six retrieval closures below; every method is scored on however it ranks
+the *whole* corpus for a query's text, the same as if `metadata_filters`
+didn't exist. That is a deliberate scope decision, not an oversight, and it
+matters because it isn't a simple thing to add: 17 of the 21 v1 queries
+that carry a `metadata_filters` value have at least one id in their own
+`expected_relevant_ids` that the query's *own* filter would exclude (e.g.
+Q001 expects `FAQ-001` as a secondary answer, but its filter is `doc_type:
+policy`, and FAQ-001 isn't a policy). A "filtered" version of this baseline
+would need its own, filter-adjusted ground truth per query - scoring
+`retrieved (post-filter) vs. expected_relevant_ids (unfiltered)` would
+unfairly penalize every method for correctly filtering out a document the
+filter was always going to exclude. `docs/eval-report.md`'s "Known
+limitations" section leaves that as a real next step, not something folded
+into this table.
 
 Every module before this one (`retrieval.py`, `semantic_search.py`,
 `chunked_search.py`, `hybrid_search.py`) answers "what does this method
@@ -37,6 +54,14 @@ procurement stakeholder would actually ask:
   useful?" - rewards a relevant result at rank 1 fully, rank 2 half credit,
   and so on, which P@1 (all-or-nothing at rank 1) and R@5 (all-or-nothing
   membership in the top 5) cannot capture on their own.
+
+**Why "MRR@10", not plain "MRR".** `reciprocal_rank` itself (below) will
+happily search an unbounded list, but `main()` truncates every method's
+ranked list to `RETRIEVAL_DEPTH=10` *before* calling it - so a relevant
+document that would have been found at, say, rank 14 scores 0.0 here, the
+same as if it were never found at all. That is a real, if minor, source of
+score compression versus true (unbounded) MRR, and worth naming rather than
+letting "MRR" imply something this table doesn't quite compute.
 """
 
 
@@ -160,6 +185,10 @@ def main() -> None:
     """Build every index once, then evaluate all six Day 7 baseline rows
     over the full 93-query v1 golden set and print a markdown-ready table.
 
+    **Unfiltered text retrieval only** - none of the six closures below read
+    `query_row["metadata_filters"]`. See this module's docstring for why a
+    filtered baseline isn't a simple addition here.
+
     This is the script that produced the numbers in `docs/eval-report.md` -
     re-run it after any change to the corpus, the query set, or the
     retrieval/fusion code, and refresh that table if the numbers move.
@@ -247,11 +276,12 @@ def main() -> None:
         ("Hybrid weighted (document)", hybrid_weighted_retrieve),
     ]
 
-    print(f"v1 baseline: {len(queries)} queries, {len(data)} documents, "
-          f"{len(chunks)} chunks, retrieval depth={RETRIEVAL_DEPTH}, "
+    print(f"v1 baseline (unfiltered text retrieval): {len(queries)} queries, "
+          f"{len(data)} documents, {len(chunks)} chunks, "
+          f"retrieval depth={RETRIEVAL_DEPTH}, "
           f"candidate pool={CANDIDATE_POOL_SIZE}\n")
-    print(f"| {'Method':<27} | {'P@1':>5} | {'R@5':>5} | {'MRR':>5} |")
-    print(f"|{'-'*29}|{'-'*7}|{'-'*7}|{'-'*7}|")
+    print(f"| {'Method':<27} | {'P@1':>5} | {'R@5':>5} | {'MRR@10':>6} |")
+    print(f"|{'-'*29}|{'-'*7}|{'-'*7}|{'-'*8}|")
     for name, retrieve_fn in methods:
         result = evaluate_method(retrieve_fn, queries)
         print(

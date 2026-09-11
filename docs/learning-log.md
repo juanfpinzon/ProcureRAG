@@ -753,13 +753,14 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
     fields (`risk_tags`) matched by membership. Multiple filter fields
     combine with AND.
   - Filter timing: after scoring, before truncating to the caller's final
-    `top_k` — each retriever contributes a wide candidate list
-    (`CANDIDATE_POOL_SIZE=15`), non-matching candidates are dropped from
-    that full list, and only then is it sliced down. Rejected filtering the
-    corpus before building the BM25 index: it would make IDF/avg-length
-    statistics depend on which filter was active, so the same query against
-    the same document could score differently per filter — confusing, and
-    free to avoid at 34 documents.
+    `top_k` — each retriever contributes the *full* 34-document corpus as
+    candidates, non-matching candidates are dropped from that full list, and
+    only then is it sliced down. Rejected filtering the corpus before
+    building the BM25 index: it would make IDF/avg-length statistics depend
+    on which filter was active, so the same query against the same document
+    could score differently per filter — confusing, and free to avoid at 34
+    documents. (First version of this used `CANDIDATE_POOL_SIZE=15` instead
+    of the full corpus — a real bug, caught in review, not by me; see below.)
   - Chunk behavior: a chunk carries no metadata of its own; it is filtered
     by its parent document's metadata via `document_id`
     (`filter_ranked_results(..., document_id_key="document_id")`).
@@ -781,9 +782,11 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   - Hybrid still fails on Q014 — dense alone is correct, but *both* RRF and
     weighted land on a wrong, moderately-consistent-on-both-sides distractor
     instead. Same structural cause as the tie-break finding below.
-- **Eval table** (full 93-query set, `docs/eval-report.md` has the write-up):
+- **Eval table** (full 93-query set, unfiltered text retrieval —
+  `docs/eval-report.md` has the write-up and the filtered-vs-unfiltered
+  distinction):
 
-  | Method | Unit | P@1 | R@5 | MRR |
+  | Method | Unit | P@1 | R@5 | MRR@10 |
   |---|---|---|---|---|
   | TF-IDF | document | 0.871 | 0.787 | 0.924 |
   | BM25 | document | 0.860 | 0.754 | 0.910 |
@@ -792,11 +795,19 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   | Hybrid RRF | document | 0.860 | 0.763 | 0.922 |
   | Hybrid weighted (α=0.5) | document | 0.882 | 0.775 | 0.938 |
 
-  Headline finding: whole-document hybrid beats every individual
-  whole-document method, but chunk-level dense retrieval *alone* still beats
-  whole-document hybrid on every metric — the retrieval unit matters more
-  than fusion did here. Chunk-level hybrid is the obvious next baseline, not
-  built today (kept to the six required rows).
+  Headline finding, corrected after a review pass caught an overclaim here
+  (see "What failed or was confusing" below for the full story): RRF *ties*
+  BM25 on P@1 (0.860 both) and loses to TF-IDF on all three metrics; it
+  beats BM25 and dense on R@5/MRR@10, but "hybrid beats every individual
+  method" was wrong as originally written. Weighted is the strongest
+  document-level row on P@1 and MRR@10, but not R@5 (TF-IDF's 0.787 beats
+  its 0.775). Chunk-level dense retrieval *alone* beats whole-document
+  hybrid RRF on every metric, and beats weighted on P@1/MRR@10 but not R@5.
+  Net: the retrieval unit (chunk vs. document) still matters more than
+  fusion did here, which is the finding that survives the correction, even
+  though several of the specific superlatives supporting it didn't.
+  Chunk-level hybrid is the obvious next baseline, not built today (kept to
+  the six required rows).
 
 - **Tie-break decision (Day 6 weakness)**: widened the per-retriever
   candidate pool fed into `HybridSearch` before fusing (3 → 15), instead of
@@ -824,10 +835,10 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   No module named ruff — not installed in .venv; not run.
 
   $ ./.venv/bin/python src/eval_metrics.py
-  v1 baseline: 93 queries, 34 documents, 570 chunks, retrieval depth=10, candidate pool=15
+  v1 baseline (unfiltered text retrieval): 93 queries, 34 documents, 570 chunks, retrieval depth=10, candidate pool=15
 
-  | Method                      |   P@1 |   R@5 |   MRR |
-  |-----------------------------|-------|-------|-------|
+  | Method                      |   P@1 |   R@5 | MRR@10 |
+  |------------------------------|-------|-------|--------|
   | TF-IDF (document)           | 0.871 | 0.787 | 0.924 |
   | BM25 (document)             | 0.860 | 0.754 | 0.910 |
   | Dense (document)            | 0.839 | 0.673 | 0.900 |
@@ -835,6 +846,10 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   | Hybrid RRF (document)       | 0.860 | 0.763 | 0.922 |
   | Hybrid weighted (document)  | 0.882 | 0.775 | 0.938 |
   ```
+
+  (Re-run after the review fixes below — same numbers, since those fixes
+  only touched the metadata-filtered edge-case path, not this unfiltered
+  table; `pytest` count updated to 83 with the new regression tests.)
 
   `./.venv/bin/python src/hybrid_search.py` output (Day 6 comparisons plus
   the new Day 7 edge-case section) is long-form; full transcript wasn't
@@ -862,6 +877,66 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   is not something to assume; the two fusion methods use genuinely
   different information (rank position vs. normalized magnitude) and can
   legitimately land on different, individually-defensible answers.
+
+**Caught in review, not by me — four issues, all confirmed against real
+data before fixing, not just taken on faith:**
+
+1. **Metadata filtering only filtered `CANDIDATE_POOL_SIZE=15` candidates,
+   not the full ranked list, contradicting my own documented contract**
+   ("filter after scoring, before truncating to final `top_k`" implies
+   operating on the *full* list — 15 is not the full list on a 34-document
+   corpus). Verified concretely: Q007's secondary document `POL-005` ranks
+   20th in BM25's raw ordering for that query — outside the top 15, so the
+   original code silently dropped it while still finding `POL-002` (ranked
+   1st) and reporting "filtering worked." Fixed in
+   `run_edge_case_comparison` (`src/hybrid_search.py`) to retrieve the full
+   corpus specifically when a query has a filter, then filter that down to
+   `CANDIDATE_POOL_SIZE` before fusion — so filtering sees everything, and
+   fusion still works over the same-sized pool it always did. Added
+   `test_filtering_a_narrow_candidate_pool_can_lose_a_relevant_document_that_filtering_the_full_list_finds`
+   as a permanent regression check, using this exact Q007/POL-005 case.
+2. **The eval baseline table doesn't apply `metadata_filters` at all, but
+   nothing in the report said so explicitly** — a reader could reasonably
+   assume Day 7's "metadata-aware" artifact meant the baseline table was
+   metadata-aware too. It isn't, and making it so isn't a one-line change:
+   checked and confirmed 17 of the 21 filtered queries have at least one
+   `expected_relevant_ids` entry their *own* filter would exclude (e.g.
+   Q001 expects `FAQ-001` as a secondary answer, but its filter is
+   `doc_type: policy`, and FAQ-001 isn't a policy). A filtered baseline
+   would need filter-adjusted ground truth per query, not the same
+   `expected_relevant_ids` reused as-is — genuinely separate methodology,
+   not a toggle. Relabeled the table "unfiltered text retrieval" everywhere
+   and documented why in `docs/eval-report.md`'s "Known limitations."
+3. **The eval-report table analysis overclaimed "hybrid beats every
+   individual method on all three metrics."** Review flagged the specific
+   case (RRF ties BM25 on P@1, 0.860 both — not a win). Re-checking every
+   other superlative in that section against the exact numbers, rather than
+   patching just the flagged line, turned up two more unprompted: TF-IDF
+   actually has the best R@5 among document-level rows (0.787, ahead of
+   weighted's 0.775), and chunk-level dense does *not* beat whole-document
+   weighted on every metric (weighted's R@5 edges it out). All three
+   corrected with exact pairwise numbers in `docs/eval-report.md`. The
+   underlying finding survives (retrieval unit matters more than fusion
+   here) even though several of the specific superlatives supporting it
+   didn't — a useful distinction to be able to draw under review, not just
+   "my numbers were wrong, disregard the conclusion."
+4. **Non-blocking polish, also addressed**: relabeled "MRR" as "MRR@10"
+   throughout, since every method's list is truncated to depth 10 before
+   scoring; added a caveat + a new test
+   (`test_weighted_alpha_zero_can_still_surface_a_candidate_bm25_never_returned`)
+   showing the existing "alpha=0/1 degrades exactly to single-method
+   ranking" test only holds for symmetric candidate sets — with an
+   asymmetric one, a document entirely absent from BM25 can still surface
+   in an `alpha=0.0` ranking at a 0.0 floor, once `top_k` asks for more
+   results than BM25's own list contained; strengthened the real-corpus
+   filter test to assert the exact top-1 (`POL-001`), not just "some policy
+   document survived."
+
+Re-ran the full suite after all four fixes: `./.venv/bin/pytest -q` →
+`83 passed` (81 + 2 new tests). The unfiltered eval table's numbers are
+unchanged by any of this — the metadata-filtering bug only affected the
+filtered edge-case demo path, not the baseline table, which never applied
+filtering in the first place (issue 2, above).
 
 ### What became clearer
 
@@ -917,17 +992,25 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   preference. The real risk it introduces: a *wrong* filter value fails
   silently, returning a confident but incorrect top-1 rather than an error —
   demonstrated concretely on Q001 in `docs/eval-report.md`.
-- **P@1, R@5, MRR in plain English**: P@1 — is the very first answer right?
-  R@5 — of everything actually relevant, how much shows up if I'm willing to
-  skim 5 results? MRR — on average, how far down the list is the first
-  useful thing, with an answer at rank 1 counting fully and one at rank 2
-  counting half as much, and so on?
+- **P@1, R@5, MRR@10 in plain English**: P@1 — is the very first answer
+  right? R@5 — of everything actually relevant, how much shows up if I'm
+  willing to skim 5 results? MRR@10 — on average, how far down the (first
+  10) list is the first useful thing, with an answer at rank 1 counting
+  fully and one at rank 2 counting half as much, and so on — capped at 10
+  because that's where every method's ranked list was cut before scoring.
 
 ### What remains weak
 
-- Chunk-level hybrid fusion is not in the baseline table yet, despite being
-  the table's own strongest signal for where the next real gain is (chunk
-  dense alone already beats whole-document hybrid on every metric).
+- Chunk-level hybrid fusion is not in the baseline table yet. It's still
+  the table's strongest signal for where the next real gain is, stated
+  precisely this time: chunk-dense-alone beats whole-document hybrid RRF on
+  every metric, and beats weighted on P@1/MRR@10 (not R@5, where weighted is
+  actually slightly ahead).
+- No metadata-aware baseline exists. The current eval table is unfiltered
+  text retrieval only, and building a filtered one is a real, separate
+  methodology problem (17 of 21 filtered queries have a relevant id their
+  own filter would exclude), not a one-line addition — see
+  `docs/eval-report.md`, "Known limitations."
 - Binary relevance only (`expected_relevant_ids`); `relevance_grades`
   (1 = secondary, 2 = primary) is unused, so a primary-document hit and a
   secondary-document hit currently score identically.

@@ -27,7 +27,7 @@ it directly.
   carries graded `relevance_grades` for a future nDCG-style metric — not
   used here, matching `docs/corpus-v1.md`'s own baseline table and keeping
   this a fair comparison across six methods with one relevance standard.
-- **Metrics**: P@1, R@5, MRR — defined and implemented in
+- **Metrics**: P@1, R@5, MRR@10 — defined and implemented in
   `src/eval_metrics.py` (`precision_at_1`, `recall_at_k`,
   `reciprocal_rank`), averaged over all 93 queries.
 - **Retrieval depth**: every method's ranked list is cut to 10 before
@@ -47,18 +47,26 @@ it directly.
   once, evaluates all six rows, prints this table. Takes ~13s on a laptop
   CPU — nearly all of it embedding the 93 query strings.
 
-## Baseline table
+## Baseline table (unfiltered text retrieval)
 
-93/93 v1 queries, 34 documents, 570 chunks.
+93/93 v1 queries, 34 documents, 570 chunks. **Metadata filtering is not
+applied anywhere in this table** — every method ranks the whole corpus for a
+query's text, regardless of that query's own `metadata_filters` value. See
+"Known limitations" below for why a filtered version of this table needs its
+own methodology rather than a one-line change. MRR here is **MRR@10**: every
+method's ranked list is cut to depth 10 (see "Methodology" above) before
+scoring, so a relevant result found only past rank 10 scores 0.0, the same
+as one never found at all — worth naming precisely rather than implying an
+unbounded MRR this table doesn't compute.
 
-| Method | Retrieval unit | P@1 | R@5 | MRR |
+| Method | Retrieval unit | P@1 | R@5 | MRR@10 |
 |---|---|---|---|---|
-| TF-IDF | document | 0.871 | 0.787 | 0.924 |
+| TF-IDF | document | 0.871 | **0.787** | 0.924 |
 | BM25 | document | 0.860 | 0.754 | 0.910 |
 | Dense (multi-qa-MiniLM) | document | 0.839 | 0.673 | 0.900 |
 | Dense (multi-qa-MiniLM) | chunk→document | **0.925** | 0.768 | **0.954** |
 | Hybrid RRF (BM25 + dense) | document | 0.860 | 0.763 | 0.922 |
-| Hybrid weighted, α=0.5 (BM25 + dense) | document | 0.882 | **0.775** | 0.938 |
+| Hybrid weighted, α=0.5 (BM25 + dense) | document | **0.882** | 0.775 | 0.938 |
 
 TF-IDF/BM25/Dense-document numbers match `docs/corpus-v1.md`'s own v1
 baseline within rounding, which cross-checks that this table's methodology
@@ -68,23 +76,48 @@ since the two tables use different chunk-candidate depths and rollup rules
 going into the document-level score; not a discrepancy worth chasing further
 for a first baseline.
 
-**What this table actually says, stated plainly rather than left to be
-read off the numbers:**
+**What this table actually says — exact pairwise comparisons, not
+eyeballed superlatives.** An earlier draft of this section claimed "hybrid
+beats every individual document-level method on P@1, R@5, and MRR". Review
+flagged that RRF actually *ties* BM25 on P@1, not beats it. Re-checking every
+other superlative claim in this section against the exact numbers (rather
+than patching just the flagged line) turned up two more of the same kind of
+error unprompted: weighted does not have the best R@5 among document-level
+rows (TF-IDF does), and chunk-level dense does not beat whole-document
+weighted on *every* metric (weighted's R@5 is higher). All three are
+corrected below:
 
-1. **Hybrid beats every individual *document-level* method on P@1, R@5, and
-   MRR.** Weighted fusion (0.882/0.775/0.938) is the best whole-document row
-   on P@1 and R@5; RRF (0.860/0.763/0.922) is a smaller but real
-   improvement over BM25 alone and a clear one over dense alone. Fusing two
-   weaker signals into a stronger one worked, at the whole-document level.
-2. **Chunk-level dense retrieval *alone* still beats whole-document hybrid
-   on every metric.** This is the least comfortable finding in this table
-   and the most useful one: it means whole-document hybrid fusion isn't the
-   ceiling here. The retrieval *unit* (chunk vs. document) currently matters
-   more than fusing two signals over the wrong unit does. `hybrid_search.py`
-   already supports `id_key="chunk_id"` fusion (Day 6's chunk-level demo) —
-   running chunk-level BM25 + chunk-level dense through `HybridSearch` and
-   adding that as a seventh row is the obvious next baseline, not attempted
-   today to keep Day 7 to the six required rows.
+1. **RRF vs. BM25**: RRF *ties* BM25 on P@1 (0.860 both — not a win), and
+   beats it on R@5 (0.763 > 0.754) and MRR@10 (0.922 > 0.910). **RRF vs.
+   TF-IDF**: RRF is behind TF-IDF on all three metrics (0.860/0.763/0.922
+   vs. 0.871/0.787/0.924). RRF is a real, if modest, improvement over BM25
+   and a clear one over dense alone — it is not an improvement over TF-IDF
+   on this table.
+2. **Weighted vs. every document-level single method**: weighted beats BM25
+   and dense on all three metrics, and beats TF-IDF on P@1 (0.882 > 0.871)
+   and MRR@10 (0.938 > 0.924) — but *loses* to TF-IDF on R@5 (0.775 <
+   0.787). Weighted is the best document-level row on P@1 and MRR@10, not
+   on all three metrics.
+3. **Chunk-level dense retrieval *alone* beats whole-document hybrid RRF on
+   all three metrics, and beats whole-document weighted on P@1 and MRR@10 —
+   but *loses* to weighted on R@5** (0.768 < 0.775). Even stated with that
+   correction, this is still the least comfortable finding in this table and
+   the most useful one: hybrid fusion over the wrong retrieval unit (whole
+   documents) does not close the gap chunk-level retrieval opens on P@1 and
+   MRR@10, no matter which fusion method is used. `hybrid_search.py` already
+   supports `id_key="chunk_id"` fusion (Day 6's chunk-level demo) — running
+   chunk-level BM25 + chunk-level dense through `HybridSearch` and adding
+   that as a seventh row is the obvious next baseline, not attempted today
+   to keep Day 7 to the six required rows.
+4. **TF-IDF is a stronger baseline on this corpus than either single-method
+   BM25 or RRF** — worth stating on its own, not just as a footnote to the
+   RRF comparison above. TF-IDF's R@5 (0.787) is the best of any
+   document-level row, and its MRR@10 (0.924) is third overall, ahead of
+   BM25 and RRF. This corpus's short documents and modest vocabulary size
+   may be part of why raw term frequency (no length normalization, no
+   saturation) is competitive here; it is not a claim that TF-IDF
+   generalizes better than BM25, only that it measurably didn't lose on
+   this specific 93-query set.
 
 ## Metadata filtering
 
@@ -94,16 +127,32 @@ Implemented in `src/hybrid_search.py`: `build_metadata_index`,
 plus one test against the real corpus).
 
 **Filter timing — after scoring, before truncating to the caller's final
-`top_k`.** Each retriever is asked for a generous candidate list (the same
-`CANDIDATE_POOL_SIZE=15` the tie mitigation below uses), non-matching
-candidates are dropped from that full list, and *then* it is sliced to the
-requested size. Filtering the corpus *before* building the BM25 index
-instead was considered and rejected: BM25's IDF and average-document-length
-statistics would then depend on which filter was applied, so the same query
-against the same document could score differently depending on what filter
-happened to be active — confusing to reason about, and free to avoid at 34
-documents (scoring everything, then filtering, costs nothing measurable
-here).
+`top_k`.** Each retriever is asked for the *full* corpus (`top_k=len(data)`,
+all 34 documents) as its candidate list, non-matching candidates are dropped
+from that full list, and *then* it is sliced to the requested size. Filtering
+the corpus *before* building the BM25 index instead was considered and
+rejected: BM25's IDF and average-document-length statistics would then
+depend on which filter was applied, so the same query against the same
+document could score differently depending on what filter happened to be
+active — confusing to reason about, and free to avoid at 34 documents
+(scoring everything, then filtering, costs nothing measurable here).
+
+**Real bug caught in review, not by me: the first version of this filtering
+used `CANDIDATE_POOL_SIZE=15` (the *tie-mitigation* pool size, see "Tie-break
+decision" below) as a stand-in for "the full ranked list", instead of the
+actual full corpus.** Those are two different concerns that happened to
+reuse the same constant. Concretely, on Q007 ("What checks are needed before
+onboarding a new high-risk supplier?", filter `doc_type: policy`): the
+correct secondary document `POL-005` ranks 20th in BM25's raw ordering for
+this query — inside the 34-document corpus, but outside the top 15.
+Filtering only the top-15 pool silently dropped it before the filter ever
+saw it; filtering the full corpus finds it. Fixed by retrieving the full
+corpus specifically when a query has a filter (`run_edge_case_comparison`
+in `src/hybrid_search.py`), then filtering that down to
+`CANDIDATE_POOL_SIZE` before fusion — so filtering sees everything, and
+fusion still works over the same-sized candidate set it always did.
+`tests/test_hybrid_search.py::test_filtering_a_narrow_candidate_pool_can_lose_a_relevant_document_that_filtering_the_full_list_finds`
+reproduces this exact case with real data as a permanent regression check.
 
 **Document level, not chunk level.** A chunk carries only `chunk_id`,
 `document_id`, `text`, `title` — no `doc_type`/`region`/etc. of its own
@@ -119,7 +168,7 @@ a deliberately wrong one (`doc_type: contract-summary`):
 ```
 unfiltered BM25 top-1:                  POL-001
 filter={'doc_type': 'policy'} (the query's real filter) -> top-1: POL-001
-filter={'doc_type': 'contract-summary'} (deliberately wrong) -> results: ['CONTRACT-003']
+filter={'doc_type': 'contract-summary'} (deliberately wrong) -> results: ['CONTRACT-003', 'CONTRACT-004', 'CONTRACT-001']
 ```
 
 POL-001 does not disappear because it scored worse — it disappears because
@@ -132,14 +181,26 @@ and confidently. `tests/test_hybrid_search.py::test_metadata_filter_can_remove_t
 covers this as a permanent regression check.
 
 Checked programmatically across all 21 v1 queries that carry a
-`metadata_filters` value (`filter_ranked_results` applied to each query's
-own BM25 top-15, using its own real filter): for every one, at least one
-expected relevant id survives filtering — none of the real, author-intended
-filters in the v1 query set accidentally exclude their own correct answer.
+`metadata_filters` value, filtering each query's own full-corpus BM25
+ranking with its own real filter: for every one, at least one expected
+relevant id survives filtering — none of the real, author-intended filters
+in the v1 query set accidentally exclude their own correct answer entirely.
 That is a property of how the query set was built (`docs/corpus-v1.md`:
 "every `metadata_filters` entry matches at least one gold document"), not a
 guarantee this filtering code itself provides — a wrong filter value, as
 shown above, removes the correct document exactly as designed.
+
+**A sharper, related finding worth separating from the check above: "at
+least one" is not "all".** 17 of those same 21 queries have *at least one*
+`expected_relevant_ids` entry that the query's *own* filter would exclude —
+e.g. Q001 expects `FAQ-001` as a secondary answer, but its filter is
+`doc_type: policy`, and `FAQ-001` is a FAQ, not a policy. That's expected
+and correct behavior (a secondary, partially-relevant document need not
+share the primary document's type), but it means "P@1/R@5/MRR against
+`expected_relevant_ids`" and "P@1/R@5/MRR against a *filtered* candidate
+set" are not the same evaluation — the second needs its own,
+filter-adjusted ground truth per query, not the first table's ground truth
+reused as-is. See "Known limitations" below.
 
 ## Tie-break decision (Day 6 weakness)
 
@@ -268,6 +329,18 @@ on average.
 
 ## Known limitations / next steps
 
+- **The baseline table is unfiltered text retrieval only — no
+  metadata-aware baseline exists yet, and it is not a simple addition.**
+  `src/eval_metrics.py`'s six closures never read `query_row["metadata_filters"]`.
+  Building one needs its own methodology, not just applying
+  `filter_ranked_results` inside each closure: as the "sharper, related
+  finding" above shows, 17 of 21 filtered queries have at least one
+  `expected_relevant_ids` entry their own filter would exclude, so a
+  filtered baseline needs a *filter-adjusted* ground truth per query
+  (drop the ids the filter itself was always going to exclude before
+  scoring recall against what's left) — reusing the unfiltered
+  `expected_relevant_ids` as-is would penalize every method for correctly
+  filtering out documents the filter was supposed to remove.
 - Baseline table is document-level for hybrid; a chunk-level hybrid row
   (BM25-over-chunks + dense-over-chunks, fused, rolled up to documents) is
   the natural seventh row and — per the table's own finding that chunk-level
