@@ -735,16 +735,13 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 6 — Hybrid Search consolidation/review.
-  - Lesson 1: `Keyword vs. Semantic Search` — _TODO (Juan): mark completed/attempted on boot.dev._
-  - Lesson 2: `Hybrid Search` — _TODO (Juan): mark completed/attempted on boot.dev._
-  - Lesson 3: `Score Normalization` — _TODO (Juan): mark completed/attempted on boot.dev._
-  - Lesson 4: `Weighted Combination` — _TODO (Juan): mark completed/attempted on boot.dev._
-  - Lesson 5: `Reciprocal Rank Fusion` — _TODO (Juan): mark completed/attempted on boot.dev._
-- Companion source: Beyond Naive RAG hybrid/failure-mode sections — _TODO (Juan): notes or mark deferred._
-- Optional conceptual source: freeCodeCamp RAG From Scratch RAG-Fusion/HyDE — _TODO (Juan): mark reviewed or deferred._
-
-I (Claude Code) cannot attest to boot.dev platform completion directly — that
-part is Juan's own record, left as-is rather than assumed done.
+  - Lesson 1: `Keyword vs. Semantic Search` — completed
+  - Lesson 2: `Hybrid Search` — completed
+  - Lesson 3: `Score Normalization` — completed
+  - Lesson 4: `Weighted Combination` — completed
+  - Lesson 5: `Reciprocal Rank Fusion` — completed
+- Companion source: Beyond Naive RAG hybrid/failure-mode sections — deferred.
+- Optional conceptual source: freeCodeCamp RAG From Scratch RAG-Fusion/HyDE — _TODO (Juan): deferred.
 
 ### Hybrid consolidation / retrieval-eval evidence
 
