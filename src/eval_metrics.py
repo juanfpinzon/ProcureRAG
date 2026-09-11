@@ -182,18 +182,33 @@ def evaluate_method(retrieve_fn, queries, k_for_recall=5):
 
 
 def main() -> None:
-    """Build every index once, then evaluate all six Day 7 baseline rows
-    over the full 93-query v1 golden set and print a markdown-ready table.
+    """Build every index once, then evaluate the six required Day 7 baseline
+    rows plus two chunk-level hybrid rows over the full 93-query v1 golden
+    set, and print a markdown-ready table.
 
-    **Unfiltered text retrieval only** - none of the six closures below read
-    `query_row["metadata_filters"]`. See this module's docstring for why a
-    filtered baseline isn't a simple addition here.
+    The last two rows (`Hybrid RRF chunk->document`, `Hybrid weighted
+    chunk->document`) go past Day 7's minimum six-row table: `HybridSearch`
+    already supports `id_key="chunk_id"` fusion (Day 6's chunk-level demo),
+    `chunked_search.py` already has BM25-over-chunks, and
+    `rollup_chunks_to_documents` already exists for the "Dense
+    chunk->document" row - the missing piece was wiring BM25-over-chunks and
+    dense-over-chunks *through* `HybridSearch` and rolling the fused chunk
+    ranking up to documents, not any new retrieval or fusion logic.
+
+    **Unfiltered text retrieval only** - none of the eight closures below
+    read `query_row["metadata_filters"]`. See this module's docstring for
+    why a filtered baseline isn't a simple addition here.
 
     This is the script that produced the numbers in `docs/eval-report.md` -
     re-run it after any change to the corpus, the query set, or the
     retrieval/fusion code, and refresh that table if the numbers move.
     """
-    from chunked_search import build_chunk_semantic_index, search_semantic_chunks
+    from chunked_search import (
+        build_chunk_lexical_index,
+        build_chunk_semantic_index,
+        search_bm25_chunks,
+        search_semantic_chunks,
+    )
     from chunking import chunk_corpus
     from hybrid_search import CANDIDATE_POOL_SIZE, HybridSearch, load_example_queries
     from preprocessing import load_data
@@ -216,6 +231,10 @@ def main() -> None:
     semantic_index = build_semantic_index(data, model)
     chunks = chunk_corpus(data)
     chunk_semantic_index = build_chunk_semantic_index(chunks, model)
+    # BM25-over-chunks index, the chunk-level counterpart to `bm25_index`
+    # above - reused by `hybrid_search.py`'s own Day 6 chunk-level demo, and
+    # the missing piece that makes a chunk-level hybrid *row* possible here.
+    chunk_lexical_index = build_chunk_lexical_index(chunks)
 
     # How deep each method's *final* ranked list goes before P@1/R@5/MRR are
     # computed. 10 comfortably covers R@5 (which only looks at the top 5
@@ -267,6 +286,58 @@ def main() -> None:
         hybrid = HybridSearch(bm25_results, semantic_results)
         return [result["id"] for result in hybrid.weighted(top_k=RETRIEVAL_DEPTH)]
 
+    def _chunk_hybrid_retrieve(query, fuse):
+        """Shared retrieval step for the two chunk-level hybrid rows below.
+
+        Mirrors `hybrid_rrf_retrieve`/`hybrid_weighted_retrieve` above, but
+        over chunks (`id_key="chunk_id"`) instead of whole documents - the
+        same `HybridSearch` class, same fusion math, just a different
+        retrieval unit feeding it (exactly the point of `id_key` - see
+        `hybrid_search.py`'s own chunk-level demo in `main()`). `fuse` is
+        `lambda h: h.rrf(...)` or `lambda h: h.weighted(...)`, so this one
+        function serves both rows without duplicating the chunk retrieval
+        and rollup steps twice.
+
+        `HybridSearch`'s fused output only ever carries `chunk_id` and
+        per-method scores (see `hybrid_search.py`'s module docstring) - it
+        never copies through `document_id`, since the fusion math has no way
+        to know which extra fields are worth carrying along. `document_id`
+        is looked back up via `chunk_lexical_index` before
+        `rollup_chunks_to_documents` can do its job, the same pattern
+        `hybrid_search.py`'s `_print_chunk_results` uses for display.
+        """
+        chunk_bm25_results = search_bm25_chunks(
+            chunk_lexical_index, query, top_k=CANDIDATE_POOL_SIZE
+        )
+        chunk_semantic_results = search_semantic_chunks(
+            chunk_semantic_index, query, model, top_k=CANDIDATE_POOL_SIZE
+        )
+        hybrid = HybridSearch(
+            chunk_bm25_results, chunk_semantic_results, id_key="chunk_id"
+        )
+        fused_chunks = fuse(hybrid)
+        chunks_with_document_id = [
+            {
+                **result,
+                "document_id": chunk_lexical_index["chunks"][result["chunk_id"]][
+                    "document_id"
+                ],
+            }
+            for result in fused_chunks
+        ]
+        return rollup_chunks_to_documents(chunks_with_document_id)[:RETRIEVAL_DEPTH]
+
+    def hybrid_rrf_chunk_retrieve(query_row):
+        return _chunk_hybrid_retrieve(
+            query_row["query"], lambda hybrid: hybrid.rrf(top_k=CANDIDATE_POOL_SIZE)
+        )
+
+    def hybrid_weighted_chunk_retrieve(query_row):
+        return _chunk_hybrid_retrieve(
+            query_row["query"],
+            lambda hybrid: hybrid.weighted(top_k=CANDIDATE_POOL_SIZE),
+        )
+
     methods = [
         ("TF-IDF (document)", tfidf_retrieve),
         ("BM25 (document)", bm25_retrieve),
@@ -274,18 +345,20 @@ def main() -> None:
         ("Dense chunk->document", dense_chunk_retrieve),
         ("Hybrid RRF (document)", hybrid_rrf_retrieve),
         ("Hybrid weighted (document)", hybrid_weighted_retrieve),
+        ("Hybrid RRF chunk->document", hybrid_rrf_chunk_retrieve),
+        ("Hybrid weighted chunk->document", hybrid_weighted_chunk_retrieve),
     ]
 
     print(f"v1 baseline (unfiltered text retrieval): {len(queries)} queries, "
           f"{len(data)} documents, {len(chunks)} chunks, "
           f"retrieval depth={RETRIEVAL_DEPTH}, "
           f"candidate pool={CANDIDATE_POOL_SIZE}\n")
-    print(f"| {'Method':<27} | {'P@1':>5} | {'R@5':>5} | {'MRR@10':>6} |")
-    print(f"|{'-'*29}|{'-'*7}|{'-'*7}|{'-'*8}|")
+    print(f"| {'Method':<32} | {'P@1':>5} | {'R@5':>5} | {'MRR@10':>6} |")
+    print(f"|{'-'*34}|{'-'*7}|{'-'*7}|{'-'*8}|")
     for name, retrieve_fn in methods:
         result = evaluate_method(retrieve_fn, queries)
         print(
-            f"| {name:<27} | {result['p_at_1']:.3f} | "
+            f"| {name:<32} | {result['p_at_1']:.3f} | "
             f"{result['r_at_5']:.3f} | {result['mrr']:.3f} |"
         )
 

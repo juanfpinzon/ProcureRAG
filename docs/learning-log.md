@@ -782,9 +782,12 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   - Hybrid still fails on Q014 — dense alone is correct, but *both* RRF and
     weighted land on a wrong, moderately-consistent-on-both-sides distractor
     instead. Same structural cause as the tie-break finding below.
-- **Eval table** (full 93-query set, unfiltered text retrieval —
+- **Eval table** (full 93-query set, unfiltered text retrieval, eight rows —
   `docs/eval-report.md` has the write-up and the filtered-vs-unfiltered
-  distinction):
+  distinction). The first six rows are the required minimum; the last two
+  (chunk-level hybrid) were added same-day as a direct follow-up once the
+  six-row table pointed straight at the gap — see "What became clearer"
+  below:
 
   | Method | Unit | P@1 | R@5 | MRR@10 |
   |---|---|---|---|---|
@@ -794,20 +797,24 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   | Dense | chunk→document | 0.925 | 0.768 | 0.954 |
   | Hybrid RRF | document | 0.860 | 0.763 | 0.922 |
   | Hybrid weighted (α=0.5) | document | 0.882 | 0.775 | 0.938 |
+  | Hybrid RRF | chunk→document | **0.935** | **0.811** | **0.965** |
+  | Hybrid weighted (α=0.5) | chunk→document | 0.925 | 0.801 | 0.961 |
 
-  Headline finding, corrected after a review pass caught an overclaim here
-  (see "What failed or was confusing" below for the full story): RRF *ties*
-  BM25 on P@1 (0.860 both) and loses to TF-IDF on all three metrics; it
-  beats BM25 and dense on R@5/MRR@10, but "hybrid beats every individual
-  method" was wrong as originally written. Weighted is the strongest
-  document-level row on P@1 and MRR@10, but not R@5 (TF-IDF's 0.787 beats
-  its 0.775). Chunk-level dense retrieval *alone* beats whole-document
-  hybrid RRF on every metric, and beats weighted on P@1/MRR@10 but not R@5.
-  Net: the retrieval unit (chunk vs. document) still matters more than
-  fusion did here, which is the finding that survives the correction, even
-  though several of the specific superlatives supporting it didn't.
-  Chunk-level hybrid is the obvious next baseline, not built today (kept to
-  the six required rows).
+  Headline finding, now with a clean answer instead of a hedged one: Hybrid
+  RRF at chunk granularity is the single best row in the table on **every**
+  metric — the first row in this eval report where that's true without a
+  caveat. It beats chunk-dense-alone (the previous best row) by +0.010 P@1,
+  +0.043 R@5, +0.011 MRR@10, and beats whole-document weighted (the best
+  document-level row) by +0.053/+0.036/+0.027. Fusion *does* earn its keep —
+  it just needed to be fusing over the right retrieval unit first. The
+  six-row version of this table's headline finding ("retrieval unit matters
+  more than fusion did here") undersold it slightly: it wasn't that fusion
+  didn't help, it's that fusion hadn't been tried over chunks yet. All the
+  whole-document comparisons from the review-correction pass still hold
+  unchanged (RRF ties BM25 on P@1, loses to TF-IDF on all three metrics;
+  weighted loses to TF-IDF on R@5 only) — those weren't wrong, they were
+  just no longer the most interesting row in the table once chunk-level
+  hybrid existed to compare against.
 
 - **Tie-break decision (Day 6 weakness)**: widened the per-retriever
   candidate pool fed into `HybridSearch` before fusing (3 → 15), instead of
@@ -850,6 +857,37 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   (Re-run after the review fixes below — same numbers, since those fixes
   only touched the metadata-filtered edge-case path, not this unfiltered
   table; `pytest` count updated to 83 with the new regression tests.)
+
+  Re-run again after adding the two chunk-level hybrid rows (same-day
+  follow-up, this section):
+
+  ```
+  $ ./.venv/bin/pytest -q
+  83 passed in 0.21s
+
+  $ ./.venv/bin/python src/eval_metrics.py
+  v1 baseline (unfiltered text retrieval): 93 queries, 34 documents, 570 chunks, retrieval depth=10, candidate pool=15
+
+  | Method                           |   P@1 |   R@5 | MRR@10 |
+  |----------------------------------|-------|-------|--------|
+  | TF-IDF (document)                | 0.871 | 0.787 | 0.924 |
+  | BM25 (document)                  | 0.860 | 0.754 | 0.910 |
+  | Dense (document)                 | 0.839 | 0.673 | 0.900 |
+  | Dense chunk->document            | 0.925 | 0.768 | 0.954 |
+  | Hybrid RRF (document)            | 0.860 | 0.763 | 0.922 |
+  | Hybrid weighted (document)       | 0.882 | 0.775 | 0.938 |
+  | Hybrid RRF chunk->document       | 0.935 | 0.811 | 0.965 |
+  | Hybrid weighted chunk->document  | 0.925 | 0.801 | 0.961 |
+  ```
+
+  First six rows unchanged, as expected (no change to those closures).
+  `pytest` count unchanged too — the two new closures compose
+  already-tested pieces (`search_bm25_chunks`, `search_semantic_chunks`,
+  `HybridSearch.rrf`/`.weighted`, `rollup_chunks_to_documents`), so no new
+  unit tests were added for them specifically, matching how the existing
+  `hybrid_rrf_retrieve`/`dense_chunk_retrieve` closures aren't separately
+  unit tested either — their correctness rests on the pieces they compose
+  already being tested, not on retesting the composition itself.
 
   `./.venv/bin/python src/hybrid_search.py` output (Day 6 comparisons plus
   the new Day 7 edge-case section) is long-form; full transcript wasn't
@@ -940,6 +978,18 @@ filtering in the first place (issue 2, above).
 
 ### What became clearer
 
+- **Fusion needed the right retrieval unit to prove itself, and the eval
+  table said so directly.** Once the six-row table showed chunk-dense-alone
+  beating whole-document hybrid, the natural next question wasn't "is
+  fusion good?" (already answered: yes, at whole-document level, modestly)
+  but "what does fusion do once it's applied to the unit that's already
+  winning?" Wiring chunk-level BM25 + chunk-level dense through the same
+  unchanged `HybridSearch` class answered it same-day: Hybrid RRF
+  chunk→document (0.935/0.811/0.965) beats chunk-dense-alone
+  (0.925/0.768/0.954) on every metric. This is the cleanest result in the
+  whole report — no caveats, no "beats on 2 of 3 metrics" — and it only
+  showed up because the eval table made the gap concrete enough to chase
+  immediately instead of filing it as a someday-later TODO.
 - BM25 wins and dense wins are not evenly split by query "type" label in the
   corpus — they're driven by whether the specific words in the query happen
   to overlap with the specific words in the answer, which correlates with
@@ -1001,11 +1051,16 @@ filtering in the first place (issue 2, above).
 
 ### What remains weak
 
-- Chunk-level hybrid fusion is not in the baseline table yet. It's still
-  the table's strongest signal for where the next real gain is, stated
-  precisely this time: chunk-dense-alone beats whole-document hybrid RRF on
-  every metric, and beats weighted on P@1/MRR@10 (not R@5, where weighted is
-  actually slightly ahead).
+- ~~Chunk-level hybrid fusion is not in the baseline table yet.~~ **Done,
+  same day**: it's in the table now as two rows (`eval_metrics.py`'s
+  `_chunk_hybrid_retrieve`, wiring `HybridSearch(id_key="chunk_id")` over
+  `chunked_search.py`'s existing chunk-level BM25/dense, rolled up with the
+  existing `rollup_chunks_to_documents`). Hybrid RRF chunk→document came out
+  best on every metric — see the eval table above. What replaces this as
+  the open item: whether the Q014 RRF-favors-consensus failure mode
+  (below) also shows up at chunk granularity is untested; the chunk-level
+  numbers being better *on average* doesn't mean that specific structural
+  weakness is gone, only that it wasn't measured at this granularity today.
 - No metadata-aware baseline exists. The current eval table is unfiltered
   text retrieval only, and building a filtered one is a real, separate
   methodology problem (17 of 21 filtered queries have a relevant id their
@@ -1025,11 +1080,17 @@ filtering in the first place (issue 2, above).
 
 - Day 8: move from first-stage hybrid retrieval toward reranking and a
   stronger evaluation harness, using the Day 7 baseline table and golden
-  query source as the comparison line. Two concrete leads from today's
-  findings, in priority order: (1) chunk-level hybrid as the missing
-  seventh baseline row, since chunk-dense-alone already beats
-  whole-document-hybrid — reranking on the wrong retrieval unit would be
-  solving the wrong problem first; (2) a reranker or graded-relevance metric
-  aimed specifically at the RRF-favors-consensus pattern surfaced by Q014
-  and the tie-break investigation, since that is a structural blind spot in
-  first-stage fusion, not a tuning problem `alpha` or `k` can solve away.
+  query source as the comparison line. The chunk-level-hybrid lead from
+  earlier today is now done (see the eval table above), which sharpens what
+  Day 8 should actually target: (1) **benchmark reranking against Hybrid RRF
+  chunk→document (0.935/0.811/0.965), not whole-document hybrid** — that's
+  now the real baseline to beat, and reranking on top of the weaker
+  whole-document number would overstate how much a reranker adds; (2) check
+  whether the RRF-favors-consensus-over-strength pattern (Q014, the
+  tie-break investigation) still shows up at chunk granularity now that
+  it's the best-performing configuration — untested today, and the kind of
+  thing that's easy to assume is "probably fine" precisely because the
+  aggregate numbers look good; (3) a reranker or graded-relevance metric
+  aimed at that pattern once its chunk-level status is known, since it's a
+  structural blind spot in first-stage fusion, not a tuning problem `alpha`
+  or `k` can solve away.
