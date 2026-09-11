@@ -698,3 +698,73 @@ Use one entry per study/build day. Keep entries short, evidence-based, and inter
   `expected_relevant_ids`/`relevance_grades` to get an actual precision/recall
   number instead of single-query smoke checks, and decide the tie-break fix
   for the exact-tie gap found today before treating hybrid as "done."
+
+## 2026-09-11 — Day 7: Hybrid Consolidation + Retrieval Eval Baseline
+
+### What I built or drafted
+
+- Drafted Day 7 route in `docs/day-07-hybrid-consolidation-evals.md`.
+- Starting from the Day 6 hybrid search artifact and the v1 corpus/query set.
+- Artifact attempted or built: _TODO: Fill in. Include whether you implemented metadata filtering, updated comparison output, created/updated `docs/eval-report.md`, and established `data/golden_queries.jsonl` or used `data/corpus_v1/example_queries.jsonl` as canonical._
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Chapter 6 — Hybrid Search consolidation/review.
+  - Lesson 1: `Keyword vs. Semantic Search` — _TODO: Fill in completed/attempted._
+  - Lesson 2: `Hybrid Search` — _TODO: Fill in completed/attempted._
+  - Lesson 3: `Score Normalization` — _TODO: Fill in completed/attempted._
+  - Lesson 4: `Weighted Combination` — _TODO: Fill in completed/attempted._
+  - Lesson 5: `Reciprocal Rank Fusion` — _TODO: Fill in completed/attempted._
+- Companion source: Beyond Naive RAG hybrid/failure-mode sections — _TODO: Fill in notes or mark deferred._
+- Optional conceptual source: freeCodeCamp RAG From Scratch RAG-Fusion/HyDE — _TODO: Fill in if reviewed; otherwise mark deferred._
+- Exercises completed or attempted: _TODO: Fill in._
+
+### Hybrid consolidation / retrieval-eval evidence
+
+- Golden query source:
+  - _TODO: Fill in. Did you use `data/corpus_v1/example_queries.jsonl` as canonical, create `data/golden_queries.jsonl`, or curate a subset? Include query count._
+- Metadata filtering contract:
+  - Supported fields: _TODO: Fill in (`doc_type`, `category`, `region`, `supplier`, `risk_tags`, etc.)._
+  - Filter timing: _TODO: Fill in pre-retrieval vs post-retrieval vs wrapper filtering._
+  - Chunk behavior: _TODO: Fill in how chunk hits map back to document IDs._
+- Edge-case comparison:
+  - BM25 wins on: _TODO: Fill in query IDs/examples and why._
+  - Dense wins on: _TODO: Fill in query IDs/examples and why._
+  - Hybrid wins on: _TODO: Fill in query IDs/examples and why._
+  - Hybrid still fails or ties on: _TODO: Fill in query IDs/examples and why._
+- Eval table created/updated in `docs/eval-report.md`:
+  - TF-IDF document P@1 / R@5 / MRR: _TODO: Fill in._
+  - BM25 document P@1 / R@5 / MRR: _TODO: Fill in._
+  - Dense document P@1 / R@5 / MRR: _TODO: Fill in._
+  - Dense chunk→document P@1 / R@5 / MRR: _TODO: Fill in._
+  - Hybrid RRF P@1 / R@5 / MRR: _TODO: Fill in._
+  - Hybrid weighted P@1 / R@5 / MRR: _TODO: Fill in._
+- Baseline commands:
+  - `./.venv/bin/pytest -q` → _TODO: Fill in real output._
+  - `./.venv/bin/python -m compileall -q src tests` → _TODO: Fill in real output._
+  - `./.venv/bin/python -m ruff check .` or `ruff check .` → _TODO: Fill in real output or explain unavailable command._
+  - `./.venv/bin/python src/hybrid_search.py` → _TODO: Fill in summary of comparison output._
+
+### What failed or was confusing
+
+- _TODO: Fill in. Prompts: Which queries did hybrid not improve? Did metadata filtering remove any correct answers? Did alpha or RRF tie behavior surprise you?_
+
+### What became clearer
+
+- _TODO: Fill in. Prompts: What is now clearer about procurement-specific BM25 wins, dense wins, hybrid wins, and why evals are needed before reranking?_
+
+### What I can now explain in an interview
+
+- _TODO: Explain when BM25 beats dense retrieval in procurement RAG._
+- _TODO: Explain when dense retrieval beats BM25._
+- _TODO: Explain why hybrid search can still tie or fail._
+- _TODO: Explain what metadata filtering adds beyond scoring._
+- _TODO: Explain P@1, R@5, and MRR in plain English._
+
+### What remains weak
+
+- _TODO: Fill in. Likely candidates: reranking, full retrieval metrics over all 93 queries, graded relevance/nDCG, metadata-filter evaluation, tie-break strategy._
+
+### Next step
+
+- Day 8: move from first-stage hybrid retrieval toward reranking and a stronger evaluation harness, using the Day 7 baseline table and golden query source as the comparison line.
