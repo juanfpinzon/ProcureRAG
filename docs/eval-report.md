@@ -57,9 +57,11 @@ it directly.
   `chunk_id` and per-method scores, not the extra fields either input
   retriever's results happened to have.
 - **Reproduce**: `./.venv/bin/python src/eval_metrics.py`. Builds every index
-  once, evaluates all eight rows, prints this table. Takes ~12s on a laptop
-  CPU — nearly all of it embedding the 93 query strings, once per method
-  that needs a fresh embedding call.
+  once, evaluates all nine rows (the eight described here plus Day 8's
+  cross-encoder reranked row — see that section below), and prints one
+  table. ~16s in the Day 8 run that produced the numbers in this report;
+  exact wall-clock time depends on model load and cache state, not just
+  row count, so treat that as a ballpark, not a guarantee.
 
 ## Baseline table (unfiltered text retrieval)
 
@@ -492,12 +494,17 @@ Two contrast queries checked in the same run (`src/reranking.py`'s
   this report — `relevance_grades` is not used, so a promotion from a
   grade-1 to a grade-2 relevant document (or vice versa) is invisible to
   P@1/R@5/MRR here.
-- **R@5's small drop is worth re-checking later, not dismissing.** 93
-  queries is a fairly small denominator for a 0.005 difference. It should
-  not be over-read as "reranking hurts recall" — the mechanism argument
-  above explains why that is not really possible by construction, since
-  reranking cannot introduce a document that was never in the shortlist —
-  but it also should not be silently rounded away.
+- **R@5's small drop is worth re-checking later, not dismissing.**
+  Reranking cannot change which documents are present in the 15-chunk
+  candidate set — it never retrieves anything new, only reorders what the
+  first stage already found — so it cannot help or hurt *candidate-set*
+  recall. It absolutely *can* move R@5 after truncation, though, by
+  pushing a relevant document below rank 5 within that same candidate set,
+  and the measured number here shows exactly that: R@5 went from 0.811 to
+  0.806 as P@1 and MRR@10 both improved. 93 queries is a fairly small
+  denominator for a 0.005 difference, so this should not be over-read as
+  "reranking reliably costs 0.5 points of R@5" — but it is a real,
+  measured effect, not a rounding artifact to wave away.
 - **Not attempted today, in scope for later**: LLM-as-reranker
   (Boot.dev's "LLMs for Re-Ranking" / "LLM Batch Re-Ranking" lessons).
   `src/reranking.py`'s `rerank` function accepts any `score_fn`, so an

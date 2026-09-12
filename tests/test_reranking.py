@@ -410,3 +410,78 @@ def test_two_stage_rerank_runs_first_stage_then_reranks_with_the_given_model():
     # first_stage_rank is still present and unchanged - reranking replaced
     # the *order*, not the record of where the candidate started.
     assert "first_stage_rank" in results[0]
+
+
+# ---------------------------------------------------------------------------
+# Edge cases: a single-candidate shortlist, and reranking's interaction with
+# eval_metrics.rollup_chunks_to_documents when two candidates share a
+# document_id.
+# ---------------------------------------------------------------------------
+
+
+def test_rerank_handles_a_single_candidate_shortlist():
+    reranking = _load_reranking_module()
+    candidates = [_candidate("A::chunk-0", "A", "Title A", "Body A", 1, 0.05)]
+
+    def fake_score_fn(query, candidates):
+        return [4.2]
+
+    results = reranking.rerank("query", candidates, fake_score_fn)
+
+    # A shortlist of one has nothing to sort against and no tie to break -
+    # it should still get a reranker_score and a final_rank of 1, the same
+    # shape a multi-candidate shortlist produces.
+    assert len(results) == 1
+    assert results[0]["reranker_score"] == 4.2
+    assert results[0]["final_rank"] == 1
+    assert results[0]["chunk_id"] == "A::chunk-0"
+
+
+def test_reranked_chunks_rolling_up_to_documents_uses_the_reranked_order_not_first_stage_order():
+    """`eval_metrics.rollup_chunks_to_documents` keeps a document's *first*
+    appearance in whatever ranked list it is given - Day 8's eval row feeds
+    it the *reranked* chunk list, not the first-stage shortlist, so a
+    document whose best chunk changes after reranking should roll up at
+    the position of its new best chunk, not its old one.
+
+    This is the "duplicate-document rollup" case the same class of chunks
+    can hit: SOP-002 contributes two chunks to the shortlist, and the
+    reranker prefers the *second* first-stage chunk over the first - the
+    rolled-up document order must follow the reranker, not first-stage
+    order, and must still de-duplicate SOP-002 down to one entry.
+    """
+    reranking = _load_reranking_module()
+    eval_metrics = _load_module("eval_metrics")
+
+    # First-stage order: SOP-002::chunk-0, SOP-002::chunk-1, FAQ-002::chunk-0
+    # - two chunks from the same document, one from another.
+    candidates = [
+        _candidate("SOP-002::chunk-0", "SOP-002", "T", "first SOP-002 chunk", 1, 0.05),
+        _candidate("SOP-002::chunk-1", "SOP-002", "T", "second SOP-002 chunk", 2, 0.04),
+        _candidate("FAQ-002::chunk-0", "FAQ-002", "T", "FAQ chunk", 3, 0.03),
+    ]
+
+    # The reranker inverts SOP-002's two chunks and puts FAQ-002 in between:
+    # chunk-1 (was first-stage #2) now scores highest, FAQ-002 second,
+    # chunk-0 (was first-stage #1) last.
+    def fake_score_fn(query, candidates):
+        scores_by_chunk_id = {
+            "SOP-002::chunk-0": 1.0,
+            "SOP-002::chunk-1": 9.0,
+            "FAQ-002::chunk-0": 5.0,
+        }
+        return [scores_by_chunk_id[c["chunk_id"]] for c in candidates]
+
+    reranked = reranking.rerank("query", candidates, fake_score_fn)
+    assert [r["chunk_id"] for r in reranked] == [
+        "SOP-002::chunk-1",
+        "FAQ-002::chunk-0",
+        "SOP-002::chunk-0",
+    ]
+
+    document_ids = eval_metrics.rollup_chunks_to_documents(reranked)
+
+    # SOP-002 de-duplicates to one entry, at the position of its *reranked*
+    # best chunk (SOP-002::chunk-1, now rank 1) - not its first-stage best
+    # chunk (SOP-002::chunk-0, which the reranker actually ranked last).
+    assert document_ids == ["SOP-002", "FAQ-002"]

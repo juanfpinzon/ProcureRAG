@@ -1118,7 +1118,7 @@ filtering in the first place (issue 2, above).
   - Lesson 3: `LLM Batch Re-Ranking` — Completed
   - Lesson 4: `Cross-Encoder Re-Ranking` — Completed
 - Exercises completed or attempted: Completed
-- Companion source notes: Beyond Naive RAG reranking/failure modes — Defered.
+- Companion source notes: Beyond Naive RAG reranking/failure modes — Deferred.
 
 ### Two-stage reranking contract
 
