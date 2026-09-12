@@ -183,25 +183,34 @@ def evaluate_method(retrieve_fn, queries, k_for_recall=5):
 
 def main() -> None:
     """Build every index once, then evaluate the six required Day 7 baseline
-    rows plus two chunk-level hybrid rows over the full 93-query v1 golden
-    set, and print a markdown-ready table.
+    rows, two chunk-level hybrid rows, and Day 8's cross-encoder reranked
+    row over the full 93-query v1 golden set, and print a markdown-ready
+    table.
 
-    The last two rows (`Hybrid RRF chunk->document`, `Hybrid weighted
-    chunk->document`) go past Day 7's minimum six-row table: `HybridSearch`
-    already supports `id_key="chunk_id"` fusion (Day 6's chunk-level demo),
-    `chunked_search.py` already has BM25-over-chunks, and
+    The two chunk-level hybrid rows (`Hybrid RRF chunk->document`, `Hybrid
+    weighted chunk->document`) go past Day 7's minimum six-row table:
+    `HybridSearch` already supports `id_key="chunk_id"` fusion (Day 6's
+    chunk-level demo), `chunked_search.py` already has BM25-over-chunks, and
     `rollup_chunks_to_documents` already exists for the "Dense
     chunk->document" row - the missing piece was wiring BM25-over-chunks and
     dense-over-chunks *through* `HybridSearch` and rolling the fused chunk
     ranking up to documents, not any new retrieval or fusion logic.
 
-    **Unfiltered text retrieval only** - none of the eight closures below
-    read `query_row["metadata_filters"]`. See this module's docstring for
-    why a filtered baseline isn't a simple addition here.
+    The last row (`Cross-encoder reranked Hybrid RRF chunk->document`) is
+    Day 8's addition: `reranking.two_stage_rerank` reruns the exact same
+    chunk-level Hybrid RRF shortlist as the row above it, then reranks that
+    shortlist with a cross-encoder before rolling up to documents - see
+    `src/reranking.py`'s module docstring for why this specific baseline
+    (not whole-document hybrid) is the fair one to rerank against.
+
+    **Unfiltered text retrieval only** - none of the closures below read
+    `query_row["metadata_filters"]`. See this module's docstring for why a
+    filtered baseline isn't a simple addition here.
 
     This is the script that produced the numbers in `docs/eval-report.md` -
     re-run it after any change to the corpus, the query set, or the
-    retrieval/fusion code, and refresh that table if the numbers move.
+    retrieval/fusion/reranking code, and refresh that table if the numbers
+    move.
     """
     from chunked_search import (
         build_chunk_lexical_index,
@@ -212,6 +221,7 @@ def main() -> None:
     from chunking import chunk_corpus
     from hybrid_search import CANDIDATE_POOL_SIZE, HybridSearch, load_example_queries
     from preprocessing import load_data
+    from reranking import load_cross_encoder, two_stage_rerank
     from retrieval import build_index, search, search_bm25
     from semantic_search import build_semantic_index, load_embedding_model, search_semantic
 
@@ -235,6 +245,11 @@ def main() -> None:
     # above - reused by `hybrid_search.py`'s own Day 6 chunk-level demo, and
     # the missing piece that makes a chunk-level hybrid *row* possible here.
     chunk_lexical_index = build_chunk_lexical_index(chunks)
+    # Day 8: the cross-encoder reranker, loaded once (same reason `model`
+    # above is loaded once) and reused for all 93 queries' shortlists - see
+    # `reranking.load_cross_encoder`'s docstring for why this is forced onto
+    # CPU rather than left to auto-detect an accelerator.
+    cross_encoder_model = load_cross_encoder()
 
     # How deep each method's *final* ranked list goes before P@1/R@5/MRR are
     # computed. 10 comfortably covers R@5 (which only looks at the top 5
@@ -338,6 +353,25 @@ def main() -> None:
             lambda hybrid: hybrid.weighted(top_k=CANDIDATE_POOL_SIZE),
         )
 
+    def cross_encoder_reranked_chunk_retrieve(query_row):
+        # Day 8: rerank the exact same chunk-level Hybrid RRF shortlist the
+        # row above this one uses (`two_stage_rerank` calls
+        # `build_chunk_shortlist`, which fuses BM25-over-chunks +
+        # dense-over-chunks with the same CANDIDATE_POOL_SIZE pool), then
+        # rolls the reranked chunks up to documents the same way every other
+        # chunk-level row does. Unlike `_chunk_hybrid_retrieve` above, no
+        # manual document_id lookup is needed here - `build_chunk_shortlist`
+        # already attaches `document_id` to every candidate, and `rerank`
+        # preserves it through onto the result (see `reranking.py`).
+        reranked_chunks = two_stage_rerank(
+            query_row["query"],
+            chunk_lexical_index,
+            chunk_semantic_index,
+            model,
+            cross_encoder_model,
+        )
+        return rollup_chunks_to_documents(reranked_chunks)[:RETRIEVAL_DEPTH]
+
     methods = [
         ("TF-IDF (document)", tfidf_retrieve),
         ("BM25 (document)", bm25_retrieve),
@@ -347,6 +381,10 @@ def main() -> None:
         ("Hybrid weighted (document)", hybrid_weighted_retrieve),
         ("Hybrid RRF chunk->document", hybrid_rrf_chunk_retrieve),
         ("Hybrid weighted chunk->document", hybrid_weighted_chunk_retrieve),
+        (
+            "Cross-encoder reranked Hybrid RRF chunk->document",
+            cross_encoder_reranked_chunk_retrieve,
+        ),
     ]
 
     print(f"v1 baseline (unfiltered text retrieval): {len(queries)} queries, "

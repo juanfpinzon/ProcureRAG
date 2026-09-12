@@ -1,9 +1,10 @@
 # Eval Report — v1 Hybrid Consolidation Baseline
 
-Date: 2026-09-11 (Day 7)
-Status: full baseline, 93/93 v1 queries, eight retrieval methods (six
-required document-level rows + two chunk-level hybrid rows added as a
-direct follow-up once the six-row table made the gap obvious)
+Date: 2026-09-11 (Day 7); Day 8 reranking addendum added 2026-09-12
+Status: full baseline, 93/93 v1 queries, nine retrieval methods (six
+required document-level rows + two chunk-level hybrid rows added as a Day 7
+follow-up, plus Day 8's cross-encoder reranked chunk row — see "Day 8:
+Cross-encoder reranking" below)
 
 This is Day 7's evidence artifact: it turns Day 6's qualitative "hybrid
 looked better on these five queries" demo into a measured baseline across
@@ -12,6 +13,9 @@ exact-tie weakness a real (if partial) fix plus an honest account of what
 that fix does and doesn't solve. A same-day follow-up then closed the
 biggest gap the first version of this table itself pointed at: chunk-level
 hybrid fusion, which turned out to be the strongest configuration tested.
+Day 8 then added a second-stage cross-encoder reranker on top of that
+chunk-level hybrid baseline — see the dedicated section below for whether
+it helped, and where.
 
 ## Golden query source
 
@@ -351,12 +355,162 @@ not just RRF. It is this baseline's clearest evidence that hybrid fusion is
 not a strict improvement over the best single method on every query, only
 on average.
 
+## Day 8: Cross-encoder reranking
+
+Date: 2026-09-12 (Day 8 addendum to this report)
+Implementation: `src/reranking.py`; wired into the table above's evaluation
+script as a ninth row (`src/eval_metrics.py`); tests in
+`tests/test_reranking.py` (12 tests, all against fake scorers/models — no
+live model download required for the standard test suite).
+
+**Baseline being reranked**: Hybrid RRF chunk→document — P@1 0.935, R@5
+0.811, MRR@10 0.965, the best first-stage row in the table above.
+Reranking any other row would overstate the reranker's real contribution
+by comparing it against a first-stage method already known to be weaker —
+see `src/reranking.py`'s module docstring.
+
+**Two-stage pipeline**:
+
+1. **First stage** — `build_chunk_shortlist`: the identical chunk-level
+   Hybrid RRF as the baseline row (`search_bm25_chunks` +
+   `search_semantic_chunks`, fused via
+   `HybridSearch(id_key="chunk_id").rrf()`), `CANDIDATE_POOL_SIZE` (15)
+   chunks per query. Unchanged from Day 7 — the first stage's only job here
+   is producing the exact same shortlist the baseline row already scores.
+2. **Second stage** — `rerank_with_cross_encoder`: every one of those 15
+   chunks is re-scored with `cross-encoder/ms-marco-TinyBERT-L2-v2`
+   (~4M parameters, general web/search-trained on MS MARCO, not
+   procurement-specific) against `(query, title + chunk_text)` pairs,
+   sorted by that score, and assigned a `final_rank`. Every first-stage
+   field (`first_stage_rank`, `first_stage_score`, `bm25_score`,
+   `semantic_score`, `document_id`) is preserved on the result alongside
+   the new `reranker_score` — the auditability contract
+   `src/reranking.py`'s `rerank` docstring calls for: a reranked result can
+   always explain itself, not just report its new position.
+3. **Rollup** — the same rule every other chunk-level row uses: walk the
+   reranked chunks best-first, keep each document's first (best-ranked)
+   appearance, drop repeats (`rollup_chunks_to_documents`).
+
+**Reproduce**: `./.venv/bin/python src/eval_metrics.py` — adds a
+cross-encoder reranked row to the same table, ~16s total on a laptop CPU
+(versus ~7s for the eight-row Day 7 table alone). Cross-encoder scoring 15
+short pairs per query across 93 queries is cheap at this model size — no
+subset/sampling was needed to get a full-93-query row.
+
+### Aggregate result — 93/93 queries
+
+| Method | Retrieval unit | P@1 | R@5 | MRR@10 |
+|---|---|---|---|---|
+| Hybrid RRF (BM25 + dense) | chunk→document | 0.935 | **0.811** | 0.965 |
+| Cross-encoder reranked Hybrid RRF (BM25 + dense) | chunk→document | **0.978** | 0.806 | **0.984** |
+
+**Measured, not assumed.** Reranking clearly improves both metrics that
+score "is the single best answer ranked correctly": P@1 +0.043 (0.935 →
+0.978) and MRR@10 +0.019 (0.965 → 0.984). It very slightly *reduces* R@5:
+-0.005 (0.811 → 0.806). That is not a contradiction — it is the expected
+shape of what a reranker can and cannot do. Reranking only ever *re-orders*
+the same 15-chunk shortlist the first stage already retrieved; it cannot
+pull in a document that never made that shortlist at all. Precision-style
+metrics (does the *top* answer match) are exactly what re-ordering can
+improve; a recall-style metric (is a relevant document *anywhere* in the
+top 5) can only move if reranking pushes a relevant chunk across the
+rank-5 boundary, in either direction — here that happened to net slightly
+negative, not zero, but close to it. On a 93-query denominator, -0.005 is
+roughly one query's worth of net movement, not a broad regression.
+
+**Interview-ready framing**: reranking is a precision tool layered on an
+already-good first stage, not a recall tool — recall is the first stage's
+job. This is the "two-stage retrieval separates candidate recall from
+final precision" framing from
+`docs/day-08-reranking-two-stage-retrieval.md`, now with a number attached
+to each half of that claim: a sharp P@1/MRR gain alongside a nearly flat
+R@5 is what "the reranker is doing its actual job, not compensating for a
+bad first stage" looks like. If R@5 had dropped sharply instead, that
+would be evidence the shortlist itself needed work, not just the reranker.
+
+### Q014 at chunk level — does chunk-level first-stage already fix it?
+
+Day 7's clearest "hybrid still fails" case, restated: *"What uptime must a
+business-critical SaaS service commit to?"* (expected: `CONTRACT-004`,
+`POL-003`, `GUIDE-002`). At **whole-document** granularity, RRF and
+weighted fusion both landed on `SOP-007` — a document moderately supported
+by both BM25 and dense — over `CONTRACT-004`, which only dense ranked
+highly. That consensus-over-strength failure is exactly what Day 8 set out
+to test at chunk level.
+
+**At chunk level, this specific failure is already gone before reranking
+ever runs.** From `./.venv/bin/python src/reranking.py`'s Q014 section:
+
+- First-stage top-1 (chunk-level Hybrid RRF, before any reranking):
+  `POL-003::chunk-11` — a genuinely correct document (`POL-003` is in
+  `expected_relevant_ids`), RRF score 0.0328.
+- After cross-encoder reranking, top-1 is unchanged: still
+  `POL-003::chunk-11` (cross-encoder score 3.1654). Ranks #2 and #3 do
+  shift, from `CONTRACT-001`/`SOP-007` chunks (both wrong documents) to two
+  different `GUIDE-002` chunks (also a correct document).
+
+**Honest reading, not the one this day set out expecting**: reranking did
+not need to fix Q014's document-level top-1, because moving from
+whole-document to chunk-level fusion already fixed it — a different
+mechanism (Day 7's chunking, not Day 8's reranking) closed this particular
+gap. That is a real, useful finding, not a null result to bury: it shows
+the whole-document RRF weakness Day 7 found is at least partly a
+*retrieval-unit* artifact — a ~3-sentence chunk carries far less unrelated
+text than its parent document, so a chunk-level BM25/dense signal is less
+likely to get diluted into "moderate agreement across the board" the way a
+whole document's aggregate score can — not purely a fusion-formula
+weakness that only reranking could fix. What reranking *did* still do on
+this query: clean up the shortlist below rank 1, promoting a second
+correct document (`GUIDE-002`) into the top 3 over two incorrect ones —
+visible in the `final_rank` vs. `first_stage_rank` fields, not something
+an unchanged top-1 alone would show.
+
+Two contrast queries checked in the same run (`src/reranking.py`'s
+`DEMO_QUERY_IDS`):
+
+- **Q009** (exact numeric threshold — shareholding percentage for
+  beneficial-ownership checks; first stage already correct) — top-1 stays
+  `POL-002::chunk-2` after reranking. Confirms reranking does not break a
+  case that was not broken.
+- **Q042** (Day 7's own "hybrid wins" example — purchasing card spending
+  limits) — first-stage top-1 is `FAQ-001::chunk-14`; after reranking,
+  top-1 becomes `SOP-004::chunk-2`. Both `FAQ-001` and `SOP-004` are in
+  `expected_relevant_ids`, so this is a reorder between two already-correct
+  answers, not a regression.
+
+### Known caveats
+
+- **Domain mismatch is real but not fatal on this corpus.**
+  `cross-encoder/ms-marco-TinyBERT-L2-v2` is trained on MS MARCO
+  web/search query-passage pairs, not procurement text — yet it still
+  improved P@1 by 4.3 points here. That is evidence the model's general
+  relevance-judgment ability transfers reasonably well to this domain, not
+  proof it would hold on a larger or more idiosyncratic procurement
+  corpus; a domain-mismatch failure could still show up on harder queries
+  the 93-query v1 set does not cover.
+- **Binary relevance only**, the same limitation as every other row in
+  this report — `relevance_grades` is not used, so a promotion from a
+  grade-1 to a grade-2 relevant document (or vice versa) is invisible to
+  P@1/R@5/MRR here.
+- **R@5's small drop is worth re-checking later, not dismissing.** 93
+  queries is a fairly small denominator for a 0.005 difference. It should
+  not be over-read as "reranking hurts recall" — the mechanism argument
+  above explains why that is not really possible by construction, since
+  reranking cannot introduce a document that was never in the shortlist —
+  but it also should not be silently rounded away.
+- **Not attempted today, in scope for later**: LLM-as-reranker
+  (Boot.dev's "LLMs for Re-Ranking" / "LLM Batch Re-Ranking" lessons).
+  `src/reranking.py`'s `rerank` function accepts any `score_fn`, so an
+  LLM-judge scorer could plug into the same pipeline without changing
+  `build_chunk_shortlist` or the auditability contract — left for a future
+  day per today's scope (`docs/day-08-reranking-two-stage-retrieval.md`).
+
 ## Known limitations / next steps
 
 - **The baseline table is unfiltered text retrieval only — no
   metadata-aware baseline exists yet, and it is not a simple addition.**
-  None of `src/eval_metrics.py`'s eight closures read
-  `query_row["metadata_filters"]`. Building one needs its own methodology,
+  None of `src/eval_metrics.py`'s closures (eight as of Day 7, plus Day 8's
+  reranked row — nine total) read `query_row["metadata_filters"]`. Building one needs its own methodology,
   not just applying `filter_ranked_results` inside each closure: as the
   "sharper, related finding" above shows, 17 of 21 filtered queries have at
   least one `expected_relevant_ids` entry their own filter would exclude, so
@@ -378,15 +532,19 @@ on average.
   graded metric (nDCG) would score a primary-document hit higher than a
   secondary-document hit, which this baseline currently treats as
   equivalent.
-- The RRF-vs-consensus finding above (Q014, and the pool-size
-  investigation) is this baseline's strongest argument for reranking next:
-  first-stage retrieval — lexical, dense, or fused — has a structural blind
-  spot for "correct but only recognized by one signal", which is exactly
-  what a reranker scoring the shortlist against the query directly is
-  positioned to fix. That finding was measured at whole-document
-  granularity; whether the same consensus-over-strength pattern shows up at
-  chunk granularity (where hybrid RRF is now winning overall) is untested —
-  a real gap in this analysis, not assumed away.
+- **Done, tested, and more nuanced than assumed**: the RRF-vs-consensus
+  finding above (Q014, and the pool-size investigation) was this baseline's
+  strongest argument for reranking next. Day 8's "Q014 at chunk level"
+  section (below) tested exactly the open question this bullet raised —
+  whether the same consensus-over-strength pattern shows up at chunk
+  granularity — and found it does not reproduce there: chunk-level
+  first-stage fusion already ranks Q014's correct document first, before
+  reranking runs at all. Reranking still measurably helped in aggregate
+  (P@1 +0.043, MRR@10 +0.019 across all 93 queries), just not by fixing
+  *this specific* failure, which turned out to be at least partly a
+  retrieval-unit artifact rather than a pure fusion-formula weakness. See
+  the Day 8 section for the full account, including the (small, and
+  explained) R@5 tradeoff.
 - Metadata filtering supports equality-per-field only (plus list-membership
   for `risk_tags`). No OR, no numeric ranges (e.g. `annual_value_eur` over a
   threshold) — not needed to prove the contract against the v1 query set,

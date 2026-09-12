@@ -183,6 +183,8 @@ Suggested implementation steps, not mandatory exact structure:
 
 Do not implement source-cited answer generation, LangChain, vector database migration, API serving, RAGAS/DeepEval, or MCP today. Those belong to later gates.
 
+Finally, fill in the learning questions for Day 8 on learning-log.md
+
 ### Block 3B — Fallback route: reranking design + fake-scorer harness, 60–90m
 
 Use this if Boot.dev or model-download issues consume the day.

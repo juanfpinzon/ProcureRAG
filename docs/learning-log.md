@@ -1102,72 +1102,187 @@ filtering in the first place (issue 2, above).
 - Drafted Day 8 route in `docs/day-08-reranking-two-stage-retrieval.md`.
 - Starting from the Day 7 chunk-level Hybrid RRF baseline and v1 canonical
   query set.
-- Artifact attempted or built: _TODO: Fill in._
+- Artifact built (Block 3A, primary route — live cross-encoder, not the
+  fake-scorer fallback): `src/reranking.py` (first-stage shortlist builder,
+  generic `rerank` abstraction, cross-encoder scorer, two-stage pipeline,
+  Q014-focused demo), `tests/test_reranking.py` (12 tests, all against fake
+  scorers — no live model download in the standard suite), a ninth row
+  wired into `src/eval_metrics.py`, and a new "Day 8: Cross-encoder
+  reranking" section in `docs/eval-report.md`.
 
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 8 — Reranking.
-  - Lesson 1: `Re-ranking` — _TODO: Fill in._
-  - Lesson 2: `LLMs for Re-Ranking` — _TODO: Fill in._
-  - Lesson 3: `LLM Batch Re-Ranking` — _TODO: Fill in._
-  - Lesson 4: `Cross-Encoder Re-Ranking` — _TODO: Fill in._
-- Exercises completed or attempted: _TODO: Fill in._
-- Companion source notes: Beyond Naive RAG reranking/failure modes — _TODO:
-  Fill in._
+  - Lesson 1: `Re-ranking` — Completed
+  - Lesson 2: `LLMs for Re-Ranking` — Completed
+  - Lesson 3: `LLM Batch Re-Ranking` — Completed
+  - Lesson 4: `Cross-Encoder Re-Ranking` — Completed
+- Exercises completed or attempted: Completed
+- Companion source notes: Beyond Naive RAG reranking/failure modes — Defered.
 
 ### Two-stage reranking contract
 
-- First-stage retriever / candidate source: _TODO: Fill in. Recommended:
-  chunk-level Hybrid RRF over BM25-over-chunks + dense-over-chunks._
-- Shortlist size before reranking: _TODO: Fill in._
-- Candidate text passed to reranker: _TODO: Fill in. Hint: title + chunk text
-  for scoring context; preserve raw chunk text separately as the citeable
-  passage._
-- Reranker used: _TODO: Fill in. Cross-encoder model, LLM-as-reranker, fake
-  scorer for tests, or documented blocker._
-- Result fields preserved for auditability: _TODO: Fill in. Expected shape:
-  `chunk_id`, parent `document_id`, original first-stage rank/score,
-  reranker score, candidate text, final rank._
+- First-stage retriever / candidate source: chunk-level Hybrid RRF, unchanged
+  from Day 7 — `search_bm25_chunks` + `search_semantic_chunks` fused via
+  `HybridSearch(id_key="chunk_id").rrf()` (`reranking.build_chunk_shortlist`).
+- Shortlist size before reranking: 15 (`hybrid_search.CANDIDATE_POOL_SIZE`,
+  reused rather than introducing a second tunable number — within the
+  design doc's suggested 10–25 range).
+- Candidate text passed to reranker: `title + chunk text`
+  (`reranking.build_candidate_text`) — same "title + body" convention the
+  Day 7 chunk indexes already use. Raw `chunk["text"]` (title-free) is kept
+  separately on every result as the citeable passage.
+- Reranker used: local `sentence_transformers.CrossEncoder`,
+  `cross-encoder/ms-marco-TinyBERT-L2-v2`, forced to `device="cpu"`
+  (`reranking.load_cross_encoder`) — downloaded and ran successfully in
+  this environment, so the primary route (not the fake-scorer fallback)
+  was used for the live numbers below. `reranking.rerank` itself is
+  scorer-agnostic (`score_fn` parameter), so the same function is unit
+  tested against fake scores with no model involved.
+- Result fields preserved for auditability: `chunk_id`, `document_id`,
+  `title`, `text`, `first_stage_rank`, `first_stage_score`, `bm25_score`,
+  `semantic_score`, plus the new `reranker_score` and `final_rank` —
+  matches the design doc's expected shape exactly.
 
 ### Reranking / evaluation evidence
 
 - Baseline to beat: Day 7 Hybrid RRF chunk→document — P@1 `0.935`, R@5
   `0.811`, MRR@10 `0.965`.
-- Query set: `data/corpus_v1/example_queries.jsonl` — _TODO: confirm count
-  and whether full 93-query eval or subset._
-- Q014 / consensus-over-strength check at chunk level: _TODO: Fill in._
-- Reranked metric row(s): _TODO: Fill in with real numbers only._
+- Query set: `data/corpus_v1/example_queries.jsonl`, full 93/93 queries —
+  no subset needed; the reranked row added ~9s to the eval script's total
+  runtime (~16s vs. Day 7's ~7s).
+- Q014 / consensus-over-strength check at chunk level: **does not
+  reproduce at chunk granularity.** First-stage chunk-level Hybrid RRF
+  already ranks `POL-003::chunk-11` (correct) top-1 for Q014, before
+  reranking runs — the whole-document consensus-over-strength failure Day 7
+  measured is at least partly a retrieval-unit artifact, not purely a
+  fusion-formula weakness. Reranking left top-1 unchanged but promoted a
+  second correct document (`GUIDE-002`) into the top 3. Full write-up:
+  `docs/eval-report.md`, "Day 8: Cross-encoder reranking" → "Q014 at chunk
+  level".
+- Reranked metric row(s) (real numbers, `./.venv/bin/python src/eval_metrics.py`):
+  Cross-encoder reranked Hybrid RRF chunk→document — P@1 `0.978` (+0.043),
+  R@5 `0.806` (-0.005), MRR@10 `0.984` (+0.019). Reranking improved the two
+  metrics that score top-of-list precision and slightly reduced the one
+  recall metric — explained (not just reported) in `docs/eval-report.md`:
+  reranking can only reorder the existing 15-chunk shortlist, never pull in
+  a document that was never retrieved at all.
 - Baseline commands:
-  - `./.venv/bin/pytest -q` → _TODO: Fill in._
-  - `./.venv/bin/python -m compileall -q src tests` → _TODO: Fill in._
-  - `./.venv/bin/python src/reranking.py` or equivalent demo → _TODO: Fill
-    in._
-  - `./.venv/bin/python src/eval_metrics.py` or reranked eval command →
-    _TODO: Fill in._
-  - `./.venv/bin/python -m ruff check .` → _TODO: Fill in if available; if
-    not installed, record the exact error._
+  - `./.venv/bin/pytest -q` → `95 passed in 0.21s` (was `83 passed` before
+    Day 8; +12 from `tests/test_reranking.py`).
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+  - `./.venv/bin/python src/reranking.py` → ran the live Q014/Q009/Q042
+    demo against the real cross-encoder; output captured in
+    `docs/eval-report.md`'s Q014 section.
+  - `./.venv/bin/python src/eval_metrics.py` → printed the nine-row table
+    above in ~16s.
+  - `./.venv/bin/python -m ruff check .` → not installed in `.venv`
+    (`No module named ruff`) — not attempted further; `compileall` was
+    used as the syntax/import gate instead, matching how earlier days in
+    this log handle the same gap.
 
 ### What failed or was confusing
 
-- _TODO: Fill in._
+- Expected the cross-encoder to be the mechanism that fixed Q014 (Day 7's
+  whole-document consensus-over-strength failure). It wasn't — chunk-level
+  first-stage RRF already got Q014 right on its own, before reranking ran
+  at all. First read that as "the reranker did nothing useful on this
+  query," before catching that it still cleaned up ranks #2–#3 and helped
+  clearly across the other 92 queries — a null result on one targeted case
+  isn't the same as a null result overall.
+- R@5 dropping slightly (0.811 → 0.806) while P@1 and MRR@10 both rose felt
+  like a contradiction at first — "reranking made it worse?" — until
+  working through *why*: reranking can only reorder the 15 chunks the
+  first stage already retrieved. It can push a relevant chunk across the
+  rank-5 boundary either direction, but it can never pull in a chunk that
+  was never in the shortlist. That's a structural ceiling, not a bug.
+- `reranker_score` (e.g. `3.16`, `-6.27`) has no fixed scale or probability
+  meaning, unlike RRF's roughly `[0, 0.033]` range or cosine's `[0, 1]`
+  range — briefly caught myself about to compare a first-stage RRF score
+  against a `reranker_score` directly before remembering they're not
+  comparable at all; the fields sit side by side only for audit/debugging,
+  never combined into one number.
 
 ### What became clearer
 
-- _TODO: Fill in._
+- Two-stage retrieval isn't "the reranker fixes what the first stage got
+  wrong" in general — it's "the first stage owns recall, the reranker owns
+  precision-of-ordering within whatever the first stage already found."
+  The 93-query numbers make that concrete: P@1/MRR@10 up, R@5 essentially
+  flat. That's what a reranker doing its actual job looks like, not a
+  coincidence.
+- Bi-encoder vs. cross-encoder stopped being abstract once I had to read
+  `build_chunk_shortlist` (bi-encoder: embed once, compare via cosine,
+  cacheable) right next to `score_with_cross_encoder` (feeds `(query,
+  candidate_text)` into the model together, one forward pass per pair,
+  nothing to cache) side by side in the same module.
+- Q014 "not reproducing" at chunk level was the most useful surprise:
+  Day 7's whole-document RRF weakness wasn't purely "RRF's formula prefers
+  consensus over strength" in the abstract — some of that failure was
+  really "a whole document's aggregate BM25/dense score gets diluted by
+  its other unrelated sentences," which chunking alone (no reranking
+  needed) partly fixes. Two different mechanisms for what looked like one
+  problem.
 
 ### What I can now explain in an interview
 
-- Two-stage retrieval: _TODO: Fill in — why first-stage retrieval optimizes
-  candidate recall/latency and reranking optimizes final precision._
-- Bi-encoder vs cross-encoder: _TODO: Fill in — separately embedded vectors
-  vs jointly scored query/document pairs._
-- Latency/accuracy tradeoff: _TODO: Fill in — why rerank only a shortlist._
-- Procurement-specific reranking risk: _TODO: Fill in — exact identifiers,
-  numeric thresholds, and domain mismatch._
+- **Two-stage retrieval**: first-stage retrieval (BM25, dense, RRF fusion)
+  has to run over the *whole* corpus for every query, so it has to be
+  cheap — a bi-encoder's per-item embedding is precomputed once and reused
+  across every future query, and BM25 is just an inverted-index lookup.
+  That speed comes at the cost of only ever comparing independently
+  computed representations. A reranker is allowed to be expensive
+  precisely because it only ever runs over the shortlist the first stage
+  already narrowed down (15 chunks here, not 570) — it trades throughput
+  for the ability to look at the query and candidate together.
+- **Bi-encoder vs. cross-encoder**: a bi-encoder (`semantic_search.py`'s
+  embedding model) encodes the query and every document independently and
+  compares the two vectors afterward (cosine similarity) — fast,
+  cacheable, but query and document never interact before that final
+  comparison. A cross-encoder (`ms-marco-TinyBERT-L2-v2` here) feeds
+  `(query, candidate_text)` into the same model together in one forward
+  pass, so it can pick up on interactions a bi-encoder's late comparison
+  can miss — at the cost of needing a fresh forward pass for every single
+  pair, with nothing reusable across queries.
+- **Latency/accuracy tradeoff**: concretely, on this project — first-stage
+  retrieval over the whole 570-chunk corpus is milliseconds (BM25/cosine
+  lookups); the cross-encoder step adds ~9 seconds across all 93 queries
+  because it's scoring 15 pairs per query, not the whole corpus. Rerank
+  the whole corpus instead of a shortlist and that cost scales by roughly
+  38x (570/15) per query — which is exactly why reranking only ever
+  touches the first stage's output, never the corpus directly.
+- **Procurement-specific reranking risk**: the model used today
+  (`ms-marco-TinyBERT-L2-v2`) is trained on general web/search pairs, not
+  procurement clauses, and it still measurably helped (P@1 +0.043) — but
+  that's one 93-query corpus, not proof it generalizes. The real risk case
+  is exact identifiers/numeric thresholds (PO numbers, percentages,
+  currency amounts) where a general-purpose reranker might favor a passage
+  that reads as topically fluent over one with the exact right number —
+  Q009 (an exact shareholding-percentage query) staying correct after
+  reranking is a good sign, but it's one query, not a stress test.
 
 ### What remains weak
 
-- _TODO: Fill in._
+- Domain-mismatch risk is measured as "didn't hurt on this 93-query set,"
+  not "verified safe" — a general web/search-trained cross-encoder against
+  procurement-specific identifiers/clauses is still an open risk on harder
+  or larger query sets than v1's.
+- R@5's small drop (-0.005) is explained mechanistically but not yet
+  stress-tested at scale — on a larger query set it could resolve to
+  genuinely flat, or to a small but real recurring cost; 93 queries isn't
+  enough to tell which.
+- LLM-as-reranker (Boot.dev lessons 2–3) wasn't implemented, only designed
+  for — `rerank`'s `score_fn` parameter is already pluggable for it, so
+  today's evidence is cross-encoder-only, not a full comparison across
+  reranking approaches.
+- No latency/serving-budget number was set or tested against — "~9s added
+  for 93 queries" is a batch-eval number, not a per-query production
+  latency measurement. Explicitly out of scope for today per the design
+  doc, but a real gap before this could back a live system.
+- Graded relevance (`relevance_grades`) still isn't used anywhere,
+  reranking included — a reranker could be moving a document from grade-1
+  to grade-2 relevance (or the reverse) and none of P@1/R@5/MRR would show
+  it.
 
 ### Next step
 
