@@ -1094,3 +1094,84 @@ filtering in the first place (issue 2, above).
   aimed at that pattern once its chunk-level status is known, since it's a
   structural blind spot in first-stage fusion, not a tuning problem `alpha`
   or `k` can solve away.
+
+## 2026-09-12 — Day 8: Reranking + Two-Stage Retrieval
+
+### What I built or drafted
+
+- Drafted Day 8 route in `docs/day-08-reranking-two-stage-retrieval.md`.
+- Starting from the Day 7 chunk-level Hybrid RRF baseline and v1 canonical
+  query set.
+- Artifact attempted or built: _TODO: Fill in._
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Chapter 8 — Reranking.
+  - Lesson 1: `Re-ranking` — _TODO: Fill in._
+  - Lesson 2: `LLMs for Re-Ranking` — _TODO: Fill in._
+  - Lesson 3: `LLM Batch Re-Ranking` — _TODO: Fill in._
+  - Lesson 4: `Cross-Encoder Re-Ranking` — _TODO: Fill in._
+- Exercises completed or attempted: _TODO: Fill in._
+- Companion source notes: Beyond Naive RAG reranking/failure modes — _TODO:
+  Fill in._
+
+### Two-stage reranking contract
+
+- First-stage retriever / candidate source: _TODO: Fill in. Recommended:
+  chunk-level Hybrid RRF over BM25-over-chunks + dense-over-chunks._
+- Shortlist size before reranking: _TODO: Fill in._
+- Candidate text passed to reranker: _TODO: Fill in. Hint: title + chunk text
+  for scoring context; preserve raw chunk text separately as the citeable
+  passage._
+- Reranker used: _TODO: Fill in. Cross-encoder model, LLM-as-reranker, fake
+  scorer for tests, or documented blocker._
+- Result fields preserved for auditability: _TODO: Fill in. Expected shape:
+  `chunk_id`, parent `document_id`, original first-stage rank/score,
+  reranker score, candidate text, final rank._
+
+### Reranking / evaluation evidence
+
+- Baseline to beat: Day 7 Hybrid RRF chunk→document — P@1 `0.935`, R@5
+  `0.811`, MRR@10 `0.965`.
+- Query set: `data/corpus_v1/example_queries.jsonl` — _TODO: confirm count
+  and whether full 93-query eval or subset._
+- Q014 / consensus-over-strength check at chunk level: _TODO: Fill in._
+- Reranked metric row(s): _TODO: Fill in with real numbers only._
+- Baseline commands:
+  - `./.venv/bin/pytest -q` → _TODO: Fill in._
+  - `./.venv/bin/python -m compileall -q src tests` → _TODO: Fill in._
+  - `./.venv/bin/python src/reranking.py` or equivalent demo → _TODO: Fill
+    in._
+  - `./.venv/bin/python src/eval_metrics.py` or reranked eval command →
+    _TODO: Fill in._
+  - `./.venv/bin/python -m ruff check .` → _TODO: Fill in if available; if
+    not installed, record the exact error._
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+
+### What became clearer
+
+- _TODO: Fill in._
+
+### What I can now explain in an interview
+
+- Two-stage retrieval: _TODO: Fill in — why first-stage retrieval optimizes
+  candidate recall/latency and reranking optimizes final precision._
+- Bi-encoder vs cross-encoder: _TODO: Fill in — separately embedded vectors
+  vs jointly scored query/document pairs._
+- Latency/accuracy tradeoff: _TODO: Fill in — why rerank only a shortlist._
+- Procurement-specific reranking risk: _TODO: Fill in — exact identifiers,
+  numeric thresholds, and domain mismatch._
+
+### What remains weak
+
+- _TODO: Fill in._
+
+### Next step
+
+- Day 9: formalize the retrieval evaluation harness beyond binary
+  P@1/R@5/MRR@10 — likely graded relevance (`relevance_grades` / nDCG),
+  filtered-eval methodology, and clearer error slices before moving into
+  source-cited answer generation.
