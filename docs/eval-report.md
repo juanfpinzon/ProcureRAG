@@ -1228,7 +1228,7 @@ test from item 1 above, 134 → 135):
   `load_dotenv()` loads it from `.env`); with no key, `main()` prints the
   retrieved sources and stops, rather than faking an answer. Each call is
   now bounded to `OPENROUTER_TIMEOUT_SECONDS` (60s) and
-  `MAX_ANSWER_TOKENS` (700) and runs at `GENERATION_TEMPERATURE` (0.0) —
+  `MAX_ANSWER_TOKENS` (2400) and runs at `GENERATION_TEMPERATURE` (0.0) —
   see "Reproducibility hardening" above — so a smoke run either produces an
   answer or fails loudly within a bounded window, never hangs silently.
 

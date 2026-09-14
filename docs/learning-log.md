@@ -1732,7 +1732,7 @@ filtering in the first place (issue 2, above).
   couldn't catch" for the full story. No unit test could have caught this;
   it only showed up by actually running the live smoke test. The call is
   now also bounded: `OPENROUTER_TIMEOUT_SECONDS` (60s, passed as the
-  `openai` client's `timeout=`), `MAX_ANSWER_TOKENS` (700), and
+  `openai` client's `timeout=`), `MAX_ANSWER_TOKENS` (2400), and
   `GENERATION_TEMPERATURE` (0.0) — added after external review found the
   original client had no timeout at all and could hang indefinitely
   against a slow free-tier backend. See "Review feedback addressed" below.
