@@ -1290,3 +1290,93 @@ filtering in the first place (issue 2, above).
   P@1/R@5/MRR@10 — likely graded relevance (`relevance_grades` / nDCG),
   filtered-eval methodology, and clearer error slices before moving into
   source-cited answer generation.
+
+## 2026-09-14 — Day 9: Evaluation Harness — Graded Relevance, Filtered Evals, and Error Slices
+
+### What I built or drafted
+
+- Drafted Day 9 route in `docs/day-09-evaluation-harness-graded-filtered.md`.
+- Starting from the Day 8 reranked retrieval baseline and existing binary
+  evaluation harness in `src/eval_metrics.py`.
+- Artifact attempted or built: _TODO: Fill in._
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Chapter 9 — Evaluation.
+  - Lesson 1: `Manual Evaluation` — Completed
+  - Lesson 2: `Golden Dataset` — Completed
+  - Lesson 3: `Precision Metrics` — Completed
+  - Lesson 4: `Recall Metrics` — Completed
+  - Lesson 5: `F1 Score` — Completed
+  - Lesson 6: `Error Analysis` — Completed
+  - Lesson 7: `LLM Evaluation` — Completed
+- Companion source notes: RAGAS / RAG-triad retrieval-eval concepts — _TODO: Fill in if used._
+
+### Evaluation contract / methodology evidence
+
+- Canonical query source: `data/corpus_v1/example_queries.jsonl` — _TODO: Confirm still canonical or record any deliberate derived fixture._
+- Manual relevance rubric:
+  - Grade 2 / highly relevant / primary: _TODO: Define in procurement terms._
+  - Grade 1 / partially relevant: _TODO: Define in procurement terms._
+  - Grade 0 / not relevant: _TODO: Define in procurement terms._
+- Graded metric implemented: _TODO: e.g. nDCG@5 / nDCG@10; include formula explanation and test evidence._
+- Filter-adjusted evaluation method:
+  - How filtered gold ids are computed: _TODO: Fill in._
+  - Real v1 examples checked, such as Q001/Q007/Q019: _TODO: Fill in._
+  - Number of filtered queries scored: _TODO: Fill in._
+- Error slices produced:
+  - By query type: _TODO: Fill in strongest/weakest slices._
+  - By difficulty: _TODO: Fill in strongest/weakest slices._
+  - Filtered vs. unfiltered: _TODO: Fill in if implemented._
+  - Single-primary vs. multi-primary: _TODO: Fill in if implemented._
+- LLM-as-judge / manual-eval rubric status: _TODO: design only / prototype / deferred, with reason._
+
+### Evaluation artifact / metric evidence
+
+- Baseline carried forward from Day 8:
+  - `./.venv/bin/pytest -q` at Day 9 kickoff → `97 passed in 1.00s`.
+  - `./.venv/bin/python -m compileall -q src tests` at Day 9 kickoff → clean, no output.
+  - `./.venv/bin/python src/eval_metrics.py` at Day 9 kickoff → 93 queries, 34 documents, 570 chunks; cross-encoder reranked Hybrid RRF chunk→document P@1 `0.978`, R@5 `0.806`, MRR@10 `0.984`.
+- New graded metric table: _TODO: Paste exact command output / numbers._
+- New filtered-adjusted table: _TODO: Paste exact command output / numbers._
+- New error-slice table(s): _TODO: Paste exact command output / numbers._
+- Tests added/updated: _TODO: File names, test count, and what edge cases they cover._
+- `docs/eval-report.md` update: _TODO: Summarize new Day 9 section._
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+- Suggested things to watch for:
+  - Primary vs. secondary relevance ambiguity when multiple documents are valid.
+  - F1 hiding which side of the precision/recall tradeoff matters for a procurement user.
+  - Filtered recall accidentally penalizing a retriever for correctly respecting a filter.
+  - LLM judge scores looking authoritative before the rubric has been calibrated.
+
+### What became clearer
+
+- _TODO: Fill in._
+- Expected shape:
+  - Why graded relevance adds signal beyond binary P@1/R@5/MRR@10.
+  - Why filtered evals need filter-adjusted gold sets.
+  - Which query slices point to the next real retrieval/generation weakness.
+
+### What I can now explain in an interview
+
+- _TODO: Fill in._
+- Expected shape:
+  - Precision@k vs. recall@k vs. F1@k in plain English.
+  - nDCG@k: graded gain, rank discount, ideal ranking normalization.
+  - Why manual evaluation and a domain rubric come before LLM-as-judge automation.
+  - Why retrieval evaluation should be stable before source-cited answer generation is judged.
+
+### What remains weak
+
+- _TODO: Fill in._
+- Likely candidates:
+  - Generation evals: faithfulness/groundedness, context relevance, answer relevance.
+  - Source-cited answer synthesis and quote coverage.
+  - LLM-as-judge calibration against human/domain examples.
+
+### Next step
+
+- Day 10: move into source-cited augmented generation once the retrieval-eval harness is strong enough to tell whether generated answers are grounded in the right context. Verify the exact Boot.dev Chapter 10 lesson menu at Day 10 kickoff before writing the route.
