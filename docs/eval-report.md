@@ -1,10 +1,14 @@
 # Eval Report — v1 Hybrid Consolidation Baseline
 
-Date: 2026-09-11 (Day 7); Day 8 reranking addendum added 2026-09-12
+Date: 2026-09-11 (Day 7); Day 8 reranking addendum added 2026-09-12; Day 9
+graded/filtered/error-slice addendum added 2026-09-14
 Status: full baseline, 93/93 v1 queries, nine retrieval methods (six
 required document-level rows + two chunk-level hybrid rows added as a Day 7
 follow-up, plus Day 8's cross-encoder reranked chunk row — see "Day 8:
-Cross-encoder reranking" below)
+Cross-encoder reranking" below), plus Day 9's graded (nDCG@5), filtered-
+adjusted (21 queries), and error-slice (query type / difficulty / filtered /
+primary-count) evaluations — see "Day 9: Graded relevance, filter-adjusted
+evaluation, and error slices" below
 
 This is Day 7's evidence artifact: it turns Day 6's qualitative "hybrid
 looked better on these five queries" demo into a measured baseline across
@@ -15,7 +19,11 @@ biggest gap the first version of this table itself pointed at: chunk-level
 hybrid fusion, which turned out to be the strongest configuration tested.
 Day 8 then added a second-stage cross-encoder reranker on top of that
 chunk-level hybrid baseline — see the dedicated section below for whether
-it helped, and where.
+it helped, and where. Day 9 then went past binary relevance and one
+aggregate number per method: graded relevance (nDCG@5), a filter-adjusted
+ground truth for the 21 filtered queries, and error slices that pinpoint
+exactly where the reranker's aggregate strength hides a real weakness
+(`multi_doc` queries) — see that section for what moved and what didn't.
 
 ## Golden query source
 
@@ -512,20 +520,298 @@ Two contrast queries checked in the same run (`src/reranking.py`'s
   `build_chunk_shortlist` or the auditability contract — left for a future
   day per today's scope (`docs/day-08-reranking-two-stage-retrieval.md`).
 
+## Day 9: Graded relevance, filter-adjusted evaluation, and error slices
+
+Date: 2026-09-14
+Implementation: `src/eval_metrics.py` — `discounted_cumulative_gain`,
+`ndcg_at_k`, `grades_for_query`, `evaluate_ndcg` (graded relevance);
+`filter_adjusted_relevant_ids`, `filter_adjusted_grades`,
+`build_filtered_queries` (filter-adjusted ground truth);
+`slice_queries`, `evaluate_slices`, `primary_count` (error slices). Tests
+in `tests/test_eval_metrics.py` — 23 new tests: hand-computed nDCG cases
+(ties, a missing/unjudged id, an empty retrieved list, a query with no
+relevant grades at all, the ideal ranking), filter-adjustment checked
+against the real v1 queries the design doc names (Q001, Q007, Q019), and
+the slice-aggregation helpers.
+
+Every number below came from actually running
+`./.venv/bin/python src/eval_metrics.py` on 2026-09-14 — none of it is
+projected or hand-typed ahead of the code. That run now prints four
+labeled sections (binary unfiltered, graded unfiltered, filtered-adjusted,
+error slices) instead of one, in ~21s total on a laptop CPU (vs. ~16s for
+the Day 8 nine-row table alone) — the small added cost is from the two new
+*filtered* retrieve functions (21 queries each) and the nDCG table, not
+from re-running the expensive cross-encoder pass a second time: every
+method's `retrieve_fn` is memoized by `query_id` inside `main()`
+(`_memoize_by_query_id`) specifically so the binary table, the graded
+table, and every error slice can reuse one retrieval per query instead of
+paying for it up to six times over.
+
+### Manual relevance rubric (Boot.dev's "Manual Evaluation" lesson, applied)
+
+Before adding a graded metric, the grades it consumes need a plain-English
+definition, not just a number. This is what the v1 corpus's
+`relevance_grades` field already encodes per document per query — this
+rubric names what "2", "1", and "0" mean in procurement terms, and is what
+every judgment in `data/corpus_v1/example_queries.jsonl` was already made
+against, not a new standard invented today:
+
+- **Grade 2 — primary.** The document that actually answers the question:
+  it names the specific clause, threshold, band, supplier, or figure the
+  query asks for, with enough scope and precision that a buyer could act on
+  it without reading anything else. Example: for Q001 ("What approval is
+  required for a EUR 60,000 purchase order?"), `POL-001` states the exact
+  approval band and who signs off on it — that is the primary answer.
+- **Grade 1 — secondary / partially relevant.** A document that is
+  genuinely useful context but is not, on its own, a complete or precise
+  enough answer — it might restate the same rule informally (an FAQ), cover
+  a related but narrower or broader scope, or supply a supporting fact the
+  primary document assumes. Example: for Q001, `FAQ-001` restates the same
+  approval rule in plain language for requesters, but `POL-001` is still
+  the authoritative source — FAQ-001 is useful, not the answer.
+- **Grade 0 — not relevant.** A document that does not appear in
+  `expected_relevant_ids` at all for that query. It might be topically
+  adjacent (another policy, another supplier's contract) without answering
+  *this* question, or unrelated altogether. Absence from the grades dict is
+  what `grades_for_query`/`ndcg_at_k` treat as grade 0 by default — there
+  is no need to enumerate every non-relevant document explicitly.
+
+The reason this distinction matters for a metric, not just a human reader:
+P@1/R@5/MRR@10 treat grade 2 and grade 1 as identical "hits". A system that
+ranks `FAQ-001` above `POL-001` for Q001 scores exactly the same P@1 as one
+that ranks them the other way around — even though the second system found
+the actual authoritative clause first and the first system merely found
+something *related* to it. nDCG@5 below is the metric built to see that
+difference.
+
+### Graded relevance: nDCG@5
+
+**Why nDCG, in one sentence**: it asks "did the system rank the *best*
+evidence first", not just "did it retrieve *something* acceptable" — see
+the rubric above for what "best" (grade 2) vs. "acceptable" (grade 1) means
+here. `ndcg_at_k` computes `DCG@k` of the actual ranking (each retrieved
+document's grade, discounted by `1/log2(rank+1)` so a hit at rank 1 counts
+in full and a hit further down counts for steadily less) divided by
+`DCG@k` of the *ideal* ranking for that query (every graded document,
+best-grade-first) — a score of 1.0 means the ranking put the best possible
+grades into the best possible order in the top k slots.
+
+93/93 v1 queries, same nine methods, k=5 (matching R@5's depth):
+
+| Method | Retrieval unit | nDCG@5 |
+|---|---|---:|
+| TF-IDF | document | 0.818 |
+| BM25 | document | 0.792 |
+| Dense (multi-qa-MiniLM) | document | 0.740 |
+| Dense (multi-qa-MiniLM) | chunk→document | 0.828 |
+| Hybrid RRF (BM25 + dense) | document | 0.799 |
+| Hybrid weighted, α=0.5 (BM25 + dense) | document | 0.822 |
+| Hybrid RRF (BM25 + dense) | chunk→document | 0.863 |
+| Hybrid weighted, α=0.5 (BM25 + dense) | chunk→document | 0.851 |
+| Cross-encoder reranked Hybrid RRF (BM25 + dense) | chunk→document | **0.869** |
+
+**Measured, not assumed.** The method ranking is identical to the binary
+P@1 ranking — the cross-encoder reranked row is still best, chunk-level
+hybrid RRF is still the best first-stage row, dense-alone (whole document)
+is still weakest. That is expected, not a coincidence to explain away: a
+method that is better at ranking *any* relevant document first is very
+likely also better at ranking the *primary* one first, since a primary
+document is relevant by definition. What nDCG adds beyond confirming that
+ordering is *how much room is left* — every nDCG@5 number here is
+noticeably below its own method's P@1 (e.g. the reranked row is 0.978 P@1
+but only 0.869 nDCG@5), because P@1 only asks about rank 1, while nDCG@5
+also credits (and can be hurt by) what happens at ranks 2-5 — a primary
+document buried at rank 4 behind three secondary ones drags nDCG@5 down
+even on a query where P@1 already gives full credit for something else
+correct at rank 1, or where the top-1 answer is itself secondary rather
+than primary. This is real, additional signal binary P@1/R@5/MRR@10 cannot
+see at all.
+
+### Filter-adjusted evaluation
+
+**The methodology.** Reusing the unfiltered `expected_relevant_ids` to
+score *filtered* retrieval would be unfair — 17 of the 21 v1 queries with a
+`metadata_filters` value have at least one expected id their own filter
+would exclude (see "Metadata filtering" above). `filter_adjusted_relevant_ids`
+fixes this in three steps, applied per query:
+
+1. Take the query's own `metadata_filters` and its own `expected_relevant_ids`.
+2. Keep only the expected ids whose *own* document metadata satisfies that
+   filter (`hybrid_search.matches_filters` — the identical rule
+   `filter_ranked_results` already applies to retrieved documents, applied
+   here to the gold documents instead).
+3. Score filtered retrieval against that *adjusted* set, not the original
+   one — `build_filtered_queries` does this for every filtered query at
+   once, producing query rows `evaluate_method`/`evaluate_ndcg` can score
+   completely unmodified.
+
+**Real v1 examples, not synthetic ones** (`tests/test_eval_metrics.py`
+checks these three against the actual corpus and query file):
+
+| Query | Filter | Original `expected_relevant_ids` | Filter-adjusted gold |
+|---|---|---|---|
+| Q001 | `doc_type: policy` | `POL-001` (primary), `FAQ-001` (secondary) | `POL-001` — `FAQ-001` is a FAQ, not a policy |
+| Q007 | `doc_type: policy` | `POL-002` (primary), `FAQ-002` (secondary), `POL-005` (secondary) | `POL-002`, `POL-005` — `FAQ-002` is dropped, but `POL-005` *survives* because it is also a policy |
+| Q019 | `category: compliance` | `POL-005` (primary), `AUDIT-001` (secondary) | `POL-005` — `AUDIT-001`'s category is `procurement-operations`, not `compliance` |
+
+Q007 is the case worth pointing at specifically: filter-adjustment is not
+"keep only the primary document, drop every secondary one" — a secondary
+document is kept whenever it happens to also match the filter (`POL-005`
+here). The adjustment is about the *filter*, not about relevance grade.
+
+**Retrieval also has to apply the filter, not just the gold set.**
+`_filtered_chunk_shortlist` (in `eval_metrics.py`'s `main()`) reruns
+BM25-over-chunks and dense-over-chunks against the *full* 570-chunk index
+(not `CANDIDATE_POOL_SIZE`, for the exact reason `filter_ranked_results`'s
+docstring and the Day 7 `POL-005`/Q007 regression test already
+established — filtering a narrow pool can silently drop a real match that
+ranks just outside it), filters each chunk by its *parent* document's
+metadata, caps back down to `CANDIDATE_POOL_SIZE`, then fuses — the same
+shortlist shape `reranking.build_chunk_shortlist` produces, so the
+first-stage and reranked filtered rows below stay comparable to their
+unfiltered counterparts everywhere except the filtering step itself.
+
+**Results — 21/21 queries with a `metadata_filters` value:**
+
+17/21 of those queries have at least one `expected_relevant_ids` entry
+excluded by their own filter (checked programmatically, matching the count
+in "Metadata filtering" above); 0 lose every gold id.
+
+| Method | Retrieval unit | P@1 | R@5 | MRR@10 |
+|---|---|---|---|---|
+| Hybrid RRF (BM25 + dense), filtered | chunk→document | 1.000 | 0.948 | 1.000 |
+| Cross-encoder reranked Hybrid RRF, filtered | chunk→document | 1.000 | 0.948 | 1.000 |
+
+**Measured, not assumed — three findings, not one.**
+
+1. **Filtering measurably helps, compared to not filtering the same 21
+   queries at all.** The error-slice table below shows what these same 21
+   queries score with *unfiltered* retrieval (same methods, original gold):
+   Hybrid RRF chunk→document gets 0.905 P@1 / 0.786 R@5 unfiltered on this
+   subset, and the reranked method gets 1.000 P@1 / 0.762 R@5. Filtering
+   moves R@5 for the reranked method from 0.762 to 0.948 — a real recall
+   gain from removing off-scope distractors, not just a precision effect.
+2. **Both methods land on identical aggregate numbers, but not because
+   reranking did nothing.** Two queries (Q007, Q055) have different
+   document orderings after reranking than before it — reranking is doing
+   real work — but P@1/R@5 only look at rank-1 identity and top-5
+   membership, and neither of those two queries' reorderings crosses a
+   metric-relevant boundary. The honest reading: **filtering narrows the
+   candidate universe so much for these particular queries (several queries
+   filter down to 1-4 candidate documents total) that first-stage retrieval
+   is already at or near ceiling, leaving the reranker little headroom to
+   move P@1/R@5 on this specific 21-query slice** — not evidence that
+   reranking is generally useless under filtering.
+3. **R@5's 0.948, not 1.000, has a specific, checked cause.** Three
+   queries fall short of full recall in their filtered top 5: Q007 (R@5
+   0.5 — `POL-005`, a real secondary match, ranks outside the filtered
+   top 5 for this query), Q011 (R@5 0.75), and Q035 (R@5 0.667) — all three
+   are multi-gold queries where a lower-priority correct document didn't
+   make the cut, not a bug in the filtering or scoring code.
+
+### Error slices
+
+**Why**: an aggregate number across all 93 queries can hide which *class*
+of query a method is weak on. `evaluate_slices` reruns the exact same
+`evaluate_method` per group of queries, over the full unfiltered 93-query
+set, for the two most important methods in this report — the best
+first-stage row and the best overall row.
+
+**By query type:**
+
+| Query type | n | Hybrid RRF chunk→document (P@1/R@5/MRR@10) | Reranked (P@1/R@5/MRR@10) |
+|---|---:|---|---|
+| conceptual | 17 | 0.941 / 0.853 / 0.971 | 1.000 / 0.868 / 1.000 |
+| lookup | 23 | 0.957 / 0.797 / 0.978 | 1.000 / 0.790 / 1.000 |
+| multi_doc | 5 | 0.800 / 0.603 / 0.900 | **0.600** / 0.630 / 0.707 |
+| numeric | 7 | 0.857 / 0.893 / 0.893 | 1.000 / 0.845 / 1.000 |
+| procedural | 14 | 0.929 / 0.815 / 0.964 | 1.000 / 0.815 / 1.000 |
+| supplier_specific | 13 | 1.000 / 0.737 / 1.000 | 1.000 / 0.737 / 1.000 |
+| terminology | 6 | 1.000 / 0.944 / 1.000 | 1.000 / 0.944 / 1.000 |
+| threshold | 8 | 0.875 / 0.833 / 0.938 | 1.000 / 0.792 / 1.000 |
+
+**By difficulty:**
+
+| Difficulty | n | Hybrid RRF chunk→document | Reranked |
+|---|---:|---|---|
+| easy | 15 | 0.867 / 0.911 / 0.933 | 1.000 / 0.867 / 1.000 |
+| medium | 52 | 0.942 / 0.796 / 0.966 | 1.000 / 0.796 / 1.000 |
+| hard | 26 | 0.962 / 0.783 / 0.981 | 0.923 / 0.791 / 0.944 |
+
+**By filtered vs. unfiltered** (whether the query *carries* a filter — this
+is unfiltered retrieval sliced by query property, not the filtered-adjusted
+table above):
+
+| Slice | n | Hybrid RRF chunk→document | Reranked |
+|---|---:|---|---|
+| filtered | 21 | 0.905 / 0.786 / 0.952 | 1.000 / 0.762 / 1.000 |
+| unfiltered | 72 | 0.944 / 0.819 / 0.969 | 0.972 / 0.819 / 0.980 |
+
+**By single- vs. multi-primary** (`primary_count(query_row) == 1` vs. `> 1`
+— 45 queries have exactly one grade-2 document, 48 have two or more):
+
+| Slice | n | Hybrid RRF chunk→document | Reranked |
+|---|---:|---|---|
+| single-primary | 45 | 0.911 / 0.785 / 0.950 | 1.000 / 0.796 / 1.000 |
+| multi-primary | 48 | 0.958 / 0.835 / 0.979 | 0.958 / 0.816 / 0.969 |
+
+**Largest weak slice — measured, then explained, not just flagged.**
+`multi_doc` is the reranked method's weakest query-type slice: P@1 0.600
+over 5 queries vs. 0.978 overall — the single biggest gap in this whole
+error-slice analysis, and the *only* slice where the reranked method scores
+below its own first-stage row (0.600 vs. 0.800). Tracing it to a specific
+query: **Q091** ("What approvals and security evidence do I need for a EUR
+120,000 SaaS renewal?", gold: `GUIDE-002`, `POL-001`, `POL-003`, `SOP-004`,
+`SOP-006`) is correct at first stage (`POL-003` top-1) and *becomes wrong*
+after reranking (`SOP-001` top-1, not in the gold set; `POL-003` drops to
+rank 3). `Q092` was already wrong before reranking and stays wrong.
+`Q005`/`Q016`/`Q093` are correct both before and after. **Honest reading**:
+this is the one query-type slice, out of eight, where the cross-encoder
+measurably hurts top-1 accuracy instead of helping or holding steady —
+consistent with, and a sharper version of, the aggregate R@5 dip Day 8
+already found (0.811 → 0.806), and a reasonable place to point at a
+domain-mismatch explanation: `Q091` asks about a multi-part approval-plus-
+security-evidence answer, and `ms-marco-TinyBERT-L2-v2` is a general
+web/search model, not tuned to prefer a passage that is procedurally
+correct over one that merely reads as more directly responsive to the
+literal question text. Five queries is too small a slice to generalize
+from confidently, but it is the clearest, most specific "next fix" this
+report's error-slice analysis points at — see the next step in
+`docs/learning-log.md`'s Day 9 entry.
+
+### What Day 9 did not do
+
+- No filtered nDCG table — `filter_adjusted_grades` is implemented and
+  tested (including against the real Q001 query), but `main()` does not
+  currently print a filtered graded table; the design doc's own "Report
+  shape" only calls for one filtered table, and the binary one above
+  already carries the filtered-evaluation methodology story end to end.
+- No LLM-as-judge implementation or prototype — deferred entirely; the
+  manual rubric above is what today's grades were (and still are) judged
+  against, and Day 8's caveat about LLM-as-reranker risk applies just as
+  much to LLM-as-judge (inconsistency, prompt/model drift, needing
+  calibration against exactly this kind of human rubric before it could be
+  trusted as a scorer).
+- The filtered-adjusted table only covers the two "key methods"
+  (first-stage chunk hybrid RRF, reranked chunk hybrid RRF), not all nine
+  binary-table rows — chosen because those are the two rows every other
+  Day 9 comparison (graded table, error slices) also focuses on, not
+  because filtering the other seven would be harder to build.
+
 ## Known limitations / next steps
 
-- **The baseline table is unfiltered text retrieval only — no
-  metadata-aware baseline exists yet, and it is not a simple addition.**
-  None of `src/eval_metrics.py`'s closures (eight as of Day 7, plus Day 8's
-  reranked row — nine total) read `query_row["metadata_filters"]`. Building one needs its own methodology,
-  not just applying `filter_ranked_results` inside each closure: as the
-  "sharper, related finding" above shows, 17 of 21 filtered queries have at
-  least one `expected_relevant_ids` entry their own filter would exclude, so
-  a filtered baseline needs a *filter-adjusted* ground truth per query (drop
-  the ids the filter itself was always going to exclude before scoring
-  recall against what's left) — reusing the unfiltered `expected_relevant_ids`
-  as-is would penalize every method for correctly filtering out documents
-  the filter was supposed to remove.
+- **Done, no longer a gap (Day 9)**: the nine-row table above is still
+  unfiltered-only, but a filtered-adjusted baseline now exists as its own,
+  clearly labeled section — "Day 9: Graded relevance, filter-adjusted
+  evaluation, and error slices" → "Filter-adjusted evaluation". It does
+  exactly what this bullet originally asked for: a *filter-adjusted*
+  ground truth per query (`filter_adjusted_relevant_ids`/
+  `build_filtered_queries`), not the unfiltered `expected_relevant_ids`
+  reused as-is, scored against retrieval that actually applies the filter.
+  17 of 21 filtered queries do have at least one `expected_relevant_ids`
+  entry their own filter would exclude, confirming the concern this bullet
+  raised — and the fix measurably helps (R@5 0.762 → 0.948 for the
+  reranked method on those 21 queries, filtered vs. unfiltered).
 - **Done, no longer a gap**: chunk-level hybrid (BM25-over-chunks +
   dense-over-chunks, fused, rolled up to documents) is now in the table
   above as two rows, and — confirming the suspicion this bullet originally
@@ -535,10 +821,14 @@ Two contrast queries checked in the same run (`src/reranking.py`'s
   baseline to beat, not whole-document hybrid — reranking on top of the
   weaker whole-document baseline would understate how much of the
   remaining gap a reranker actually closes.
-- Binary relevance only. `relevance_grades` (graded 1/2) is unused; a
-  graded metric (nDCG) would score a primary-document hit higher than a
-  secondary-document hit, which this baseline currently treats as
-  equivalent.
+- **Done, no longer a gap (Day 9)**: `relevance_grades` is now used by
+  `ndcg_at_k`/`evaluate_ndcg` — see "Day 9" → "Graded relevance: nDCG@5".
+  The binary table above is still binary (kept that way deliberately, for
+  comparability with Day 7/8's own numbers), but it is no longer the only
+  view: nDCG@5 confirms the same method ranking as P@1 while showing real
+  headroom P@1 alone couldn't (e.g. the reranked row's 0.978 P@1 vs. 0.869
+  nDCG@5) — evidence that ranking the *primary* document first is a
+  measurably harder bar than ranking *any* relevant document first.
 - **Done, tested, and more nuanced than assumed**: the RRF-vs-consensus
   finding above (Q014, and the pool-size investigation) was this baseline's
   strongest argument for reranking next. Day 8's "Q014 at chunk level"

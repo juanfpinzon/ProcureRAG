@@ -1296,40 +1296,116 @@ filtering in the first place (issue 2, above).
 ### What I built or drafted
 
 - Drafted Day 9 route in `docs/day-09-evaluation-harness-graded-filtered.md`.
-- Starting from the Day 8 reranked retrieval baseline and existing binary
-  evaluation harness in `src/eval_metrics.py`.
-- Artifact attempted or built: _TODO: Fill in._
+- Extended (did not replace) the Day 7/8 binary evaluation harness in
+  `src/eval_metrics.py`: `discounted_cumulative_gain`, `ndcg_at_k`,
+  `grades_for_query`, `evaluate_ndcg` (graded relevance);
+  `filter_adjusted_relevant_ids`, `filter_adjusted_grades`,
+  `build_filtered_queries` (filter-adjusted ground truth);
+  `slice_queries`, `evaluate_slices`, `primary_count` (error slices);
+  plus a `_memoize_by_query_id` helper inside `main()` so every method's
+  `retrieve_fn` is only ever computed once per query, no matter how many
+  of the new tables reuse it.
+- Artifact built: Block 3A only (per Day 9's own split) — graded metric +
+  filter-adjusted evaluation + error slices, all wired into `main()`'s
+  printout and into `docs/eval-report.md`. Block 3B (rubric + synthetic-
+  only nDCG fallback) was not needed — the full route landed in one pass.
 
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 9 — Evaluation.
-  - Lesson 1: `Manual Evaluation` — Completed
-  - Lesson 2: `Golden Dataset` — Completed
-  - Lesson 3: `Precision Metrics` — Completed
-  - Lesson 4: `Recall Metrics` — Completed
-  - Lesson 5: `F1 Score` — Completed
-  - Lesson 6: `Error Analysis` — Completed
-  - Lesson 7: `LLM Evaluation` — Completed
-- Companion source notes: RAGAS / RAG-triad retrieval-eval concepts — _TODO: Fill in if used._
+  - Lesson 1: `Manual Evaluation` — Completed. Wrote the procurement
+    relevance rubric (grade 2/1/0, see `docs/eval-report.md`'s "Manual
+    relevance rubric" section) before writing `ndcg_at_k`, not after.
+  - Lesson 2: `Golden Dataset` — Completed. Reused
+    `data/corpus_v1/example_queries.jsonl` unchanged rather than building a
+    new fixture (see "Evaluation contract" below).
+  - Lesson 3: `Precision Metrics` — Completed. P@1 unchanged from Day 7;
+    nDCG@5 is the first metric that can tell P@1's "a relevant document is
+    first" apart from "the *best* relevant document is first".
+  - Lesson 4: `Recall Metrics` — Completed. R@5's multi-document weakness
+    from Day 7 shows up sharply in the `multi_doc` error slice (0.603-0.630
+    R@5, the lowest of any query type for both methods tested).
+  - Lesson 5: `F1 Score` — Completed, decided against implementing it.
+    P@1/R@5 are reported side by side and both used in the slice tables;
+    an F1@k would collapse them into one number and specifically hide the
+    R@5 dip Day 8 already found and this day's slices sharpen further -
+    the two numbers are more useful separately here than combined.
+  - Lesson 6: `Error Analysis` — Completed. Four slice dimensions (query
+    type, difficulty, filtered/unfiltered, single/multi-primary) computed
+    for the two most important methods; the `multi_doc` finding below is
+    the direct product of this lesson.
+  - Lesson 7: `LLM Evaluation` — Completed conceptually; not implemented.
+    See "What remains weak" below for why, and the risk this lesson flags.
+- Companion source notes: RAGAS / RAG-triad concepts (context precision,
+  context recall, faithfulness) were read for context but not used today -
+  those are answer-generation evals, out of scope until source-cited
+  generation exists (Day 10+).
 
 ### Evaluation contract / methodology evidence
 
-- Canonical query source: `data/corpus_v1/example_queries.jsonl` — _TODO: Confirm still canonical or record any deliberate derived fixture._
-- Manual relevance rubric:
-  - Grade 2 / highly relevant / primary: _TODO: Define in procurement terms._
-  - Grade 1 / partially relevant: _TODO: Define in procurement terms._
-  - Grade 0 / not relevant: _TODO: Define in procurement terms._
-- Graded metric implemented: _TODO: e.g. nDCG@5 / nDCG@10; include formula explanation and test evidence._
+- Canonical query source: `data/corpus_v1/example_queries.jsonl`, confirmed
+  still canonical - no new fixture created. All Day 9 functions read
+  `query_row["relevance_grades"]` / `query_row["metadata_filters"]` from
+  this file directly, the same way Day 7/8's functions already read
+  `expected_relevant_ids` from it.
+- Manual relevance rubric (full text in `docs/eval-report.md`):
+  - **Grade 2 / primary**: the document that directly answers the
+    question with the specific clause, threshold, supplier, or figure - a
+    buyer could act on it alone. Example: Q001's `POL-001` states the
+    exact approval band.
+  - **Grade 1 / secondary**: useful context that is not itself the
+    complete, precise answer - an FAQ restating a policy informally, a
+    narrower/broader-scope document, or supporting evidence. Example:
+    Q001's `FAQ-001` restates the same rule informally.
+  - **Grade 0 / not relevant**: absent from `expected_relevant_ids`
+    entirely; `grades_for_query`/`ndcg_at_k` treat any id not present in
+    the grades dict as grade 0 by default, so this never needs to be
+    enumerated explicitly.
+- Graded metric implemented: **nDCG@5**. `discounted_cumulative_gain(gains)
+  = sum(gain_i / log2(rank_i + 1))`; `ndcg_at_k` divides the actual
+  ranking's DCG@5 by the *ideal* ranking's DCG@5 (every graded document,
+  best-grade-first). Tested with hand-computed cases: the ideal ranking
+  (nDCG=1.0), a reversed primary/secondary order (nDCG≈0.860, hand-derived
+  via the exact log2 formula), an unjudged id scored as gain 0 mid-ranking,
+  tied grades (order among ties doesn't matter), an empty retrieved list
+  (nDCG=0.0, not an error), and a query with no relevant grades at all
+  (nDCG=0.0, guards the divide-by-zero rather than raising).
 - Filter-adjusted evaluation method:
-  - How filtered gold ids are computed: _TODO: Fill in._
-  - Real v1 examples checked, such as Q001/Q007/Q019: _TODO: Fill in._
-  - Number of filtered queries scored: _TODO: Fill in._
-- Error slices produced:
-  - By query type: _TODO: Fill in strongest/weakest slices._
-  - By difficulty: _TODO: Fill in strongest/weakest slices._
-  - Filtered vs. unfiltered: _TODO: Fill in if implemented._
-  - Single-primary vs. multi-primary: _TODO: Fill in if implemented._
-- LLM-as-judge / manual-eval rubric status: _TODO: design only / prototype / deferred, with reason._
+  - How filtered gold ids are computed: `filter_adjusted_relevant_ids`
+    keeps only the ids in `expected_relevant_ids` whose *own* document
+    metadata satisfies the query's *own* `metadata_filters`, via the exact
+    same `hybrid_search.matches_filters` rule `filter_ranked_results`
+    already applies on the retrieved side. `build_filtered_queries` does
+    this for every filtered query at once, producing rows the existing
+    `evaluate_method`/`evaluate_ndcg` score with zero changes.
+  - Real v1 examples checked: **Q001** (`FAQ-001` dropped, not a policy),
+    **Q007** (`FAQ-002` dropped, `POL-005` *kept* - a secondary document
+    can survive filtering if it also matches), **Q019** (`AUDIT-001`
+    dropped, wrong category) - all three asserted directly against the
+    real corpus and query file in `tests/test_eval_metrics.py`, not just
+    against synthetic data.
+  - Number of filtered queries scored: **21/93** (all queries with a
+    `metadata_filters` value); 17/21 have at least one gold id excluded by
+    their own filter, 0/21 lose every gold id - matching the counts
+    `docs/eval-report.md`'s Day 7 "Metadata filtering" section already
+    established.
+- Error slices produced (full tables in `docs/eval-report.md`):
+  - By query type: strongest slice is `terminology`/`supplier_specific`
+    (1.000 P@1 for both methods); weakest by far is **`multi_doc`**
+    (reranked method: 0.600 P@1, the only slice where reranking scores
+    *below* first-stage retrieval - see "What became clearer" below).
+  - By difficulty: `hard` is actually the reranked method's *weakest*
+    difficulty slice (0.923 P@1), not `easy`/`medium` (both 1.000) -
+    counter-intuitive at first glance, explained by `hard`'s overlap with
+    `multi_doc` (several hard queries are also multi-document ones).
+  - Filtered vs. unfiltered: unfiltered *retrieval* on the 21
+    filter-carrying queries (no filter applied) already scores 1.000 P@1
+    for the reranked method but only 0.762 R@5 - filtering (a separate
+    table) raises that same subset's R@5 to 0.948.
+  - Single- vs. multi-primary: fairly balanced split (45 vs. 48 queries);
+    first-stage RRF is meaningfully weaker on single-primary (0.911 vs.
+    0.958 P@1), but the reranker erases that gap entirely (1.000 vs. 0.958
+    - if anything now slightly favoring single-primary).
 
 ### Evaluation artifact / metric evidence
 
@@ -1337,46 +1413,160 @@ filtering in the first place (issue 2, above).
   - `./.venv/bin/pytest -q` at Day 9 kickoff → `97 passed in 1.00s`.
   - `./.venv/bin/python -m compileall -q src tests` at Day 9 kickoff → clean, no output.
   - `./.venv/bin/python src/eval_metrics.py` at Day 9 kickoff → 93 queries, 34 documents, 570 chunks; cross-encoder reranked Hybrid RRF chunk→document P@1 `0.978`, R@5 `0.806`, MRR@10 `0.984`.
-- New graded metric table: _TODO: Paste exact command output / numbers._
-- New filtered-adjusted table: _TODO: Paste exact command output / numbers._
-- New error-slice table(s): _TODO: Paste exact command output / numbers._
-- Tests added/updated: _TODO: File names, test count, and what edge cases they cover._
-- `docs/eval-report.md` update: _TODO: Summarize new Day 9 section._
+- After Block 3A:
+  - `./.venv/bin/pytest -q` → **`120 passed in 0.23s`** (97 + 23 new Day 9
+    tests: nDCG hand-computed cases, filter-adjustment on real v1 queries,
+    slice-helper tests - zero regressions in the 97 Day 7/8 tests).
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+  - `./.venv/bin/python src/eval_metrics.py` → same binary numbers as Day 8
+    (0.978/0.806/0.984 for the reranked row - confirms the refactor into
+    memoized `retrieve_fn`s changed nothing about what gets computed),
+    total runtime ~21s (vs. ~16s for the Day 8 table alone, despite adding
+    a graded table, a filtered table, and 8 slice tables - memoization is
+    what kept that cheap).
+- New graded metric table (nDCG@5, 9 methods): best is the reranked row at
+  **0.869**, worst is whole-document dense at **0.740** - same ranking as
+  the binary table, but every number sits well below its own method's P@1
+  (0.978 P@1 vs. 0.869 nDCG@5 for the reranked row), showing real,
+  previously invisible room between "found something relevant" and
+  "found the *primary* evidence, ranked well".
+- New filtered-adjusted table (21 queries): both first-stage and reranked
+  chunk-hybrid rows land on **P@1 1.000 / R@5 0.948 / MRR@10 1.000** -
+  identical in aggregate (though not in exact document order for 2 of the
+  21 queries), because filtering narrows the candidate universe so much
+  for these specific queries that first-stage retrieval is already near
+  ceiling before the reranker ever runs.
+- New error-slice tables: 4 dimensions × 2 methods = 8 tables; see
+  "Evaluation contract" above for the headline findings from each.
+- Tests added: 23 new tests in `tests/test_eval_metrics.py` - 6 for
+  `discounted_cumulative_gain`/`ndcg_at_k` hand-computed cases, 2 for
+  `grades_for_query`/`evaluate_ndcg`, 3 synthetic + 3 real-corpus tests for
+  `filter_adjusted_relevant_ids`/`filter_adjusted_grades`, 2 for
+  `build_filtered_queries`, 3 for `slice_queries`/`evaluate_slices`, 1 for
+  `primary_count` (exact counts: `git diff tests/test_eval_metrics.py`
+  shows 23 new `def test_` lines).
+- `docs/eval-report.md` update: new "Day 9: Graded relevance, filter-
+  adjusted evaluation, and error slices" section (rubric, nDCG@5 table +
+  interpretation, filter-adjustment methodology + Q001/Q007/Q019 walk-
+  through + results table + three named findings, four slice tables + the
+  `multi_doc`/Q091 root-cause trace); two "Known limitations" bullets from
+  Day 7 (unfiltered-only, binary-only) updated to "Done, no longer a gap".
 
 ### What failed or was confusing
 
-- _TODO: Fill in._
-- Suggested things to watch for:
-  - Primary vs. secondary relevance ambiguity when multiple documents are valid.
-  - F1 hiding which side of the precision/recall tradeoff matters for a procurement user.
-  - Filtered recall accidentally penalizing a retriever for correctly respecting a filter.
-  - LLM judge scores looking authoritative before the rubric has been calibrated.
+- Almost missed that reusing `evaluate_method` unmodified for the filtered
+  table required *also* memoizing the two new filtered retrieve functions
+  separately from the nine unfiltered ones - they are genuinely different
+  closures (different filtering step), so the existing per-method
+  memoization for the binary/graded tables doesn't automatically cover
+  them; each needed its own `_memoize_by_query_id` wrap.
+- First assumption about the filtered table was wrong: expected reranking
+  to show a clearer win under filtering (fewer distractors, cleaner
+  shortlist). Instead both methods tied exactly in aggregate - the real
+  explanation (filtering already shrinks the candidate set so much that
+  there's little left to rerank) took tracing actual per-query shortlists,
+  not just reading the aggregate numbers, to find (see
+  `docs/eval-report.md`'s "three findings, not one").
+- Filtered recall correctly *not* penalizing a retriever for respecting a
+  filter turned out to matter concretely on Q007: `POL-005` (a real
+  secondary match) is excluded from that query's filtered top-5 anyway
+  (R@5 0.5 there) for a *different*, legitimate reason (ranking, not
+  filter-exclusion) - a reminder that "filter-adjusted" fixes one specific
+  unfairness, not every source of imperfect recall.
 
 ### What became clearer
 
-- _TODO: Fill in._
-- Expected shape:
-  - Why graded relevance adds signal beyond binary P@1/R@5/MRR@10.
-  - Why filtered evals need filter-adjusted gold sets.
-  - Which query slices point to the next real retrieval/generation weakness.
+- Binary and graded metrics answering genuinely different questions is not
+  just a slogan - it showed up as a real, sizeable gap in the numbers
+  (0.978 P@1 vs. 0.869 nDCG@5 for the same method), not a rounding
+  difference. A method can be excellent at "put something acceptable
+  first" while still leaving real room in "put the single best answer
+  first, and keep it there through rank 5".
+- Filtered evaluation needing adjusted ground truth is not just a fairness
+  argument - Q007 makes concrete that "keep only the primary document" and
+  "keep only documents matching the filter" are *different* rules
+  (`POL-005`, a secondary document, survives filtering precisely because
+  it also matches, not because it's primary).
+- The most useful thing error slicing did today: it found that the
+  cross-encoder reranker, which looks purely positive in every aggregate
+  number this project has produced (P@1 +0.043, MRR@10 +0.019, nDCG@5
+  above first-stage on every method), has exactly one query-type slice
+  (`multi_doc`, 5 queries) where it measurably makes things *worse*
+  (0.800 → 0.600 P@1), traceable to one specific query (Q091) where the
+  reranker demotes the correct document from rank 1 to rank 3. An
+  aggregate table alone would never have surfaced that a general
+  web-trained cross-encoder can specifically struggle with multi-part,
+  multi-document procurement questions.
 
 ### What I can now explain in an interview
 
-- _TODO: Fill in._
-- Expected shape:
-  - Precision@k vs. recall@k vs. F1@k in plain English.
-  - nDCG@k: graded gain, rank discount, ideal ranking normalization.
-  - Why manual evaluation and a domain rubric come before LLM-as-judge automation.
-  - Why retrieval evaluation should be stable before source-cited answer generation is judged.
+- **Precision@k vs. recall@k vs. F1@k**: precision asks "of what I
+  retrieved, how much is relevant"; recall asks "of what's relevant, how
+  much did I retrieve"; F1 combines them into one number but hides *which*
+  one is weak - decided against adding F1@k here specifically because P@1
+  and R@5 are already reported together and F1 would have blurred exactly
+  the R@5 dip this project's own slice analysis needed to see clearly.
+- **nDCG@k, in plain English**: assign a gain per document by its
+  relevance grade, discount that gain by how far down the ranking it
+  appears (`1/log2(rank+1)` - full credit at rank 1, steadily less below
+  it), sum those discounted gains to get DCG, then divide by the DCG of
+  the *ideal* ranking for that same query (every graded document,
+  best-first) so the score is normalized to [0, 1] regardless of how many
+  relevant documents a query happens to have.
+- **Why manual evaluation and a domain rubric come before LLM-as-judge
+  automation**: a rubric written *before* scoring (grade 2/1/0 in
+  procurement terms, done today) is what any later judge - human or LLM -
+  has to be calibrated against; skipping straight to an LLM score without
+  one risks an authoritative-looking number nobody has actually defined.
+- **Why filtered evaluation needs adjusted ground truth**: scoring a
+  correctly-filtered result list against unfiltered gold ids punishes a
+  retriever for doing exactly what was asked - excluding a document the
+  filter itself was always going to exclude is correct behavior, not a
+  miss, and Q007's `POL-005` case shows the fix is "match the filter",
+  not "match the primary grade".
+- **What error analysis adds beyond an aggregate table**: it can reveal a
+  measurable regression (multi_doc P@1 dropping under reranking) that
+  every single aggregate metric this project has computed so far -
+  including today's own nDCG@5 - reports as a net positive, because the
+  aggregate's gains elsewhere outweigh this one slice's loss.
+- **What's risky about LLM-as-judge**: same risk profile as Day 8's
+  LLM-as-reranker caveat - inconsistency across runs, prompt/model drift,
+  and a plausible-sounding but wrong judgment being indistinguishable from
+  a correct one without a calibration rubric exactly like the one written
+  today; it should never be the only gate, and wasn't attempted today for
+  that reason (see below).
 
 ### What remains weak
 
-- _TODO: Fill in._
-- Likely candidates:
-  - Generation evals: faithfulness/groundedness, context relevance, answer relevance.
-  - Source-cited answer synthesis and quote coverage.
-  - LLM-as-judge calibration against human/domain examples.
+- **LLM-as-judge**: designed for conceptually (Boot.dev's Lesson 7,
+  completed as reading/reasoning) but not implemented or even prototyped -
+  no pluggable judge function or prompt template exists yet, unlike Day
+  8's reranker (`score_fn` was already pluggable for an LLM scorer). Left
+  fully for a later day, per today's explicit scope boundary.
+- **Filtered nDCG**: `filter_adjusted_grades` is implemented and tested,
+  but `main()` doesn't print a filtered *graded* table - only filtered
+  binary metrics. The design doc's "Report shape" only asked for one
+  filtered table, so this is a deliberate scope cut, not an oversight, but
+  it means the filtered-adjusted section can't yet show whether filtering
+  changes *which* document ranks first among several in-scope candidates,
+  only whether the right document is retrieved at all.
+- **The `multi_doc`/Q091 finding is n=5** - real and specific (traced to
+  one exact query), but too small a slice to generalize a "reranker is bad
+  at multi-document procurement questions" claim from confidently. It's
+  the clearest next-fix candidate this report has, not a proven pattern.
+- Generation evals (faithfulness/groundedness, context relevance, answer
+  relevance) are still entirely out of scope - retrieval evaluation is now
+  meaningfully deeper, but nothing here evaluates a generated answer yet.
 
 ### Next step
 
-- Day 10: move into source-cited augmented generation once the retrieval-eval harness is strong enough to tell whether generated answers are grounded in the right context. Verify the exact Boot.dev Chapter 10 lesson menu at Day 10 kickoff before writing the route.
+- Day 10: move into source-cited augmented generation once the
+  retrieval-eval harness is strong enough to tell whether generated
+  answers are grounded in the right context - it now is. Two concrete
+  carry-overs from today, specifically: (1) the `multi_doc`/Q091-style
+  failure (reranker demoting a correct document in a multi-part question)
+  is worth re-checking once generation exists, since a wrong top-1 chunk
+  feeding a generator is a much more visible failure than a wrong top-1
+  document in a retrieval-only table; (2) verify the exact Boot.dev
+  Chapter 10 lesson menu at Day 10 kickoff before writing the route, the
+  same verification discipline Day 9 applied to Chapter 9's menu.
