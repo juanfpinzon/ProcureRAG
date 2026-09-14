@@ -281,3 +281,45 @@ def test_make_openrouter_client_raises_without_api_key_before_any_network_call()
 
         with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
             generation.make_openrouter_client(api_key=None)
+
+
+def test_make_openrouter_client_raises_a_clear_error_on_blank_provider_content():
+    """A live provider can hand back `None`/empty `content` - seen live on
+    2026-09-14, where a harder multi-source question returned no answer
+    text at all. Without a check for this, that `None` would silently
+    reach `extract_cited_source_ids`'s regex and crash with an opaque
+    `TypeError`, far from where the real problem (a blank live response)
+    actually happened. This test fakes the `openai` SDK's response shape
+    (not a real network call) to check the *client's* boundary behavior -
+    it needs `openai` importable to build that fake, unlike every other
+    test in this file, since it is specifically testing what happens right
+    after the SDK call returns.
+    """
+    import types
+
+    import openai
+
+    generation = _load_generation_module()
+
+    class FakeOpenAIClient:
+        """Stands in for `openai.OpenAI(...)` - same `.chat.completions.create(...)`
+        shape, but returns a response whose message has no content, exactly
+        like the live blank-response case being tested here."""
+
+        def __init__(self, **kwargs):
+            del kwargs  # accepted (api_key, base_url, timeout), not used by the fake
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            del kwargs  # accepted (model, messages, max_tokens, ...), not used by the fake
+            blank_message = types.SimpleNamespace(content=None)
+            choice = types.SimpleNamespace(message=blank_message, finish_reason="content_filter")
+            return types.SimpleNamespace(choices=[choice])
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(openai, "OpenAI", FakeOpenAIClient)
+
+        client = generation.make_openrouter_client(model="fake-model", api_key="fake-key")
+
+        with pytest.raises(RuntimeError, match="returned no answer text"):
+            client("any prompt")

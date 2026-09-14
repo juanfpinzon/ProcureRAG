@@ -256,22 +256,69 @@ def generate_answer(query, sources, client):
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Checked live against https://openrouter.ai/api/v1/models on 2026-09-14:
-# a real, free (prompt+completion cost $0), text-to-text chat model. Free
-# models on OpenRouter rotate over time, so if this one is ever retired,
-# override it without touching code by setting OPENROUTER_MODEL in `.env` -
-# see https://openrouter.ai/models?max_price=0 for the current free list.
+# Free models on OpenRouter rotate over time, so if this one is ever
+# retired, override it without touching code by setting OPENROUTER_MODEL in
+# `.env` - see https://openrouter.ai/models?max_price=0 for the current
+# free list.
 #
-# This particular model is a *reasoning* model: by default it thinks out
-# loud for thousands of tokens before answering, and without the
-# `reasoning: {"exclude": True}` request option below, that entire
-# chain-of-thought comes back as `message.content` instead of a clean
-# answer - confirmed live on 2026-09-14 (a first run, before that option
-# was added, printed several paragraphs of the model narrating which
-# source to cite before trailing off into truncated, garbled text once it
-# ran out of budget). If you swap in a different free model and see the
-# same thing, this is why.
-DEFAULT_OPENROUTER_MODEL = "nvidia/nemotron-3.5-lightning:free"
+# The original default here was `nvidia/nemotron-3.5-lightning:free`, a
+# *reasoning* model. That choice caused real, live-only trouble: by
+# default a reasoning model thinks out loud for many tokens before
+# answering, and OpenRouter's `reasoning: {"exclude": True}` request option
+# (still set below) is supposed to strip that internal trace from
+# `message.content`. In practice it only worked reliably for an easy,
+# single-source question - for a harder, four-source question it
+# repeatedly leaked the raw "Here's a thinking process..." trace instead of
+# a clean answer, at three different `max_tokens` budgets (700, 2000, 4000)
+# tried in sequence on 2026-09-14, because the hidden reasoning tokens
+# themselves count against that budget and a harder question needs more of
+# them - so no fixed budget was "enough" in a way that held up query to
+# query. `ling-3.0-flash-fin:free` is not a reasoning model at all (no
+# hidden chain-of-thought competing for the token budget), which sidesteps
+# that entire failure class - confirmed live on 2026-09-14 against
+# https://openrouter.ai/api/v1/models as free (prompt+completion cost $0)
+# and reasoning-disabled by default. See `docs/eval-report.md`'s
+# "Reproducibility hardening" section for the full three-attempt trail with
+# the previous model, and why switching model families (not just tuning
+# `max_tokens` further) was the actual fix.
+DEFAULT_OPENROUTER_MODEL = "inclusionai/ling-3.0-flash-fin:free"
+
+# A free OpenRouter model can sit behind a slow or momentarily overloaded
+# backend - without a bound, a hung request blocks `main()` indefinitely
+# instead of failing loudly (this is exactly what an external reviewer hit:
+# a run that hung past 300s with no timeout set at all). 60s is generous
+# for one short chat completion but still short enough that a demo run
+# fails fast (with a normal `openai` timeout exception) rather than hanging
+# for minutes.
+OPENROUTER_TIMEOUT_SECONDS = 60.0
+
+# Bounding `max_tokens` gives the request a predictable worst-case latency
+# and cost (proportional to output length) instead of letting the model
+# generate for as long as it wants. `temperature=0` makes the *sampling*
+# step as deterministic as this API allows - it does not guarantee
+# byte-for-byte identical output across runs (a hosted provider can still
+# change quantization, routing, or the underlying model weights between
+# calls), but it removes randomized sampling as a source of run-to-run
+# variance, which is what "reproducible smoke test" means in practice for a
+# live third-party API.
+#
+# With the original reasoning-model default, 700/2000/4000 were each tried
+# in turn and each still leaked a raw chain-of-thought trace on the harder
+# query (see `DEFAULT_OPENROUTER_MODEL`'s comment above) - the actual fix
+# was switching model families, not raising this number further.
+#
+# Switching models did not fully close the gap either: at 800,
+# `ling-3.0-flash-fin:free` answered the easy query cleanly but hit
+# `max_tokens` on the harder, four-source query with zero visible content
+# returned at all (`finish_reason="length"`) - this specific free model
+# apparently spends some of its budget on output that never reaches
+# `message.content` before the cap cuts it off, on a hard enough question,
+# even without being a formally-tagged "reasoning" model. At 1600, the
+# harder query finally produced a real, well-cited, coherent answer - just
+# one still cut off mid-sentence before finishing its last section. 2400
+# gives it enough room to actually finish.
+MAX_ANSWER_TOKENS = 2400
+GENERATION_TEMPERATURE = 0.0
 
 
 def make_openrouter_client(model=None, api_key=None):
@@ -285,12 +332,16 @@ def make_openrouter_client(model=None, api_key=None):
     (`client(prompt) -> answer_text`), which is what lets `generate_answer`
     above use either one without any special-casing.
 
-    Raises `RuntimeError` immediately - before the `openai` client is even
-    constructed - if no API key is available, so a missing key fails loudly
-    and fast rather than as a confusing 401 deep inside a request.
+    Raises `RuntimeError` immediately if no API key is available, so a
+    missing key fails loudly and fast rather than as a confusing 401 deep
+    inside a request. The `openai` import itself happens *after* that check
+    (not at module load, and not before the key is validated) - a caller who
+    never has an API key configured (the whole test suite, and anyone
+    running `generate_answer` with only a fake client) never needs the
+    `openai` package importable at all. This keeps the "fake-client tests
+    don't require live-client dependencies" boundary honest at the import
+    level, not just at the network level.
     """
-    from openai import OpenAI
-
     api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError(
@@ -299,12 +350,20 @@ def make_openrouter_client(model=None, api_key=None):
         )
     model = model or os.environ.get("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL)
 
-    openai_client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    from openai import OpenAI
+
+    openai_client = OpenAI(
+        api_key=api_key,
+        base_url=OPENROUTER_BASE_URL,
+        timeout=OPENROUTER_TIMEOUT_SECONDS,
+    )
 
     def client(prompt):
         response = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=MAX_ANSWER_TOKENS,
+            temperature=GENERATION_TEMPERATURE,
             # `reasoning` is an OpenRouter extension, not a standard OpenAI
             # API field, so it has to be passed through `extra_body` rather
             # than as a normal keyword argument. `exclude: True` keeps a
@@ -313,7 +372,26 @@ def make_openrouter_client(model=None, api_key=None):
             # above for the actual broken output this fixes.
             extra_body={"reasoning": {"exclude": True}},
         )
-        return response.choices[0].message.content
+        answer_text = response.choices[0].message.content
+
+        # A live provider can hand back a `None`/empty `content` - seen live
+        # on 2026-09-14, where a harder multi-source question returned no
+        # content at all (`finish_reason` below is whatever the provider
+        # gave, e.g. "length" or "content_filter"). Without this check that
+        # `None` would propagate silently into `generate_answer` and crash
+        # much later, inside `extract_cited_source_ids`'s regex, with an
+        # opaque `TypeError` that gives no hint the real problem was the
+        # live call itself. Failing here, at the boundary, with the actual
+        # `finish_reason` attached is the same "fail loudly and specifically"
+        # principle as the missing-API-key check above.
+        if not answer_text:
+            finish_reason = response.choices[0].finish_reason
+            raise RuntimeError(
+                f"OpenRouter model '{model}' returned no answer text "
+                f"(finish_reason={finish_reason!r}). This is a live-provider "
+                "response, not a bug in this project's prompt/citation code."
+            )
+        return answer_text
 
     return client
 

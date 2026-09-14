@@ -859,8 +859,11 @@ checked against the real numbered sources); `generate_answer`/
 Python SDK pointed at OpenRouter's OpenAI-compatible `base_url`, with
 `python-dotenv`'s `load_dotenv()` reading `OPENROUTER_API_KEY` out of
 `.env`; both are real `pyproject.toml` dependencies now, used only inside
-this one function). Tests in `tests/test_generation.py` — 14 new
-deterministic tests, no network calls.
+this one function, and the `openai` import itself happens only after the
+API-key check passes — see "Reproducibility hardening" below). Tests in
+`tests/test_generation.py` — 15 deterministic tests, no network calls (14
+from the initial build, plus one added the same day to cover the
+blank-provider-content guard — see "Reproducibility hardening" below).
 
 Everything below came from actually running the commands shown on
 2026-09-14 — none of it is hand-typed or projected ahead of the code.
@@ -913,16 +916,24 @@ below, where it shows up exactly as expected.
   by handing it a client that raises if it is ever invoked.
 - **Test boundary**: every deterministic test uses a small fake
   `client(prompt) -> text` function. `make_openrouter_client` (a real,
-  live client) is imported by `main()` only, never by the test suite.
+  live client) is imported by `main()` only, never by the test suite. The
+  boundary holds at the *import* level too, not just the network level:
+  `make_openrouter_client` validates `OPENROUTER_API_KEY` before importing
+  `openai` at all, so a caller with no key (the entire test suite) never
+  needs the `openai` package importable — `test_make_openrouter_client_raises_without_api_key_before_any_network_call`
+  would fail with `ModuleNotFoundError` instead of the intended `RuntimeError`
+  if that ordering were ever reversed.
 
-### Demo output (real run, 2026-09-14, live OpenRouter call)
+### Demo output (real run, 2026-09-14, live OpenRouter call, post-review-fix)
 
 `./.venv/bin/python src/generation.py`, with `OPENROUTER_API_KEY` set in
-`.env` and the default model
-(`nvidia/nemotron-3.5-lightning:free` — a free, text-to-text OpenRouter
-model, confirmed live against `https://openrouter.ai/api/v1/models` on
-2026-09-14; see `src/generation.py`'s `DEFAULT_OPENROUTER_MODEL` comment if
-that model is ever retired):
+`.env` and the current default model (`inclusionai/ling-3.0-flash-fin:free`
+— a free, non-reasoning, text-to-text OpenRouter model, confirmed live
+against `https://openrouter.ai/api/v1/models` on 2026-09-14; see
+`src/generation.py`'s `DEFAULT_OPENROUTER_MODEL` comment if that model is
+ever retired). This is the output of the *sixth* live attempt today, after
+the reproducibility fixes below — see "Reproducibility hardening" for why
+it took six:
 
 ```
 Q001 (threshold): What approval is required for a EUR 60,000 purchase order?
@@ -934,9 +945,18 @@ Q001 (threshold): What approval is required for a EUR 60,000 purchase order?
     [5] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
 
   answer:
-    VP Procurement approval with a Finance review [4].
+    For a EUR 60,000 purchase order, **VP Procurement approval with a Finance review** is required — not Category Manager approval.
 
-  citation check: {'cited_ids': [4], 'valid_ids': [4], 'orphan_ids': [], 'uncited_ids': [1, 2, 3, 5]}
+    This is established by the following sources:
+
+    - **[4]** states: *"A three-year service at €20,000 per year is a €60,000 commitment and needs VP Procurement approval with a Finance review, not Category Manager approval."*
+    - **[5]** repeats the same rule: *"A three-year service at €20,000 per year is a €60,000 commitment and needs VP Procurement approval with a Finance review, not Category Manager approval."*
+
+    Additionally, **[4]** clarifies that the approval level is determined by the **total committed value over the full term** of the commitment, not by the invoice amount or the amount falling within a single financial year. **[3]** confirms that approval bands apply to the total committed value expressed in EUR.
+
+    **Note:** Separately, **[1]** and **[2]** indicate that a €60,000 purchase also triggers a competition requirement — three qualified bids are required above €25,000 and up to €250,000 of total committed value.
+
+  citation check: {'cited_ids': [1, 2, 3, 4, 5], 'valid_ids': [1, 2, 3, 4, 5], 'orphan_ids': [], 'uncited_ids': []}
 
 Q091 (multi_doc): What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
   retrieved sources:
@@ -947,69 +967,84 @@ Q091 (multi_doc): What approvals and security evidence do I need for a EUR 120,0
     [5] SOP-001 — Standard Operating Procedure — Three-Bid Requirement and Sourcing Exception Handling
 
   answer:
-    For a EUR 120,000 SaaS renewal, the required approvals and security
-    evidence are as follows, each sourced from the numbered documents and
-    kept separate as their scopes differ:
+    ## Approvals and Security Evidence for a EUR 120,000 SaaS Renewal
 
-    - Approval role: [3] states that a €60,000 commitment requires VP
-      Procurement approval with a Finance review, not Category Manager
-      approval [3]. [3] also explicitly states that splitting a request to
-      keep it under a threshold is not permitted [3]. [3] does not specify
-      a VP approval threshold for amounts above €60,000.
-    - Three-bid requirement: [2] states that three qualified bids are
-      required above €25,000 and up to €250,000 of total committed value
-      [2]. Since EUR 120,000 falls within this range, three bids must be
-      obtained.
-    - Record keeping and second-renewal obligations: [5] requires that for
-      every award above €25,000, [supporting records] must exist in Ariba
-      Sourcing [...]. Records are retained for seven years [5]. On the
-      second renewal, the buyer must record a plan and a date for a
-      competitive event or a Category Council decision [5].
-    - Security evidence for technology/SaaS: [4] states that risk
-      acceptance may not exceed 12 months and may not be renewed more than
-      once. Certification evidence is refreshed annually. A lapsed
-      certificate is a control failure and triggers a review of whether
-      the service may continue [4].
+    ### 1. Sourcing and Approval Requirements
 
-    No single source provides a combined approval threshold for EUR
-    120,000 beyond the individual statements above.
+    **Three qualified bids are required.** A EUR 120,000 commitment falls in the €25,000–€250,000 range, which mandates three qualified bids [2]. You cannot split the request to stay under a threshold [3].
 
-  citation check: {'cited_ids': [2, 3, 4, 5], 'valid_ids': [2, 3, 4, 5], 'orphan_ids': [], 'uncited_ids': [1]}
+    **VP Procurement approval with Finance review.** Based on the precedent in the sources, a commitment of this significance requires VP Procurement approval with a Finance review [3]. (The source explicitly states this for a €60,000 commitment; a €120,000 commitment is of equal or greater significance, so this approval level applies at minimum.)
+
+    **Records must be maintained in Ariba Sourcing.** For every award above €25,000, the following must exist: the requirement document issued to suppliers, the invitation list with dates, the bids received (or the exception form), the comparison/evaluation record, the award recommendation, and the approval evidence. Records are retained for seven years [5].
+
+    ### 2. Security and Data Protection Evidence
+
+    **Annual certification refresh.** Certification evidence must be refreshed annually as part of continuous assurance [4].
+
+    **Risk acceptance limits.** Risk acceptance may not exceed 12 months and may not be renewed more than once [4].
+
+    **Lapsed certificates.** A lapsed certificate is treated as a control failure and triggers a review of whether the service may continue [4].
+
+    ### 3. If Seeking a Sourcing Exception
+
+    If you intend to single-source without three bids, any exception above €250,000 must be reviewed by Procurement Governance before the approver receives it [1]. For a €120,000 award (below €250,000), the standard three-bid rule applies per [2], but exception handling procedures still govern the process [1]. An approved exception is valid for a maximum of 12 months or the duration of the specific award, whichever is shorter [1]. On a second renewal, a plan and date for a competitive event (or a Category Council decision to designate the supplier as strategic/single-sourced) must be recorded [5].
+
+    ---
+
+    **Summary:** For a EUR 120,000 SaaS renewal, you need three qualified bids [2], VP Procurement approval with Finance review [3], full Ariba Sourcing records [5], and annual security certification evidence with risk acceptance not exceeding 12 months and not renewed more than once [4].
+
+  citation check: {'cited_ids': [1, 2, 3, 4, 5], 'valid_ids': [1, 2, 3, 4, 5], 'orphan_ids': [], 'uncited_ids': []}
 ```
 
 (Full untruncated source text is longer in the real terminal output; the
-`[n]` header lines above are reproduced exactly, quoted text is trimmed
-here for space. This is the *second* live run of the day — see "A
-live-only bug the deterministic tests couldn't catch" below for what the
-first run actually produced and why it needed fixing before this one.)
+`[n]` header lines above are reproduced exactly, the answer text is
+reproduced in full and unedited. See "Reproducibility hardening" below for
+the five earlier, broken attempts from today that led here.)
 
-**Q001 reads as a genuine success.** The one claim in the answer (VP
-Procurement, Finance review) is backed by source `[4]`, which really does
-say that, and nothing else is asserted beyond what `[4]` supports — exactly
-the "answer only from the sources, cite the specific claim" contract
-working as designed.
+**Q001 reads as a genuine success.** Every claim traces to a real source:
+the approval role to `[4]`/`[5]`, the "total committed value over the full
+term" rule to `[4]`, and the competition requirement to `[1]`/`[2]` — five
+sources retrieved, five cited, zero orphans, zero left unused. Exactly the
+"answer only from the sources, cite the specific claim" contract working
+as designed.
 
-**Q091 is the more important result, precisely because it is not a clean
-win.** The retrieved top-5 sources for this query do *not* include
-`POL-001` (the approval-bands policy — grade 2/primary for this query) or
-`GUIDE-002` (the renewal-timing guide — also grade 2), even though both are
-in `expected_relevant_ids` for Q091 and this is exactly the `multi_doc`
-weak slice Day 9 already flagged (P@1 0.600 over 5 queries). The model's
-answer is *well-behaved* given what it was actually handed: zero orphan
-citations, every claim backed by a real source, sources kept separate
-rather than merged ("kept separate as their scopes differ"), and it
-explicitly says "[3] does not specify a VP approval threshold for amounts
-above €60,000" / "No single source provides a combined approval threshold
-for EUR 120,000" rather than guessing Band 3 from memory — the prompt's
-refusal rule working as intended. But the answer is still *incomplete*
-relative to the real expected answer (Band 3, €50,000–€250,000, VP
-Procurement approval), because the retrieval step never surfaced the one
-document that states it. **This is the single clearest piece of evidence in
-this project for "retrieval quality and answer quality are different
-axes": a generator with good citation hygiene cannot correct for a
-retrieval miss it was never shown.** Good citations prove the answer is
-faithful to *what it was given* — they say nothing about whether what it
-was given was complete.
+**Q091 is the more important result, and it is genuinely more complete
+than the earlier reasoning-model answer to the same question (see "A
+live-only bug the deterministic tests couldn't catch" below for that
+earlier transcript) — but it is worth being precise about *why*, and about
+one place where it takes a small liberty the prompt's own rules do not
+quite license.** The retrieved top-5 sources for this query still do *not*
+include `POL-001` (the approval-bands policy — grade 2/primary for this
+query) or `GUIDE-002` (the renewal-timing guide — also grade 2), even
+though both are in `expected_relevant_ids` for Q091 and this is exactly
+the `multi_doc` weak slice Day 9 already flagged (P@1 0.600 over 5
+queries) — switching the generation model changed nothing about
+*retrieval*, which is the point: this is a different model, same
+retrieval gap. Zero orphan citations, every claim backed by a real source,
+sources kept separate by section rather than blended into one number. But
+look closely at the approval-level claim: rule 3 of `PROMPT_INSTRUCTIONS`
+says "if the sources do not contain enough information to answer, say so
+plainly instead of guessing," and the *previous* model's answer to this
+exact question did exactly that ("[3] does not specify a VP approval
+threshold for amounts above €60,000"). This run's answer instead
+extrapolates — "a €120,000 commitment is of equal or greater significance,
+so this approval level applies at minimum" — a caveated inference, not a
+flat assertion, and still cited to `[3]`, but a real step past "the source
+only states this for €60,000" toward guessing what a higher amount
+probably needs. It is a small, honest illustration that "refuse rather
+than guess" is a prompt *rule*, not a property automatically shared by
+every model that receives it — worth catching by a future faithfulness
+check (see "Next step" in `docs/learning-log.md`), not something today's
+citation-only checks can flag. Either way, the deeper point stands: no
+model reading only these five sources can correctly state the actual
+expected answer (Band 3, €50,000–€250,000, VP Procurement approval),
+because the retrieval step never surfaced the one document that states
+it. **This is still the clearest piece of evidence in this project for
+"retrieval quality and answer quality are different axes": a generator's
+citation hygiene, or lack of it, cannot correct for a retrieval miss it
+was never shown.** Good citations prove an answer is faithful to *what it
+was given* — they say nothing about whether what it was given was
+complete, or about exactly how far the model reasoned past it.
 
 ### A live-only bug the deterministic tests couldn't catch
 
@@ -1040,6 +1075,143 @@ default response *shape* on a specific hosted provider, not in this
 project's own prompt/citation logic. It was only visible by actually
 running the live smoke test and reading the output.
 
+### Reproducibility hardening (post-review fixes, same day)
+
+External code review of this Day 10 addendum caught three real problems
+with the state above, all worth recording honestly rather than quietly
+patching:
+
+1. **The live demo was not reproducible from the committed state.** The
+   reviewer ran `./.venv/bin/python src/generation.py` and it hung for over
+   300 seconds — past the reranker weights loading, before any answer —
+   because `make_openrouter_client`'s `OpenAI(...)` client had no request
+   timeout at all. A slow or momentarily overloaded free-tier backend could
+   block `main()` indefinitely with no error and no way to tell "still
+   working" from "stuck." **Fix**: `OPENROUTER_TIMEOUT_SECONDS = 60.0`,
+   passed as `timeout=` to the `OpenAI(...)` constructor, so a hung request
+   now fails loudly with a normal `openai` timeout exception inside a
+   bounded window instead of hanging. `max_tokens` and `temperature=0.0`
+   were also pinned explicitly on the request: `max_tokens` bounds
+   worst-case latency/cost to a fixed budget instead of however long the
+   model feels like generating, and `temperature=0` removes randomized
+   sampling as a source of run-to-run variance (it does not *guarantee*
+   byte-identical output run to run — a hosted provider can still change
+   routing, quantization, or model weights between calls — but it is the
+   honest, standard meaning of "as reproducible as a live third-party API
+   call can be").
+
+   Getting an actually-clean transcript out of this fix took six live
+   attempts on 2026-09-14, each one a real finding, not a detour:
+   - **700 tokens, original model (`nvidia/nemotron-3.5-lightning:free`,
+     a reasoning model):** made things *worse* — cut the model off
+     mid-chain-of-thought before `reasoning: {"exclude": True}` had a
+     clean answer to hand back, so the raw "Here's a thinking process..."
+     trace leaked into `message.content`, this time truncated by
+     `max_tokens` instead of by the model's own budget. Reasoning tokens
+     count against `max_tokens` even when excluded from the visible
+     response, so too tight a cap starves the hidden reasoning pass.
+   - **2000 tokens, same model:** fixed the easy query (Q001) but not the
+     harder, four-source query (Q091) — same leaked trace, just cut off
+     later. A question that has to reason about four sources under the
+     "don't merge conflicting/differently-scoped evidence" rule needs a
+     longer hidden reasoning pass than a single-source lookup, so "enough"
+     tokens turned out to be query-dependent, not a fixed model property.
+   - **4000 tokens, same model:** worse again, in a *different* way — Q001
+     came back as a hallucinated, off-topic markdown table about LLM
+     benchmarks (nothing to do with procurement), and Q091 again leaked a
+     truncated reasoning trace, this time visibly degrading into
+     incoherent text near the cutoff. Raising the budget further was
+     chasing a moving target on a flaky free-tier reasoning model, not
+     converging on a fix.
+   - **Model switch** (`DEFAULT_OPENROUTER_MODEL` →
+     `inclusionai/ling-3.0-flash-fin:free`, confirmed live against
+     `https://openrouter.ai/api/v1/models` as free and reasoning-disabled
+     by default): the actual fix for the chain-of-thought-leak failure
+     class — a non-reasoning model has no hidden reasoning pass competing
+     with `max_tokens` for budget. At 800 tokens this answered Q001
+     cleanly but hit `max_tokens` on Q091 with **zero visible content at
+     all** (`finish_reason="length"`) — which crashed `generate_answer`
+     with an opaque `TypeError: expected string or bytes-like object, got
+     'NoneType'` deep inside `extract_cited_source_ids`'s citation regex,
+     nowhere near the actual live-provider cause. **Fix**: `client(prompt)`
+     in `make_openrouter_client` now checks for blank/`None` content and
+     raises a clear `RuntimeError` naming the model and the provider's
+     `finish_reason`, right at the boundary where the live response comes
+     back — covered by a new deterministic test,
+     `test_make_openrouter_client_raises_a_clear_error_on_blank_provider_content`,
+     which fakes the `openai` SDK's response shape rather than hitting the
+     network.
+   - **1600 tokens, new model:** Q001 stayed clean; Q091 finally produced
+     a real, coherent, correctly-cited answer — just cut off mid-sentence
+     before finishing its last section, a plain "budget was a bit too
+     small" truncation rather than any of the earlier failure modes.
+   - **2400 tokens, new model:** both queries came back clean, complete,
+     fully cited, zero orphans — see "Demo output" above for the actual
+     transcript this run produced. `MAX_ANSWER_TOKENS = 2400` is what is
+     committed today.
+
+   The honest takeaway is not "2400 is now guaranteed forever" — it is
+   that a free-tier hosted model's behavior at a given token budget is an
+   empirical fact about that specific model on that specific day, not
+   something that can be reasoned out from documentation alone. That is
+   exactly why this module keeps live calls out of the deterministic
+   `pytest` gate in the first place (see "What is tested deterministically
+   vs. smoke-tested live" below) and why this whole debugging trail is
+   recorded here rather than smoothed over.
+2. **The lint gate was claimed but not actually available.** This addendum
+   said "Compile/lint gates: ... clean, no output" without mentioning that
+   `ruff` was never installed — the same gap Day 9 explicitly recorded
+   (`No module named ruff`, see `docs/learning-log.md`), but this time left
+   unstated instead of called out. **Fix**: added `ruff` to
+   `[dependency-groups] dev` in `pyproject.toml` and ran `uv sync` so it is
+   actually installed in `.venv`. Ruff ships hundreds of optional rule
+   plugins; running it with zero configuration against the *whole*
+   pre-Day-10 codebase surfaced 12 findings in files Day 10 never touched
+   (import-sort opinions in `eval_metrics.py`/`hybrid_search.py`,
+   implicit-string-concatenation warnings in `tests/test_chunking.py` and
+   `tests/test_reranking.py`) — fixing all of that would be scope creep
+   well past what Day 10 is about. Instead, `pyproject.toml` now pins
+   `[tool.ruff.lint] select = ["E4", "E7", "E9", "F"]` — pycodestyle error
+   classes plus pyflakes, ruff's own conventional minimal "default" rule
+   set (real correctness issues: syntax errors, unused/undefined names —
+   not style opinions). `./.venv/bin/python -m ruff check src tests`, the
+   exact command the reviewer ran, now passes: `All checks passed!`.
+3. **The optional-live-client import boundary was slightly leaky.**
+   `make_openrouter_client` imported `from openai import OpenAI` *before*
+   checking whether `OPENROUTER_API_KEY` was set. In a correctly-synced
+   `.venv` this made no observable difference (the import always succeeds),
+   but it meant the "fake-client tests don't need live-client dependencies"
+   boundary held only by coincidence, not by construction — a stale or
+   partial environment missing `openai` would fail the no-key guard test
+   with `ModuleNotFoundError` instead of the intended `RuntimeError`. Since
+   this is a learning repo, a boundary that happens to work rather than one
+   that is structurally guaranteed is exactly the kind of gap worth
+   correcting. **Fix**: the `openai` import now happens after the API-key
+   `RuntimeError` check, inside the same function — no observable behavior
+   change with a key present, but a caller with no key now never needs
+   `openai` importable at all.
+
+Non-blocking cleanup applied at the same time: `pyproject.toml` now depends
+directly on `python-dotenv>=1.2.3` instead of the `dotenv` wrapper package
+(`dotenv` is a thin package that itself just depends on `python-dotenv`;
+depending on `python-dotenv` directly removes that indirection). The code's
+`from dotenv import load_dotenv` import is unchanged — both packages expose
+the same `dotenv` module name.
+
+Gate re-run after all fixes (including the new blank-content regression
+test from item 1 above, 134 → 135):
+
+```
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/pytest -q
+# 135 passed in 0.59s
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
 ### What is tested deterministically vs. smoke-tested live
 
 - **Deterministic (`tests/test_generation.py`, part of the standard
@@ -1054,7 +1226,11 @@ running the live smoke test and reading the output.
   OpenRouter call in `src/generation.py`'s `main()`, demoed above. It only
   runs at all when `OPENROUTER_API_KEY` is present (`python-dotenv`'s
   `load_dotenv()` loads it from `.env`); with no key, `main()` prints the
-  retrieved sources and stops, rather than faking an answer.
+  retrieved sources and stops, rather than faking an answer. Each call is
+  now bounded to `OPENROUTER_TIMEOUT_SECONDS` (60s) and
+  `MAX_ANSWER_TOKENS` (700) and runs at `GENERATION_TEMPERATURE` (0.0) —
+  see "Reproducibility hardening" above — so a smoke run either produces an
+  answer or fails loudly within a bounded window, never hangs silently.
 
 ### What remains unevaluated
 

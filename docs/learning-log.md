@@ -1612,7 +1612,7 @@ filtering in the first place (issue 2, above).
 - Drafted Day 10 route in `docs/day-10-augmented-generation-week2-gate.md`.
 - Block 3A implementation: `src/generation.py` (context/citation contract,
   prompt construction, the fake/live generation boundary, and an optional
-  live OpenRouter client) plus `tests/test_generation.py` (14 deterministic
+  live OpenRouter client) plus `tests/test_generation.py` (15 deterministic
   tests). See "Generation contract / methodology evidence" and "Generation
   artifact / test evidence" below for the design and "Day 10: Source-cited
   answer generation" in `docs/eval-report.md` for the full run output.
@@ -1683,27 +1683,42 @@ filtering in the first place (issue 2, above).
 ### Generation artifact / test evidence
 
 - Files created or modified: `src/generation.py` (new), `tests/test_generation.py`
-  (new, 14 tests), plus this doc set (`docs/eval-report.md` Day 10 section,
-  this entry). `pyproject.toml` gained two real dependencies, `dotenv` and
-  `openai`, used only inside `make_openrouter_client`/`main()`.
-- Deterministic tests: `./.venv/bin/pytest -q` → `134 passed` (was 120
-  before Day 10's 14 new tests; unchanged after switching the live client
-  from stdlib `urllib` to `python-dotenv`/`openai`, since none of the 14
-  tests touch the network).
+  (new, 15 tests), plus this doc set (`docs/eval-report.md` Day 10 section,
+  this entry). `pyproject.toml` gained real runtime dependencies
+  `python-dotenv` and `openai` (used only inside
+  `make_openrouter_client`/`main()`), plus `ruff` in `[dependency-groups]
+  dev` and a pinned `[tool.ruff.lint] select` — see "Review feedback
+  addressed" below.
+- Deterministic tests: `./.venv/bin/pytest -q` → `135 passed` (was 120
+  before Day 10's tests were added; 134 after the initial 14, then 135
+  after one more was added same-day for the blank-provider-content guard —
+  see "Review feedback addressed" below. None of these 15 tests touch the
+  network).
 - Compile/lint gates: `./.venv/bin/python -m compileall -q src tests` →
-  clean, no output.
+  clean, no output. `./.venv/bin/python -m ruff check src tests` → `All
+  checks passed!` (ruff was not installed at first — same gap Day 9
+  recorded — fixed same day; see "Review feedback addressed" below).
 - Demo / smoke output: `./.venv/bin/python src/generation.py` against Q001
   (easy, threshold) and Q091 (hard, multi_doc) — full transcript in
   `docs/eval-report.md`'s "Day 10: Source-cited answer generation" →
-  "Demo output" section. Short version: Q001's answer was correct and
-  fully cited; Q091's answer was honestly hedged and fully cited, but
-  incomplete, because retrieval (not generation) missed `POL-001` and
-  `GUIDE-002` in the top-5 shortlist — the `multi_doc` weakness from the
-  Week 2 gate baseline, now visible at the answer layer.
+  "Demo output" section (current version is the sixth live attempt that
+  day — see "Review feedback addressed" below for why). Short version:
+  Q001's answer was correct and fully cited; Q091's answer was thorough,
+  well-structured, and fully cited, but still not fully correct, because
+  retrieval (not generation) missed `POL-001` and `GUIDE-002` in the top-5
+  shortlist — the `multi_doc` weakness from the Week 2 gate baseline, now
+  visible at the answer layer. Worth noting honestly: this final Q091
+  answer takes a small caveated inference beyond €60,000 ("this approval
+  level applies at minimum") rather than the flatter refusal an earlier
+  model gave to the same question — a real, model-dependent difference in
+  how strictly "refuse rather than guess" gets followed, not something
+  today's citation checks can catch.
 - Optional live LLM call: yes — `make_openrouter_client` now uses the
   official `openai` SDK pointed at OpenRouter's `base_url`, and
   `python-dotenv`'s `load_dotenv()` reads `OPENROUTER_API_KEY` from `.env`.
-  Model: OpenRouter's free `nvidia/nemotron-3.5-lightning:free`. It is
+  Model: OpenRouter's free `inclusionai/ling-3.0-flash-fin:free` (switched
+  same day from `nvidia/nemotron-3.5-lightning:free` — see "Review
+  feedback addressed" below for why). It is
   imported by `main()` only; the pytest gate never touches the network
   (confirmed: `make_openrouter_client` raises `RuntimeError` before any
   request if no key is present, and that is the only thing about it a test
@@ -1715,7 +1730,71 @@ filtering in the first place (issue 2, above).
   passed via the `openai` SDK's `extra_body` — see
   `docs/eval-report.md`'s "A live-only bug the deterministic tests
   couldn't catch" for the full story. No unit test could have caught this;
-  it only showed up by actually running the live smoke test.
+  it only showed up by actually running the live smoke test. The call is
+  now also bounded: `OPENROUTER_TIMEOUT_SECONDS` (60s, passed as the
+  `openai` client's `timeout=`), `MAX_ANSWER_TOKENS` (700), and
+  `GENERATION_TEMPERATURE` (0.0) — added after external review found the
+  original client had no timeout at all and could hang indefinitely
+  against a slow free-tier backend. See "Review feedback addressed" below.
+
+### Review feedback addressed (same day)
+
+External code review of this Day 10 addendum caught three real gaps, all
+worth recording rather than quietly fixing:
+
+1. **Live demo not reproducible.** The reviewer's own run of
+   `./.venv/bin/python src/generation.py` hung past 300 seconds with no
+   answer, because `make_openrouter_client` built its `OpenAI(...)` client
+   with no request timeout — a slow provider could block forever with no
+   error. Fixed by adding `timeout=OPENROUTER_TIMEOUT_SECONDS` (60s) to the
+   client, plus pinning `max_tokens` and `temperature=0.0` on the request
+   so latency/cost are bounded and sampling variance is minimized. Getting
+   a genuinely clean transcript out of that fix took six live re-runs, not
+   one, and each failure was a real finding rather than noise:
+   `max_tokens=700` cut the original reasoning model off mid chain-of-
+   thought, so its internal trace leaked into the answer (again — see the
+   bug documented above); `2000` fixed the easy query but not the hard
+   one; `4000` made it worse in a new way (Q001 came back as a
+   hallucinated, off-topic table; Q091 still leaked a garbled trace) —
+   raising the token budget further on that model was chasing a moving
+   target, not converging. The actual fix was switching
+   `DEFAULT_OPENROUTER_MODEL` to a non-reasoning free model
+   (`inclusionai/ling-3.0-flash-fin:free`), which sidesteps the whole
+   chain-of-thought-leak failure class. That swap immediately surfaced a
+   *second* real bug: the new model returned blank content on the harder
+   query, and `generate_answer` crashed with an opaque `TypeError` instead
+   of a clear error — fixed by adding an explicit blank-content check to
+   `make_openrouter_client` (now covered by a 15th deterministic test).
+   Two more token-budget increases (1600, then 2400) later, both demo
+   queries finally came back clean, complete, and fully cited — see the
+   updated "Demo / smoke output" above and `docs/eval-report.md`'s
+   "Reproducibility hardening" for the full six-attempt transcript trail.
+2. **Ruff claimed but not installed.** This entry originally listed
+   "Compile/lint gates" as clean without saying `ruff` was never in
+   `.venv` — the exact gap Day 9 explicitly recorded, left unstated here.
+   Fixed by adding `ruff` to `pyproject.toml`'s dev group and running
+   `uv sync`. Running it with zero config against the whole codebase
+   surfaced 12 findings in files Day 10 never touched (import-sort/string-
+   concatenation style opinions in earlier days' code) — fixing those would
+   be scope creep, so `pyproject.toml` now pins
+   `[tool.ruff.lint] select = ["E4", "E7", "E9", "F"]` (ruff's own
+   conventional minimal rule set: real correctness issues, not style). The
+   reviewer's exact command, `./.venv/bin/python -m ruff check src tests`,
+   now passes cleanly.
+3. **A slightly leaky test boundary.** `make_openrouter_client` imported
+   `openai` *before* checking for an API key, so the "fake-client tests
+   don't need live-client dependencies" boundary held by coincidence (it
+   worked in a synced `.venv`) rather than by construction (a partial
+   environment missing `openai` would have failed the no-key guard test
+   with `ModuleNotFoundError`, not the intended `RuntimeError`). Fixed by
+   moving the import below the key check.
+
+Non-blocking cleanup applied at the same time: `pyproject.toml` now depends
+directly on `python-dotenv` instead of the `dotenv` wrapper package it
+resolved to before — same `from dotenv import load_dotenv` import in the
+code, one fewer indirection in the dependency tree. Full details and the
+gate re-run output for all of the above are in `docs/eval-report.md`'s
+"Reproducibility hardening (post-review fixes, same day)".
 
 ### What failed or was confusing
 
@@ -1834,9 +1913,15 @@ filtering in the first place (issue 2, above).
   cost: it silently shows up as missing evidence in a generated answer,
   not just a lower P@1 number. Not re-fixed today — Day 10's scope was the
   generation layer, not going back to retrieval.
-- Only one live model, one live smoke run (Q001 + Q091), no repeated
-  runs — live LLM output is not deterministic across calls, and today's
-  transcript is one sample, not a distribution.
+- Today's committed transcript is still one sample per query, not a
+  distribution — but it is worth being honest about how much variance
+  actually showed up along the way: six live re-runs across two different
+  free models (chasing the reproducibility fixes in "Review feedback
+  addressed" below) produced answers ranging from clean and complete, to
+  fully hallucinated and off-topic, to a hard crash on blank content. That
+  is not a one-off fluke; it is a real property of relying on a free-tier
+  hosted model for a "reproducible" demo, and it is exactly why this
+  module keeps live calls out of the deterministic `pytest` gate.
 - No LangGraph agents, serving, RAGAS/DeepEval integration, or streaming —
   out of scope by design for Day 10 (see the design doc).
 

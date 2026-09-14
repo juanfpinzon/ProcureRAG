@@ -5,13 +5,27 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "dotenv>=0.9.9",
     "numpy>=2.4.6",
     "openai>=3.13.0",
+    "python-dotenv>=1.2.3",
     "sentence-transformers>=6.0.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.14.4",
 ]
+
+# Ruff ships with hundreds of optional rule plugins beyond its core checks;
+# without pinning `select` explicitly, `ruff check` on a fresh install can
+# enable far more of them than a small learning repo wants (opinionated
+# style rules like forced import sorting/parenthesization across every past
+# day's file, unrelated to anything Day 10 touched). Pinning to the
+# well-known "default" set - E4/E7/E9 (pycodestyle errors: syntax issues,
+# bad indentation, etc.) and F (pyflakes: unused imports/names, undefined
+# names, etc.) - is the conventional minimal lint gate: real correctness
+# bugs, not style opinions. `./.venv/bin/python -m ruff check src tests`
+# passes cleanly against this selection today.
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
