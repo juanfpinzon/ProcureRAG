@@ -1604,3 +1604,68 @@ filtering in the first place (issue 2, above).
   document in a retrieval-only table; (2) verify the exact Boot.dev
   Chapter 10 lesson menu at Day 10 kickoff before writing the route, the
   same verification discipline Day 9 applied to Chapter 9's menu.
+
+## 2026-09-14 — Day 10: Source-Cited Augmented Generation + Week 2 Gate Review
+
+### What I built or drafted
+
+- Drafted Day 10 route in `docs/day-10-augmented-generation-week2-gate.md`.
+- _TODO: Fill in after Juan completes the day._
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Chapter 10 — Augmented Generation.
+  - Lesson 1: `Augmented Generation` — _TODO: Fill in._
+  - Lesson 2: `LLM Summarization` — _TODO: Fill in._
+  - Lesson 3: `Conflict Resolution in Summaries` — _TODO: Fill in._
+  - Lesson 4: `Adding Citations` — _TODO: Fill in._
+  - Lesson 5: `Question Answering` — _TODO: Fill in._
+- Companion source notes: RAGAS/RAG-triad concepts and grounded-generation evaluation — _TODO: Fill in._
+
+### Week 2 gate / retrieval baseline evidence
+
+- Baseline commands at kickoff:
+  - `./.venv/bin/pytest -q` → `120 passed in 0.60s`.
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+  - `./.venv/bin/python src/eval_metrics.py` → reranked chunk Hybrid RRF row P@1 `0.978`, R@5 `0.806`, MRR@10 `0.984`, nDCG@5 `0.869`; filtered-adjusted key rows P@1 `1.000`, R@5 `0.948`, MRR@10 `1.000`; largest weak slice `multi_doc` P@1 `0.600` over 5 queries.
+- Week 2 story Juan can whiteboard — _TODO: Fill in._
+
+### Generation contract / methodology evidence
+
+- Context schema chosen: _TODO: Fill in. Expected shape: source id, title, document id, optional chunk id, text, rank, and score/debug fields._
+- Prompt contract: _TODO: Fill in. Expected shape: answer only from provided context, cite specific sources, preserve procurement thresholds/figures, state insufficient evidence when needed._
+- Citation contract: _TODO: Fill in. Expected shape: every citation marker maps to a real returned source; no orphan citations._
+- Empty-context behavior: _TODO: Fill in._
+- Conflict / multi-source behavior: _TODO: Fill in._
+
+### Generation artifact / test evidence
+
+- Files created or modified by Juan: _TODO: Fill in._
+- Deterministic tests: _TODO: Fill in command + output._
+- Compile/lint gates: _TODO: Fill in command + output._
+- Demo / smoke output: _TODO: Fill in. Include at least one easy query and one multi-document query such as Q091 or Q093._
+- Optional live LLM call: _TODO: Fill in, or state explicitly that Day 10 used fake-client/deterministic generation only._
+
+### What failed or was confusing
+
+- _TODO: Fill in. Suggested prompts: where did citations become tricky, what did the model or fake-client boundary hide, did multi-document generation expose missing context, did the old HER-276 wording conflict with the live repo state?_
+
+### What became clearer
+
+- _TODO: Fill in. Suggested prompts: retrieval vs. answer quality; why citations are an interface, not decoration; why Q091/Q093 are harder than Q001._
+
+### What I can now explain in an interview
+
+- **Augmented generation:** _TODO: Explain retrieve → augment prompt → generate from supplied evidence._
+- **Source-cited answers:** _TODO: Explain how citations map claims back to documents/chunks._
+- **Retrieval quality vs. answer quality:** _TODO: Explain why good retrieval can still produce a bad answer._
+- **Conflict handling:** _TODO: Explain how to answer when sources differ by supplier/scope/date/threshold._
+- **Live LLM test boundary:** _TODO: Explain why unit tests use fake clients and live calls are smoke-only._
+
+### What remains weak
+
+- _TODO: Fill in. Likely candidates: faithfulness/groundedness eval, answer relevance eval, larger multi-document stress set, live model latency/cost, LangGraph/agentic workflows, serving/deployment._
+
+### Next step
+
+- Day 11: _TODO: Fill in based on Day 10 outcome. Likely either deepen grounded-answer evaluation (faithfulness/context relevance/answer relevance) or proceed into Boot.dev Chapter 11 Agentic if source-cited generation is already solid._
