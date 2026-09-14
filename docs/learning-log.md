@@ -1610,17 +1610,30 @@ filtering in the first place (issue 2, above).
 ### What I built or drafted
 
 - Drafted Day 10 route in `docs/day-10-augmented-generation-week2-gate.md`.
-- _TODO: Fill in after Juan completes the day._
+- Block 3A implementation: `src/generation.py` (context/citation contract,
+  prompt construction, the fake/live generation boundary, and an optional
+  live OpenRouter client) plus `tests/test_generation.py` (14 deterministic
+  tests). See "Generation contract / methodology evidence" and "Generation
+  artifact / test evidence" below for the design and "Day 10: Source-cited
+  answer generation" in `docs/eval-report.md` for the full run output.
 
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 10 — Augmented Generation.
-  - Lesson 1: `Augmented Generation` — _TODO: Fill in._
-  - Lesson 2: `LLM Summarization` — _TODO: Fill in._
-  - Lesson 3: `Conflict Resolution in Summaries` — _TODO: Fill in._
-  - Lesson 4: `Adding Citations` — _TODO: Fill in._
-  - Lesson 5: `Question Answering` — _TODO: Fill in._
-- Companion source notes: RAGAS/RAG-triad concepts and grounded-generation evaluation — _TODO: Fill in._
+  - Lesson 1: `Augmented Generation` — Completed.
+  - Lesson 2: `LLM Summarization` — Completed.
+  - Lesson 3: `Conflict Resolution in Summaries` — Completed.
+  - Lesson 4: `Adding Citations` — Completed.
+  - Lesson 5: `Question Answering` — Completed.
+- Companion source notes: RAGAS/RAG-triad vocabulary (context relevance,
+  faithfulness/groundedness, answer relevance) used only as *vocabulary*
+  today, per the design doc's own scope boundary — not integrated as a
+  framework, and no RAGAS score was computed. Day 10's actual checks
+  (citations present, no orphan citations, empty context refuses) are
+  closer to a *faithfulness precondition* than to faithfulness itself: they
+  confirm every claim is traceable to a source, not that the source
+  actually supports the claim, and not that the answer is complete. That
+  distinction is exactly what Q091 (below) makes concrete.
 
 ### Week 2 gate / retrieval baseline evidence
 
@@ -1628,44 +1641,220 @@ filtering in the first place (issue 2, above).
   - `./.venv/bin/pytest -q` → `120 passed in 0.60s`.
   - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
   - `./.venv/bin/python src/eval_metrics.py` → reranked chunk Hybrid RRF row P@1 `0.978`, R@5 `0.806`, MRR@10 `0.984`, nDCG@5 `0.869`; filtered-adjusted key rows P@1 `1.000`, R@5 `0.948`, MRR@10 `1.000`; largest weak slice `multi_doc` P@1 `0.600` over 5 queries.
-- Week 2 story Juan can whiteboard — _TODO: Fill in._
+- Week 2 story Juan can whiteboard: strongest overall row is cross-encoder
+  reranked Hybrid RRF chunk→document (P@1/MRR@10/nDCG@5); first-stage
+  Hybrid RRF chunk→document is still marginally ahead on aggregate R@5
+  (0.811 vs. 0.806). Filtering is methodology-safe (scored against
+  filter-adjusted gold, not raw gold). The named weak spot carried into
+  Day 10 on purpose: `multi_doc` queries (P@1 0.600 over 5 queries) — Q091's
+  live demo below shows exactly what that weakness looks like once it
+  reaches a generated answer, not just a retrieval table.
 
 ### Generation contract / methodology evidence
 
-- Context schema chosen: _TODO: Fill in. Expected shape: source id, title, document id, optional chunk id, text, rank, and score/debug fields._
-- Prompt contract: _TODO: Fill in. Expected shape: answer only from provided context, cite specific sources, preserve procurement thresholds/figures, state insufficient evidence when needed._
-- Citation contract: _TODO: Fill in. Expected shape: every citation marker maps to a real returned source; no orphan citations._
-- Empty-context behavior: _TODO: Fill in._
-- Conflict / multi-source behavior: _TODO: Fill in._
+- Context schema chosen: chunk-level, not rolled up to documents — one dict
+  per source with `source_id` (the 1-based `[n]` citation number), `doc_id`,
+  `title`, `chunk_id`, `text`, `rank`, `score` (`generation.build_sources`).
+  Chunk-level (rather than document-level) so a citation can point at the
+  exact quoted passage, not just "somewhere in this document."
+- Prompt contract (`generation.PROMPT_INSTRUCTIONS`/`build_prompt`): answer
+  only from the numbered sources; cite the source for every specific claim
+  (amount, threshold, %, supplier, date, approval role); if sources
+  disagree or apply to different scopes, name the difference and cite each
+  separately instead of merging; refuse rather than guess when the sources
+  are not enough; never invent a source number.
+- Citation contract (`generation.validate_citations`): every `[n]` in the
+  answer is checked against the real numbered sources and classified as
+  `valid_ids` (traceable), `orphan_ids` (hallucinated — cites a source
+  number that does not exist), or `uncited_ids` (retrieved but never
+  cited). Zero orphan citations in both live demo answers (Q001, Q091).
+- Empty-context behavior: `generate_answer` returns a fixed
+  `INSUFFICIENT_EVIDENCE_ANSWER` and never calls the client at all when
+  `sources` is empty — tested by handing it a client that raises if it is
+  ever called
+  (`test_generate_answer_with_empty_sources_refuses_without_calling_client`).
+- Conflict / multi-source behavior: no contradiction-detection code — it's
+  a prompt rule (rule 2 above), demoed by Q091's 5-source, 4-citation
+  answer rather than by a dedicated conflict-detector module. Q093 (the
+  other suggested conflicting-evidence query, indexation deadbands that
+  genuinely differ by contract) was not run live today — a reasonable next
+  smoke-test target, not something claimed as done.
 
 ### Generation artifact / test evidence
 
-- Files created or modified by Juan: _TODO: Fill in._
-- Deterministic tests: _TODO: Fill in command + output._
-- Compile/lint gates: _TODO: Fill in command + output._
-- Demo / smoke output: _TODO: Fill in. Include at least one easy query and one multi-document query such as Q091 or Q093._
-- Optional live LLM call: _TODO: Fill in, or state explicitly that Day 10 used fake-client/deterministic generation only._
+- Files created or modified: `src/generation.py` (new), `tests/test_generation.py`
+  (new, 14 tests), plus this doc set (`docs/eval-report.md` Day 10 section,
+  this entry). `pyproject.toml` gained two real dependencies, `dotenv` and
+  `openai`, used only inside `make_openrouter_client`/`main()`.
+- Deterministic tests: `./.venv/bin/pytest -q` → `134 passed` (was 120
+  before Day 10's 14 new tests; unchanged after switching the live client
+  from stdlib `urllib` to `python-dotenv`/`openai`, since none of the 14
+  tests touch the network).
+- Compile/lint gates: `./.venv/bin/python -m compileall -q src tests` →
+  clean, no output.
+- Demo / smoke output: `./.venv/bin/python src/generation.py` against Q001
+  (easy, threshold) and Q091 (hard, multi_doc) — full transcript in
+  `docs/eval-report.md`'s "Day 10: Source-cited answer generation" →
+  "Demo output" section. Short version: Q001's answer was correct and
+  fully cited; Q091's answer was honestly hedged and fully cited, but
+  incomplete, because retrieval (not generation) missed `POL-001` and
+  `GUIDE-002` in the top-5 shortlist — the `multi_doc` weakness from the
+  Week 2 gate baseline, now visible at the answer layer.
+- Optional live LLM call: yes — `make_openrouter_client` now uses the
+  official `openai` SDK pointed at OpenRouter's `base_url`, and
+  `python-dotenv`'s `load_dotenv()` reads `OPENROUTER_API_KEY` from `.env`.
+  Model: OpenRouter's free `nvidia/nemotron-3.5-lightning:free`. It is
+  imported by `main()` only; the pytest gate never touches the network
+  (confirmed: `make_openrouter_client` raises `RuntimeError` before any
+  request if no key is present, and that is the only thing about it a test
+  exercises). **A real bug surfaced on the first live run**: this model is
+  a reasoning model, and by default its chain-of-thought came back as
+  `message.content` instead of a clean answer (several paragraphs of
+  "let's examine the sources..." trailing into truncated garbled text).
+  Fixed with OpenRouter's `reasoning: {"exclude": True}` request extension,
+  passed via the `openai` SDK's `extra_body` — see
+  `docs/eval-report.md`'s "A live-only bug the deterministic tests
+  couldn't catch" for the full story. No unit test could have caught this;
+  it only showed up by actually running the live smoke test.
 
 ### What failed or was confusing
 
-- _TODO: Fill in. Suggested prompts: where did citations become tricky, what did the model or fake-client boundary hide, did multi-document generation expose missing context, did the old HER-276 wording conflict with the live repo state?_
+- The first live run did not produce a usable answer at all: instead of a
+  short cited answer, `nvidia/nemotron-3.5-lightning:free` returned several
+  paragraphs of its own internal reasoning ("Let's examine the sources...
+  I'll cite [5] as the primary, or both...") narrating its way through the
+  citation rules, then cut off mid-sentence into garbled, truncated text.
+  The confusing part was realizing this had nothing to do with the prompt
+  contract - the four rules in `PROMPT_INSTRUCTIONS` were followed
+  correctly *inside* the reasoning trace, they just never made it to a
+  clean final answer, because this is a reasoning model and OpenRouter
+  returns its chain-of-thought as part of `message.content` by default.
+  Better prompting could not have fixed this; it needed a provider-level
+  request option (`reasoning: {"exclude": True}`, via `extra_body`) that
+  has nothing to do with RAG at all.
+- Genuinely expected Q091's citation check to at least hint that something
+  was wrong (an orphan citation, a refusal, something visibly broken).
+  Instead it came back with zero orphan citations, every claim backed by a
+  real source, and an honest "no single source provides a combined
+  threshold for EUR 120,000" - a textbook well-behaved answer by every
+  check this project has - while still missing the actual expected answer
+  (Band 3, VP Procurement) because `POL-001` never made it into the top-5
+  shortlist. A clean citation check gave zero signal that retrieval, not
+  generation, was the actual problem.
+- Chunk-level citations mean the same document can appear as two different
+  source numbers in one prompt (`[2]` and `[3]` were both `FAQ-001` in the
+  Q091 run). Correct and auditable (each points at a different quoted
+  chunk), but it reads a little oddly in a user-facing answer - an
+  unresolved UX question, not a bug, and not something today's scope asked
+  to solve.
 
 ### What became clearer
 
-- _TODO: Fill in. Suggested prompts: retrieval vs. answer quality; why citations are an interface, not decoration; why Q091/Q093 are harder than Q001._
+- "Retrieval quality and answer quality are different axes" stopped being
+  a slogan I could recite and became something I actually watched happen:
+  Q091's answer passed every deterministic check this project has (cited,
+  no orphans, honest about the gap) and was still wrong relative to
+  `expected_answer`, for a reason entirely outside the generator's control.
+  Good citations prove an answer is faithful to *what it was given* - they
+  say nothing about whether what it was given was the right evidence.
+- Why citations are an interface, not decoration: `validate_citations`
+  turns "the model wrote [4]" into a checkable fact - does source 4 exist
+  in the list it was actually given - which is the difference between a
+  citation a person has to manually verify against the source text and one
+  code can flag as an orphan automatically. That is the whole reason
+  `source_id` exists as a stable field instead of the model inventing its
+  own labels.
+- Why Q091 is a harder generation test than Q001: Q001 needed one claim
+  from one source. Q091 needed four *separate* claims (approval role,
+  three-bid requirement, record-keeping, security evidence) from four
+  different documents, kept apart rather than blended into one confident
+  composite number - "don't merge conflicting/differently-scoped evidence"
+  is easy to write as a prompt rule and only actually gets tested when a
+  query forces the model to hold several sources apart at once.
+- The live/fake client boundary is not just a testing-hygiene nicety -
+  today's reasoning-leak bug is proof it is load-bearing. The bug lived
+  entirely inside a live provider's default response *shape*, not in this
+  project's prompt or citation logic, so no fake-client test could have
+  exercised it even in principle. Deterministic tests prove the contract;
+  only a live smoke run can prove the contract survives contact with an
+  actual model.
 
 ### What I can now explain in an interview
 
-- **Augmented generation:** _TODO: Explain retrieve → augment prompt → generate from supplied evidence._
-- **Source-cited answers:** _TODO: Explain how citations map claims back to documents/chunks._
-- **Retrieval quality vs. answer quality:** _TODO: Explain why good retrieval can still produce a bad answer._
-- **Conflict handling:** _TODO: Explain how to answer when sources differ by supplier/scope/date/threshold._
-- **Live LLM test boundary:** _TODO: Explain why unit tests use fake clients and live calls are smoke-only._
+- **Augmented generation:** the query is never sent to the model alone.
+  Retrieval produces ranked chunks; `build_sources` turns them into
+  numbered, citable sources; `build_prompt` "augments" the question with
+  those sources plus explicit rules (answer only from them, cite specific
+  claims, refuse if insufficient); only that combined prompt reaches the
+  model. Generation is grounded in retrieved project evidence instead of
+  the model's own parametric memory.
+- **Source-cited answers:** every retrieved chunk gets a small stable
+  `source_id` (`[1]`, `[2]`, ...) tied to its real `doc_id`/`chunk_id`. The
+  model is told to cite that number next to every specific claim.
+  `validate_citations` then checks every `[n]` the model actually wrote
+  against the real numbered list, splitting them into `valid_ids` (real),
+  `orphan_ids` (a citation to a source number that does not exist -
+  hallucinated), and `uncited_ids` (retrieved but never used). A citation
+  is either traceable or flagged, never just a decorative bracket.
+- **Retrieval quality vs. answer quality:** retrieval quality asks whether
+  the right evidence made it into the shortlist (Day 9's P@1/R@5/nDCG@5);
+  answer quality asks whether the model used what it *did* get faithfully
+  and completely. They are measured differently and can diverge in either
+  direction. Q091 is the concrete case: perfect citation hygiene, an
+  honest "sources don't fully specify this," and still an incomplete
+  answer, because `POL-001` was never in the top-5 the generator saw.
+  Good generation cannot correct a retrieval miss it was never shown.
+- **Conflict handling:** not a separate contradiction-detection system -
+  it's a prompt rule (`PROMPT_INSTRUCTIONS` rule 2: if sources disagree or
+  apply to different scopes, name the difference and cite each separately
+  instead of merging them into one number). Demoed by Q091: approval role,
+  bidding requirement, record-keeping, and security evidence stayed as
+  four separately-cited points instead of one blended, overconfident
+  answer.
+- **Live LLM test boundary:** `generate_answer(query, sources, client)`
+  takes `client` as a plain `prompt -> text` callable. Tests pass a fake
+  function returning canned text, so the entire prompt/citation/empty-
+  context contract is deterministic and network-free.
+  `make_openrouter_client` builds a real one, imported only by `main()`,
+  never by the test suite. Unit tests should verify *this project's*
+  logic, not a third-party model's behavior - and today's reasoning-leak
+  bug is direct evidence why: it was a live-provider-only failure mode, so
+  it could only ever have been caught by actually running the live call,
+  never by a fake-client unit test, however thorough.
 
 ### What remains weak
 
-- _TODO: Fill in. Likely candidates: faithfulness/groundedness eval, answer relevance eval, larger multi-document stress set, live model latency/cost, LangGraph/agentic workflows, serving/deployment._
+- No faithfulness/groundedness or answer-relevance *scoring* exists yet —
+  today's checks are structural (citations present, no orphans, empty
+  context refuses), not "is this answer actually correct and complete."
+  Q091's answer above had perfect citation hygiene and was still
+  incomplete; nothing automated caught that today, a human comparison
+  against `expected_answer` did.
+- The `multi_doc` retrieval weakness (Day 9) now has a concrete downstream
+  cost: it silently shows up as missing evidence in a generated answer,
+  not just a lower P@1 number. Not re-fixed today — Day 10's scope was the
+  generation layer, not going back to retrieval.
+- Only one live model, one live smoke run (Q001 + Q091), no repeated
+  runs — live LLM output is not deterministic across calls, and today's
+  transcript is one sample, not a distribution.
+- No LangGraph agents, serving, RAGAS/DeepEval integration, or streaming —
+  out of scope by design for Day 10 (see the design doc).
 
 ### Next step
 
-- Day 11: _TODO: Fill in based on Day 10 outcome. Likely either deepen grounded-answer evaluation (faithfulness/context relevance/answer relevance) or proceed into Boot.dev Chapter 11 Agentic if source-cited generation is already solid._
+- Day 11: deepen grounded-answer evaluation before moving on to Chapter 11
+  Agentic - source-cited generation is solid at the *contract* level
+  (citations present, traceable, empty-context refuses), but Q091 proved
+  today that contract passing and answer correctness are not the same
+  thing, and right now the only way to tell them apart is a human reading
+  the output against `expected_answer` by hand. The concrete next-layer
+  candidates, in priority order: (1) a faithfulness/groundedness check
+  that verifies a cited source's text actually *supports* the claim next
+  to it, not just that the source number exists - a stronger bar than
+  today's `validate_citations`; (2) an answer-completeness check against
+  `expected_answer` for at least the `multi_doc` slice, so a case like
+  Q091 is caught automatically instead of by manual inspection; (3) as a
+  secondary, parallel track - not blocking (1)/(2) - revisit the `multi_doc`
+  retrieval gap itself (`POL-001`/`GUIDE-002` missing from Q091's top-5),
+  since Day 10 gave that Day 9 weak slice a concrete, visible downstream
+  cost for the first time.

@@ -1,14 +1,20 @@
 # Eval Report — v1 Hybrid Consolidation Baseline
 
 Date: 2026-09-11 (Day 7); Day 8 reranking addendum added 2026-09-12; Day 9
-graded/filtered/error-slice addendum added 2026-09-14
+graded/filtered/error-slice addendum added 2026-09-14; Day 10 source-cited
+generation addendum added 2026-09-14
 Status: full baseline, 93/93 v1 queries, nine retrieval methods (six
 required document-level rows + two chunk-level hybrid rows added as a Day 7
 follow-up, plus Day 8's cross-encoder reranked chunk row — see "Day 8:
 Cross-encoder reranking" below), plus Day 9's graded (nDCG@5), filtered-
 adjusted (21 queries), and error-slice (query type / difficulty / filtered /
 primary-count) evaluations — see "Day 9: Graded relevance, filter-adjusted
-evaluation, and error slices" below
+evaluation, and error slices" below. Day 10 adds the first answer-generation
+layer on top of this retrieval baseline — see "Day 10: Source-cited answer
+generation" below. This file still only evaluates *retrieval*; Day 10's
+generation layer is evaluated separately, and only by deterministic
+contract checks so far (see that section for exactly what is and is not
+covered).
 
 This is Day 7's evidence artifact: it turns Day 6's qualitative "hybrid
 looked better on these five queries" demo into a measured baseline across
@@ -836,6 +842,231 @@ report's error-slice analysis points at — see the next step in
   binary-table rows — chosen because those are the two rows every other
   Day 9 comparison (graded table, error slices) also focuses on, not
   because filtering the other seven would be harder to build.
+
+## Day 10: Source-cited answer generation
+
+Date: 2026-09-14
+Implementation: `src/generation.py` — `build_sources`/`format_sources_block`
+(the context contract: a ranked chunk list becomes numbered, citable
+sources); `build_prompt`/`PROMPT_INSTRUCTIONS` (the augmentation step:
+answer only from the numbered sources, cite specific ones, don't merge
+conflicting evidence, refuse rather than guess); `extract_cited_source_ids`/
+`validate_citations` (the citation contract: every `[n]` in the answer is
+checked against the real numbered sources); `generate_answer`/
+`INSUFFICIENT_EVIDENCE_ANSWER` (the generation boundary — a plain
+`client(prompt) -> text` callable, fake in tests, live for the demo below);
+`make_openrouter_client` (an optional live client — the official `openai`
+Python SDK pointed at OpenRouter's OpenAI-compatible `base_url`, with
+`python-dotenv`'s `load_dotenv()` reading `OPENROUTER_API_KEY` out of
+`.env`; both are real `pyproject.toml` dependencies now, used only inside
+this one function). Tests in `tests/test_generation.py` — 14 new
+deterministic tests, no network calls.
+
+Everything below came from actually running the commands shown on
+2026-09-14 — none of it is hand-typed or projected ahead of the code.
+
+### Gate re-run before building
+
+```
+./.venv/bin/pytest -q
+# 120 passed in 0.60s   (before Day 10's tests were added)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python src/eval_metrics.py
+# Cross-encoder reranked Hybrid RRF chunk→document: P@1 0.978, R@5 0.806, MRR@10 0.984, nDCG@5 0.869
+# Largest weak slice: reranked multi_doc P@1 0.600 over 5 queries
+```
+
+Same retrieval story Day 9 left off with: the reranked chunk-level Hybrid
+RRF row is still the strongest overall, and `multi_doc` queries are still
+the weakest slice. Day 10 exists to find out what that retrieval weakness
+looks like once it reaches an actual generated answer — see "Demo output"
+below, where it shows up exactly as expected.
+
+### The context/citation contract
+
+- **Context schema** (one dict per source, built by `build_sources` from a
+  ranked chunk list): `source_id` (the 1-based citation number shown in the
+  prompt), `doc_id`, `title`, `chunk_id`, `text`, `rank`, `score`. Sources
+  are chunk-level, not rolled up to documents — two chunks from the same
+  document can be, and in the Q091 demo below are, two separate numbered
+  sources, so a citation can point at the exact quoted passage instead of
+  just "somewhere in this document."
+- **Prompt contract**: answer only from the numbered sources; cite the
+  source for every specific claim (amount, threshold, percentage, supplier,
+  date, approval role); if sources disagree or apply to different
+  scopes, name the difference and cite each separately rather than merging
+  them; refuse rather than guess when the sources are not enough; never
+  invent a source number.
+- **Citation contract**: `validate_citations` checks every `[n]` the model
+  wrote against the real source list and reports `valid_ids` (real,
+  traceable citations), `orphan_ids` (a citation to a source number that
+  does not exist — a hallucinated citation), and `uncited_ids` (a real
+  source that was retrieved but never cited). Both demo answers below came
+  back with zero orphan citations.
+- **Empty-context behavior**: `generate_answer` returns the fixed
+  `INSUFFICIENT_EVIDENCE_ANSWER` and never calls the client at all when no
+  sources were retrieved — tested directly in
+  `tests/test_generation.py::test_generate_answer_with_empty_sources_refuses_without_calling_client`
+  by handing it a client that raises if it is ever invoked.
+- **Test boundary**: every deterministic test uses a small fake
+  `client(prompt) -> text` function. `make_openrouter_client` (a real,
+  live client) is imported by `main()` only, never by the test suite.
+
+### Demo output (real run, 2026-09-14, live OpenRouter call)
+
+`./.venv/bin/python src/generation.py`, with `OPENROUTER_API_KEY` set in
+`.env` and the default model
+(`nvidia/nemotron-3.5-lightning:free` — a free, text-to-text OpenRouter
+model, confirmed live against `https://openrouter.ai/api/v1/models` on
+2026-09-14; see `src/generation.py`'s `DEFAULT_OPENROUTER_MODEL` comment if
+that model is ever retired):
+
+```
+Q001 (threshold): What approval is required for a EUR 60,000 purchase order?
+  retrieved sources:
+    [1] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+    [2] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+    [3] POL-001 — Global Procurement Policy — Approval Thresholds and Delegation of Authority
+    [4] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+    [5] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+
+  answer:
+    VP Procurement approval with a Finance review [4].
+
+  citation check: {'cited_ids': [4], 'valid_ids': [4], 'orphan_ids': [], 'uncited_ids': [1, 2, 3, 5]}
+
+Q091 (multi_doc): What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
+  retrieved sources:
+    [1] SOP-001 — Standard Operating Procedure — Three-Bid Requirement and Sourcing Exception Handling
+    [2] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+    [3] FAQ-001 — FAQ — Purchase Orders, Approvals and Starting Work
+    [4] POL-003 — Information Security and Data Protection Requirements for Technology Suppliers
+    [5] SOP-001 — Standard Operating Procedure — Three-Bid Requirement and Sourcing Exception Handling
+
+  answer:
+    For a EUR 120,000 SaaS renewal, the required approvals and security
+    evidence are as follows, each sourced from the numbered documents and
+    kept separate as their scopes differ:
+
+    - Approval role: [3] states that a €60,000 commitment requires VP
+      Procurement approval with a Finance review, not Category Manager
+      approval [3]. [3] also explicitly states that splitting a request to
+      keep it under a threshold is not permitted [3]. [3] does not specify
+      a VP approval threshold for amounts above €60,000.
+    - Three-bid requirement: [2] states that three qualified bids are
+      required above €25,000 and up to €250,000 of total committed value
+      [2]. Since EUR 120,000 falls within this range, three bids must be
+      obtained.
+    - Record keeping and second-renewal obligations: [5] requires that for
+      every award above €25,000, [supporting records] must exist in Ariba
+      Sourcing [...]. Records are retained for seven years [5]. On the
+      second renewal, the buyer must record a plan and a date for a
+      competitive event or a Category Council decision [5].
+    - Security evidence for technology/SaaS: [4] states that risk
+      acceptance may not exceed 12 months and may not be renewed more than
+      once. Certification evidence is refreshed annually. A lapsed
+      certificate is a control failure and triggers a review of whether
+      the service may continue [4].
+
+    No single source provides a combined approval threshold for EUR
+    120,000 beyond the individual statements above.
+
+  citation check: {'cited_ids': [2, 3, 4, 5], 'valid_ids': [2, 3, 4, 5], 'orphan_ids': [], 'uncited_ids': [1]}
+```
+
+(Full untruncated source text is longer in the real terminal output; the
+`[n]` header lines above are reproduced exactly, quoted text is trimmed
+here for space. This is the *second* live run of the day — see "A
+live-only bug the deterministic tests couldn't catch" below for what the
+first run actually produced and why it needed fixing before this one.)
+
+**Q001 reads as a genuine success.** The one claim in the answer (VP
+Procurement, Finance review) is backed by source `[4]`, which really does
+say that, and nothing else is asserted beyond what `[4]` supports — exactly
+the "answer only from the sources, cite the specific claim" contract
+working as designed.
+
+**Q091 is the more important result, precisely because it is not a clean
+win.** The retrieved top-5 sources for this query do *not* include
+`POL-001` (the approval-bands policy — grade 2/primary for this query) or
+`GUIDE-002` (the renewal-timing guide — also grade 2), even though both are
+in `expected_relevant_ids` for Q091 and this is exactly the `multi_doc`
+weak slice Day 9 already flagged (P@1 0.600 over 5 queries). The model's
+answer is *well-behaved* given what it was actually handed: zero orphan
+citations, every claim backed by a real source, sources kept separate
+rather than merged ("kept separate as their scopes differ"), and it
+explicitly says "[3] does not specify a VP approval threshold for amounts
+above €60,000" / "No single source provides a combined approval threshold
+for EUR 120,000" rather than guessing Band 3 from memory — the prompt's
+refusal rule working as intended. But the answer is still *incomplete*
+relative to the real expected answer (Band 3, €50,000–€250,000, VP
+Procurement approval), because the retrieval step never surfaced the one
+document that states it. **This is the single clearest piece of evidence in
+this project for "retrieval quality and answer quality are different
+axes": a generator with good citation hygiene cannot correct for a
+retrieval miss it was never shown.** Good citations prove the answer is
+faithful to *what it was given* — they say nothing about whether what it
+was given was complete.
+
+### A live-only bug the deterministic tests couldn't catch
+
+The first live run today (against `DEFAULT_OPENROUTER_MODEL`,
+`nvidia/nemotron-3.5-lightning:free`, called with the plain `openai` SDK
+default request) did not produce the clean answers above. It produced
+several paragraphs of the model's raw internal reasoning ("Let's examine
+the sources... I'll cite [5] as the primary, or both...") narrating its way
+through the citation rules, then trailed off mid-sentence into truncated,
+garbled text once it ran out of output budget — `nvidia/nemotron-3.5-lightning`
+is a *reasoning* model, and by default OpenRouter returns its
+chain-of-thought as part of `message.content` instead of a clean final
+answer. The fix, applied to `make_openrouter_client`, is an
+OpenRouter-specific request extension passed through the `openai` SDK's
+`extra_body` (not a normal keyword argument, since it is not part of the
+standard OpenAI API): `extra_body={"reasoning": {"exclude": True}}`. With
+that set, the model still reasons internally but only the final answer
+comes back — exactly the two answers shown above.
+
+This is worth recording for two reasons. First, it is real, not
+hypothetical, evidence for this project's citation-gate philosophy: a
+model can be perfectly capable and still return something unusable for a
+user-facing answer for reasons that have nothing to do with retrieval or
+prompt correctness. Second, it is exactly why the design doc insists live
+LLM calls stay out of the deterministic `pytest` gate — no fake-client unit
+test could have caught this, because the bug was in a specific model's
+default response *shape* on a specific hosted provider, not in this
+project's own prompt/citation logic. It was only visible by actually
+running the live smoke test and reading the output.
+
+### What is tested deterministically vs. smoke-tested live
+
+- **Deterministic (`tests/test_generation.py`, part of the standard
+  `pytest` gate, no network)**: source numbering and field mapping, prompt
+  contains every source id and the question, citation extraction/
+  deduplication, orphan- and uncited-citation detection, the empty-context
+  refusal short-circuit (asserted by a client that raises if called), a
+  fake client's text passing through unchanged, a multi-source answer
+  validating all its citations, and `make_openrouter_client` raising
+  immediately (before any network call) when no API key is available.
+- **Live smoke-test only (not part of the pytest gate)**: the actual
+  OpenRouter call in `src/generation.py`'s `main()`, demoed above. It only
+  runs at all when `OPENROUTER_API_KEY` is present (`python-dotenv`'s
+  `load_dotenv()` loads it from `.env`); with no key, `main()` prints the
+  retrieved sources and stops, rather than faking an answer.
+
+### What remains unevaluated
+
+Day 10 adds simple, deterministic *contract* checks (citations present, no
+orphan citations, empty context refuses, a prompt actually contains its
+sources) — it does not add faithfulness, completeness, or answer-relevance
+scoring. Whether an answer is *fully correct*, not just *cited correctly*,
+still requires either a human reading it against `expected_answer` (as
+done by hand for Q001/Q091 above) or a future LLM-as-judge/RAGAS-style
+layer scored against the same rubric discipline Day 9 used for retrieval
+grades. That is explicitly next-layer work, not something this addendum
+claims to have solved.
 
 ## Known limitations / next steps
 
