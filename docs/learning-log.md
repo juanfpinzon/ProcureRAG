@@ -1400,8 +1400,14 @@ filtering in the first place (issue 2, above).
     `multi_doc` (several hard queries are also multi-document ones).
   - Filtered vs. unfiltered: unfiltered *retrieval* on the 21
     filter-carrying queries (no filter applied) already scores 1.000 P@1
-    for the reranked method but only 0.762 R@5 - filtering (a separate
-    table) raises that same subset's R@5 to 0.948.
+    for the reranked method but only 0.762 R@5 *against the original,
+    unadjusted gold*. That 0.762 is not the right number to compare
+    filtering against, though - scored against the *same filter-adjusted*
+    gold the filtered table uses, unfiltered retrieval already reaches
+    0.901 R@5 (most of the jump is the gold-set fix, not retrieval
+    filtering). Filtering retrieval on top of that is real but smaller:
+    0.901 → 0.948. See "Evaluation artifact" below for the full four-way
+    breakdown that separates these two effects.
   - Single- vs. multi-primary: fairly balanced split (45 vs. 48 queries);
     first-stage RRF is meaningfully weaker on single-primary (0.911 vs.
     0.958 P@1), but the reranker erases that gap entirely (1.000 vs. 0.958
@@ -1425,8 +1431,14 @@ filtering in the first place (issue 2, above).
     a graded table, a filtered table, and 8 slice tables - memoization is
     what kept that cheap).
 - New graded metric table (nDCG@5, 9 methods): best is the reranked row at
-  **0.869**, worst is whole-document dense at **0.740** - same ranking as
-  the binary table, but every number sits well below its own method's P@1
+  **0.869**, worst is whole-document dense at **0.740** - the broad
+  winner/loser story matches the binary table (same best row, same
+  first-stage row, same weakest row), but the *strict* ranking is not
+  identical: nDCG@5 breaks two exact P@1 ties (Dense chunk→document vs.
+  Hybrid weighted chunk→document, tied at 0.925 P@1, split 0.828 vs. 0.851
+  nDCG@5; BM25 vs. Hybrid RRF document, tied at 0.860 P@1, split 0.792 vs.
+  0.799 nDCG@5) rather than merely confirming an order P@1 had already
+  fully settled. Every number also sits well below its own method's P@1
   (0.978 P@1 vs. 0.869 nDCG@5 for the reranked row), showing real,
   previously invisible room between "found something relevant" and
   "found the *primary* evidence, ranked well".
@@ -1436,6 +1448,28 @@ filtering in the first place (issue 2, above).
   21 queries), because filtering narrows the candidate universe so much
   for these specific queries that first-stage retrieval is already near
   ceiling before the reranker ever runs.
+- **R@5 four-way breakdown, to isolate what filtering the gold set vs.
+  filtering retrieval each contribute** (a review finding on the first
+  draft of this section - it had conflated the two): scoring the same 21
+  queries under unfiltered retrieval + raw gold, unfiltered retrieval +
+  filter-adjusted gold, filtered retrieval + filter-adjusted gold, and
+  filtered retrieval + raw gold:
+
+  | Retrieval | Gold | Hybrid RRF chunk R@5 | Reranked chunk R@5 |
+  |---|---|---:|---:|
+  | Unfiltered | Raw | 0.786 | 0.762 |
+  | Unfiltered | Adjusted | 0.925 | 0.901 |
+  | Filtered | Adjusted | 0.948 | 0.948 |
+  | Filtered | Raw | 0.560 | 0.560 |
+
+  Fixing the gold set alone (row 1 → row 2, retrieval unchanged) accounts
+  for most of the movement (+0.139 both methods) - that's the methodology
+  correction, not a retrieval result. Filtering retrieval on top of the
+  *same* adjusted gold (row 2 → row 3) is the real filtering effect, and
+  it's real but smaller: +0.023 for Hybrid RRF, +0.047 for reranked. Row 4
+  (filtered retrieval scored against raw gold, 0.560) exists only to show
+  why raw gold can't be reused for filtered retrieval - it reads as a
+  collapse, but it's an artifact of penalizing correct filtering.
 - New error-slice tables: 4 dimensions × 2 methods = 8 tables; see
   "Evaluation contract" above for the headline findings from each.
 - Tests added: 23 new tests in `tests/test_eval_metrics.py` - 6 for

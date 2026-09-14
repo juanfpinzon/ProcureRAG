@@ -610,14 +610,29 @@ grades into the best possible order in the top k slots.
 | Hybrid weighted, α=0.5 (BM25 + dense) | chunk→document | 0.851 |
 | Cross-encoder reranked Hybrid RRF (BM25 + dense) | chunk→document | **0.869** |
 
-**Measured, not assumed.** The method ranking is identical to the binary
-P@1 ranking — the cross-encoder reranked row is still best, chunk-level
-hybrid RRF is still the best first-stage row, dense-alone (whole document)
-is still weakest. That is expected, not a coincidence to explain away: a
-method that is better at ranking *any* relevant document first is very
-likely also better at ranking the *primary* one first, since a primary
-document is relevant by definition. What nDCG adds beyond confirming that
-ordering is *how much room is left* — every nDCG@5 number here is
+**Measured, not assumed.** The broad winner/loser story is consistent with
+the binary P@1 table — the cross-encoder reranked row is still best,
+chunk-level hybrid RRF is still the best first-stage row, dense-alone
+(whole document) is still weakest — but the *strict* ranking is not
+identical, and that difference is itself informative, not noise to
+smooth over. Two pairs tie exactly on P@1 and nDCG@5 tells them apart:
+Dense chunk→document and Hybrid weighted chunk→document tie at 0.925 P@1,
+but nDCG@5 separates them (0.828 vs. **0.851** — weighted fusion ranks the
+*primary* document better even though both find *a* relevant document at
+rank 1 equally often); BM25 and Hybrid RRF (document) tie at 0.860 P@1,
+and nDCG@5 again separates them (0.792 vs. **0.799**). In both cases the
+nDCG-implied order is a tie-break, not an inversion of two methods P@1 had
+already told apart — no method that clearly beats another on P@1 loses to
+it on nDCG@5 anywhere in this table. So the correct claim is: **nDCG@5
+confirms the broad story and breaks every P@1 tie, exposing ranking-
+quality differences binary precision cannot see, not "the two metrics
+agree in every respect."** That is expected in direction, not a
+coincidence to explain away: a method that is better at ranking *any*
+relevant document first is very likely also better at ranking the
+*primary* one first, since a primary document is relevant by definition —
+but "very likely" is not "always identical", and the ties above are where
+that gap actually shows up. What nDCG adds beyond confirming that ordering
+is *how much room is left* — every nDCG@5 number here is
 noticeably below its own method's P@1 (e.g. the reranked row is 0.978 P@1
 but only 0.869 nDCG@5), because P@1 only asks about rank 1, while nDCG@5
 also credits (and can be hurt by) what happens at ranks 2-5 — a primary
@@ -684,13 +699,37 @@ in "Metadata filtering" above); 0 lose every gold id.
 
 **Measured, not assumed — three findings, not one.**
 
-1. **Filtering measurably helps, compared to not filtering the same 21
-   queries at all.** The error-slice table below shows what these same 21
-   queries score with *unfiltered* retrieval (same methods, original gold):
-   Hybrid RRF chunk→document gets 0.905 P@1 / 0.786 R@5 unfiltered on this
-   subset, and the reranked method gets 1.000 P@1 / 0.762 R@5. Filtering
-   moves R@5 for the reranked method from 0.762 to 0.948 — a real recall
-   gain from removing off-scope distractors, not just a precision effect.
+1. **The R@5 jump from unfiltered to filtered is mostly a methodology
+   correction, not a retrieval effect — and the two have to be reported
+   separately, not conflated.** An earlier draft of this section compared
+   0.762 (unfiltered retrieval, scored against the *original* gold) against
+   0.948 (filtered retrieval, scored against *filter-adjusted* gold) and
+   called the whole 0.186 gap a filtering benefit. That comparison changes
+   two things at once — what got retrieved *and* what it was scored
+   against — so it cannot isolate what filtering the *retrieval* itself
+   contributed. Separating the two variables, over the same 21 queries:
+
+   | Retrieval | Gold set | Hybrid RRF chunk→document R@5 | Reranked chunk→document R@5 |
+   |---|---|---:|---:|
+   | Unfiltered | Raw (original `expected_relevant_ids`) | 0.786 | 0.762 |
+   | Unfiltered | Filter-adjusted | 0.925 | 0.901 |
+   | Filtered | Filter-adjusted | 0.948 | 0.948 |
+   | Filtered | Raw | 0.560 | 0.560 |
+
+   Reading down each column: **switching from raw to adjusted gold (row 1
+   → row 2), with retrieval held fixed, accounts for most of the movement**
+   (+0.139 for Hybrid RRF, +0.139 for reranked) — that is the effect of
+   fixing an unfair ground truth, not of filtering anything. **Actually
+   filtering retrieval on top of that same adjusted gold (row 2 → row 3)
+   is the real, apples-to-apples filtering effect**, and it is real but
+   much smaller: +0.023 for Hybrid RRF (0.925 → 0.948), +0.047 for
+   reranked (0.901 → 0.948). The fourth row (filtered retrieval scored
+   against *raw* gold, 0.560) is included only to show why raw gold cannot
+   be reused for filtered retrieval at all — it looks like a severe
+   regression, but it is an artifact of penalizing a filtered retriever for
+   correctly excluding out-of-scope secondary documents the filter was
+   always going to remove, exactly the unfairness this whole methodology
+   exists to correct.
 2. **Both methods land on identical aggregate numbers, but not because
    reranking did nothing.** Two queries (Q007, Q055) have different
    document orderings after reranking than before it — reranking is doing
@@ -810,8 +849,11 @@ report's error-slice analysis points at — see the next step in
   reused as-is, scored against retrieval that actually applies the filter.
   17 of 21 filtered queries do have at least one `expected_relevant_ids`
   entry their own filter would exclude, confirming the concern this bullet
-  raised — and the fix measurably helps (R@5 0.762 → 0.948 for the
-  reranked method on those 21 queries, filtered vs. unfiltered).
+  raised. Isolated apples-to-apples (same filter-adjusted gold on both
+  sides — see "Filter-adjusted evaluation" finding 1 above for why raw
+  gold can't be the comparison point), filtering retrieval on top of the
+  gold-set fix still measurably helps: R@5 0.901 → 0.948 for the reranked
+  method, 0.925 → 0.948 for first-stage Hybrid RRF.
 - **Done, no longer a gap**: chunk-level hybrid (BM25-over-chunks +
   dense-over-chunks, fused, rolled up to documents) is now in the table
   above as two rows, and — confirming the suspicion this bullet originally
