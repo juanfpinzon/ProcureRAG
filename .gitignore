@@ -8,3 +8,4 @@ data/*
 !data/corpus_v1/
 !data/corpus_v1/*.jsonl
 src/procurerag.egg-info/
+.env
