@@ -317,7 +317,7 @@ OPENROUTER_TIMEOUT_SECONDS = 60.0
 # harder query finally produced a real, well-cited, coherent answer - just
 # one still cut off mid-sentence before finishing its last section. 2400
 # gives it enough room to actually finish.
-MAX_ANSWER_TOKENS = 2400
+MAX_ANSWER_TOKENS = 3000
 GENERATION_TEMPERATURE = 0.0
 
 
