@@ -1943,3 +1943,74 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
   retrieval gap itself (`POL-001`/`GUIDE-002` missing from Q091's top-5),
   since Day 10 gave that Day 9 weak slice a concrete, visible downstream
   cost for the first time.
+
+## 2026-09-15 — Day 11: Grounded-Answer Evaluation + Completeness Checks
+
+### What I built or drafted
+
+- Drafted Day 11 route in `docs/day-11-grounded-answer-evaluation.md`.
+- _TODO: Fill in Juan-owned implementation artifacts, likely `src/generation_eval.py` and `tests/test_generation_eval.py`, after building._
+
+### Course checkpoint completed
+
+- Boot.dev RAG chapter/lesson: Chapter 10 — Augmented Generation, reactivated as an evaluation lens before moving to Chapter 11 Agentic.
+  - Lesson 1: `Augmented Generation` — _TODO: Fill in._
+  - Lesson 2: `LLM Summarization` — _TODO: Fill in._
+  - Lesson 3: `Conflict Resolution in Summaries` — _TODO: Fill in._
+  - Lesson 4: `Adding Citations` — _TODO: Fill in._
+  - Lesson 5: `Question Answering` — _TODO: Fill in._
+- Companion source notes: DeepEval/RAGAS vocabulary for faithfulness, answer/response relevancy, context precision/recall/relevancy, factual correctness, semantic similarity, and deterministic string/exact-match checks — _TODO: Fill in what was actually used._
+
+### Baseline evidence
+
+- Kickoff checks:
+  - `./.venv/bin/pytest -q` → `135 passed in 2.44s`.
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+  - `./.venv/bin/python -m ruff check src tests` → `All checks passed!`.
+- Starting weakness: Day 10's Q091 answer had valid citations and zero orphan source ids, but still missed key expected evidence because `POL-001` and `GUIDE-002` were absent from the top-5 context. Day 11 exists to make that kind of gap visible in deterministic eval output.
+
+### Generation-eval contract / methodology evidence
+
+- _TODO: Fill in the eval input shape: query row, answer text, Day 10 sources, citation report, expected answer/evidence._
+- _TODO: Fill in the finding/output shape: query id, check name, pass/fail/severity, expected evidence/fact, actual cited/context docs, reason._
+- _TODO: Fill in the exact checks implemented._
+  - Citation validity / orphan source ids: _TODO._
+  - Source-support / faithfulness proxy: _TODO._
+  - Answer completeness against expected answer/evidence: _TODO._
+  - Retrieval-context recall or missing expected docs: _TODO._
+
+### Artifact / test evidence
+
+- Files created or modified: _TODO: Fill in._
+- Deterministic tests: _TODO: Fill in exact command and result._
+- Compile/lint gates: _TODO: Fill in exact command and result._
+- Demo / CLI output: _TODO: Fill in `./.venv/bin/python src/generation_eval.py` or equivalent output._
+- Q091 failure evidence: _TODO: Explain exactly which automated finding catches the known incomplete-answer behavior._
+- Passing-control evidence: _TODO: Explain the passing fixture, likely Q001 or another simple query._
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+- Hint: separate three failure classes clearly: (1) orphan/decorative citation, (2) cited source does not support a claim, (3) answer omits required evidence even though its cited claims are individually supported.
+
+### What became clearer
+
+- _TODO: Fill in._
+- Hint: explain why source ids prove traceability, not support; why completeness requires reference evidence; and why retrieval-context recall and generated-answer faithfulness are separate axes.
+
+### What I can now explain in an interview
+
+- **Citation validity vs. source support:** _TODO: Fill in._
+- **Faithfulness/groundedness vs. answer completeness:** _TODO: Fill in._
+- **Why Q091 is a better eval target than only Q001:** _TODO: Fill in._
+- **Why deterministic fixtures come before LLM-as-judge frameworks:** _TODO: Fill in._
+- **How this maps to DeepEval/RAGAS terms later:** _TODO: Fill in._
+
+### What remains weak
+
+- _TODO: Fill in._
+- Expected candidates: LLM-as-judge calibration, broader query coverage beyond curated fixtures, real claim segmentation, framework-backed RAGAS/DeepEval runs, tracing/observability, and the underlying `multi_doc` retrieval gap.
+
+### Next step
+
+- _TODO: Fill in after Day 11 is complete._
