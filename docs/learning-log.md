@@ -1732,8 +1732,11 @@ filtering in the first place (issue 2, above).
   couldn't catch" for the full story. No unit test could have caught this;
   it only showed up by actually running the live smoke test. The call is
   now also bounded: `OPENROUTER_TIMEOUT_SECONDS` (60s, passed as the
-  `openai` client's `timeout=`), `MAX_ANSWER_TOKENS` (2400), and
-  `GENERATION_TEMPERATURE` (0.0) — added after external review found the
+  `openai` client's `timeout=`), `MAX_ANSWER_TOKENS` (2400 when this entry
+  was written; raised to 3000 later the same day by a separate commit —
+  see `docs/eval-report.md`'s Day 11 addendum for the current value and
+  why Day 11's fixtures still freeze this original 2400-token transcript
+  on purpose), and `GENERATION_TEMPERATURE` (0.0) — added after external review found the
   original client had no timeout at all and could hang indefinitely
   against a slow free-tier backend. See "Review feedback addressed" below.
 
@@ -2057,6 +2060,15 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 
 ### What remains weak
 
+- `CURATED_FIXTURES` freezes Day 10's real transcript, captured when
+  `MAX_ANSWER_TOKENS` was 2400 — that value is 3000 now (bumped the same
+  day, `docs/eval-report.md`'s Day 11 addendum has the full note), and a
+  fresh live run confirmed the Q091 wording actually differs today.
+  `check_context_recall` is unaffected (it only reads `sources`/
+  `relevance_grades`, not `answer_text`), but `check_expected_terms` and
+  `check_unsupported_inference` are graded against a frozen transcript,
+  not current model behavior — a deliberate tradeoff for determinism, but
+  a real one, not a hidden one.
 - `check_expected_terms` only has curated terms for 2 of the 93 v1 queries (Q001, Q091) — there is no generic coverage, by design, and extending it means hand-reading more `expected_answer`s.
 - `check_unsupported_inference`'s hedge-phrase list is hand-picked and small — a model that extrapolates without using one of those specific phrases sails through undetected.
 - `check_context_recall` passes vacuously on any query with zero grade-2 (`relevance_grades`) documents — a real gap named in its own docstring, not hidden.

@@ -316,7 +316,15 @@ OPENROUTER_TIMEOUT_SECONDS = 60.0
 # even without being a formally-tagged "reasoning" model. At 1600, the
 # harder query finally produced a real, well-cited, coherent answer - just
 # one still cut off mid-sentence before finishing its last section. 2400
-# gives it enough room to actually finish.
+# gave it enough room to actually finish - that was the value committed
+# when the trail above was written (see `docs/eval-report.md`'s Day 10
+# "Reproducibility hardening" section for the full six-attempt transcript,
+# and its Day 11 addendum for why that original 2400-token transcript is
+# still used as a frozen eval fixture in `generation_eval.py` even after
+# this value changed). It was later raised to 3000 to improve answer
+# completeness further - current live output will differ from that
+# frozen transcript, by design; this constant is the only source of truth
+# for what "current" means.
 MAX_ANSWER_TOKENS = 3000
 GENERATION_TEMPERATURE = 0.0
 

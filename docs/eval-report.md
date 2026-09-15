@@ -1147,8 +1147,19 @@ patching:
      small" truncation rather than any of the earlier failure modes.
    - **2400 tokens, new model:** both queries came back clean, complete,
      fully cited, zero orphans — see "Demo output" above for the actual
-     transcript this run produced. `MAX_ANSWER_TOKENS = 2400` is what is
-     committed today.
+     transcript this run produced. `MAX_ANSWER_TOKENS = 2400` was what was
+     committed as of this write-up (2026-09-14).
+
+   **Update, same day, later commit:** `MAX_ANSWER_TOKENS` was subsequently
+   raised to `3000` (`fix: increase MAX_ANSWER_TOKENS to improve answer
+   completeness`) without this section being revised to match — the
+   sentence above is left as it was written, as an honest record of what
+   was true at the time, rather than silently rewritten. **The current
+   value is `3000`**, confirmed against `src/generation.py`'s
+   `MAX_ANSWER_TOKENS`. See "Day 11: Grounded-answer evaluation +
+   completeness checks" below for what this means for the
+   `generation_eval.py` fixtures, which intentionally freeze this exact
+   2400-token transcript rather than the current live output.
 
    The honest takeaway is not "2400 is now guaranteed forever" — it is
    that a free-tier hosted model's behavior at a given token budget is an
@@ -1228,9 +1239,10 @@ test from item 1 above, 134 → 135):
   `load_dotenv()` loads it from `.env`); with no key, `main()` prints the
   retrieved sources and stops, rather than faking an answer. Each call is
   now bounded to `OPENROUTER_TIMEOUT_SECONDS` (60s) and
-  `MAX_ANSWER_TOKENS` (2400) and runs at `GENERATION_TEMPERATURE` (0.0) —
-  see "Reproducibility hardening" above — so a smoke run either produces an
-  answer or fails loudly within a bounded window, never hangs silently.
+  `MAX_ANSWER_TOKENS` (currently `3000` — see the update note in
+  "Reproducibility hardening" above) and runs at `GENERATION_TEMPERATURE`
+  (0.0) — so a smoke run either produces an answer or fails loudly within a
+  bounded window, never hangs silently.
 
 ### What remains unevaluated
 
@@ -1254,9 +1266,9 @@ re-derived, only re-shaped into a finding); `check_context_recall` (compares
 a query's grade-2/"primary" expected document ids against the doc ids
 actually present in the retrieved `sources`, regardless of citation — the
 check that catches a retrieval-side evidence gap); `check_expected_terms`
-(hand-curated required terms/facts, for curated queries only); `check_
-unsupported_inference` (a small hand-curated hedge-phrase scan — a proxy
-flag, not a faithfulness proof); `evaluate_generated_answer` (runs all
+(hand-curated required terms/facts, for curated queries only);
+`check_unsupported_inference` (a small hand-curated hedge-phrase scan — a
+proxy flag, not a faithfulness proof); `evaluate_generated_answer` (runs all
 four and returns one finding list); `make_finding` (the shared finding
 dict shape); `CURATED_FIXTURES` (the real Q001/Q091 sources and answer
 text Day 10's live run actually produced, hard-coded so no network call or
@@ -1358,6 +1370,53 @@ equal or greater significance, so this approval level applies at
 minimum") instead of following the prompt's own rule to say "not enough
 information" instead of guessing. Four different verdicts from one
 answer, each backed by a concrete reason — not one collapsed score.
+
+### A note on fixture freshness: these fixtures are historical Day 10 evidence, not live output
+
+`CURATED_FIXTURES` in `src/generation_eval.py` hard-codes the exact
+sources and answer text Day 10's live run produced on 2026-09-14, when
+`MAX_ANSWER_TOKENS` was `2400` (see the "Reproducibility hardening"
+update note above). `MAX_ANSWER_TOKENS` is `3000` now, and re-running `src/generation.py`'s
+live demo today does **not** reproduce the Q001/Q091 transcripts above
+byte-for-byte — Juan confirmed this directly by re-running the live demo:
+a fresh call against the current 3000-token config produces different
+wording for Q091 than the fixture below quotes.
+
+This is a deliberate choice, not an oversight, but it is worth being
+precise about what it does and does not cost:
+
+- **What stays valid regardless of model/token drift**: `check_context_recall`
+  depends only on `Q091_SOURCES`'s `doc_id`s and Q091's real
+  `relevance_grades` — both fixed facts about what Day 10's retrieval step
+  actually returned and what the corpus actually says is primary evidence,
+  independent of any model, prompt, or token budget. `POL-001` and
+  `GUIDE-002` were genuinely absent from that retrieval call's top-5; that
+  fact does not change if the generation step is re-run with a bigger
+  token budget. This is *why* Day 11 leans on `context_recall`, not
+  `expected_terms`, as the check that "automatically catches Q091" — it is
+  the one immune to this exact kind of drift.
+- **What is tied to the frozen transcript specifically**: `check_expected_terms`
+  and `check_unsupported_inference` both read `answer_text` directly, so
+  their exact findings (which terms are missing, which hedge phrase is
+  flagged) describe *this specific, frozen* 2400-token transcript. A fresh
+  3000-token run might phrase its hedge past `POL-001`'s missing threshold
+  differently, or not at all — that would not mean the underlying
+  retrieval gap was fixed, only that the symptom looked different on this
+  specific answer's wording.
+- **Why freezing the fixture is still the right call for today's scope**
+  (matching the Day 11 design doc's "deterministic fixtures before
+  LLM-as-judge" principle): a curated fixture's job is to be a fixed,
+  known input a check's logic can be regression-tested against — the same
+  reason `tests/test_generation.py` uses synthetic fixed chunk text rather
+  than re-running retrieval. Re-generating the fixture from a fresh live
+  call every time the model config changes would make `tests/test_generation_eval.py`
+  non-deterministic and network-dependent, defeating the entire point of
+  this being a `pytest`-gate-safe, no-API-key eval layer. The known next
+  step, if this project wants the fixture to track current model behavior,
+  is to capture a new live transcript under `MAX_ANSWER_TOKENS = 3000` and
+  either replace `CURATED_FIXTURES` or add it as a second, clearly-labeled
+  fixture alongside the historical one — not something this addendum
+  claims to have done.
 
 ### What is deterministic today vs. what still needs human/LLM-as-judge review
 
