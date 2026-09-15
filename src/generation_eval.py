@@ -375,22 +375,36 @@ def evaluate_generated_answer(query_row, sources, answer_text, required_terms=No
 # an API key, or the embedding/reranking pipeline to demonstrate the Day 11
 # checks against a real, already-known failure.
 #
-# `sources[].text` below are short representative quotes for readability
-# (matching the synthetic-chunk-text convention `tests/test_generation.py`
-# already uses), not the literal full retrieved chunk - reproducing that
-# would require re-running the whole retrieval pipeline. `doc_id`/`title`
-# match Day 10's real transcript exactly, which is what every check here
-# actually depends on. `answer_text` in both fixtures is the real,
-# unedited Day 10 transcript text.
+# `sources[].text` below are the literal full retrieved chunk texts (and
+# `chunk_id`, the real chunk id, not a placeholder) - re-derived by
+# re-running the exact retrieval pipeline (`chunk_corpus` ->
+# `build_chunk_lexical_index`/`build_chunk_semantic_index` ->
+# `two_stage_rerank`) for Q001/Q091 on 2026-09-15, the same day this fixture
+# was updated for Day 12's framework-eval review. This is not a live/network
+# step - retrieval here is BM25 + local sentence-transformer embeddings + a
+# local cross-encoder reranker, all deterministic given the same corpus and
+# models, no LLM call involved - and the resulting `doc_id` order was
+# confirmed to match Day 10's original transcript exactly for both queries,
+# which is what makes swapping in the fuller text a faithful *replacement*
+# rather than a different, unverified retrieval run. Earlier versions of
+# this fixture used short representative quotes instead of the full chunk
+# text; that was adequate for Day 11's deterministic checks (which only
+# depend on `doc_id`/citation ids/`answer_text`, never on `sources[].text`
+# itself), but Day 12's DeepEval/RAGAS faithfulness metrics score the
+# generated answer *against `retrieval_context`* - an abbreviated context
+# would have meant the live judge was never evaluating the actual evidence
+# Day 10's model saw. `doc_id`/`title` still match Day 10's real transcript
+# exactly. `answer_text` in both fixtures is still the real, unedited Day 10
+# transcript text, unchanged by this update.
 # ---------------------------------------------------------------------------
 
 
-def _source(source_id, doc_id, title, text):
+def _source(source_id, doc_id, title, text, chunk_id=None):
     return {
         "source_id": source_id,
         "doc_id": doc_id,
         "title": title,
-        "chunk_id": f"{doc_id}::chunk-{source_id}",
+        "chunk_id": chunk_id if chunk_id is not None else f"{doc_id}::chunk-{source_id}",
         "text": text,
         "rank": source_id,
         "score": None,
@@ -399,18 +413,52 @@ def _source(source_id, doc_id, title, text):
 
 Q001_SOURCES = [
     _source(1, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "Three qualified bids are required above €25,000 and up to €250,000 of total committed value."),
+            "Tell Procurement Operations your genuine required date at intake so the "
+            "realistic route can be chosen. Do I need three quotes Three qualified bids "
+            "are required above €25,000 and up to €250,000 of total committed value. "
+            "Above €250,000 a formal request for proposal is required.",
+            chunk_id="FAQ-001::chunk-12"),
     _source(2, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "A purchase cannot be split into smaller orders to stay under a threshold."),
+            "Above €250,000 a formal request for proposal is required. Below €25,000 no "
+            "formal competition is needed, though you should still be able to show the "
+            "price is reasonable. If competition is genuinely not possible, a sourcing "
+            "exception must be approved before the award, not afterwards.",
+            chunk_id="FAQ-001::chunk-13"),
     _source(3, "POL-001", "Global Procurement Policy — Approval Thresholds and Delegation of Authority",
-            "Approval bands apply to the total committed value expressed in EUR."),
+            "Approval Bands The following approval bands apply to the total committed "
+            "value expressed in EUR. Amounts in other currencies are converted at the "
+            "monthly Group corporate rate published by Treasury on the first working day "
+            "of each month. Band 1 (below €5,000): approval by the Budget Owner for the "
+            "cost centre being charged.",
+            chunk_id="POL-001::chunk-4"),
     _source(4, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "A three-year service at €20,000 per year is a €60,000 commitment and needs VP "
-            "Procurement approval with a Finance review, not Category Manager approval."),
+            "Do not ask a colleague to approve on the approver's behalf using their "
+            "account. How is the approval level decided By the total committed value of "
+            "the commitment over its full term, not by the invoice amount and not by the "
+            "amount falling in this financial year. A three-year service at €20,000 per "
+            "year is a €60,000 commitment and needs VP Procurement approval with a "
+            "Finance review, not Category Manager approval.",
+            chunk_id="FAQ-001::chunk-5"),
     _source(5, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "A three-year service at €20,000 per year is a €60,000 commitment and needs VP "
-            "Procurement approval with a Finance review, not Category Manager approval."),
+            "A three-year service at €20,000 per year is a €60,000 commitment and needs "
+            "VP Procurement approval with a Finance review, not Category Manager "
+            "approval. If you are unsure of the value, use a good-faith estimate at the "
+            "top of the expected range. Can I split a request to keep it under a "
+            "threshold No.",
+            chunk_id="FAQ-001::chunk-6"),
 ]
+
+# `Q001_SOURCES`/`Q091_SOURCES` above were re-derived from a live re-run of
+# the real retrieval pipeline on 2026-09-15 (see the block comment above
+# `_source`) - notice source [2] above is *not* a restatement of the
+# three-qualified-bids rule the way the pre-Day-12-review placeholder text
+# implied it was. This is exactly the kind of thing full chunk text
+# surfaces that a hand-picked representative quote can hide: the real
+# citation [2] in `Q001_ANSWER_TEXT` below is topically adjacent (the same
+# competition-threshold section) but does not itself repeat the "three
+# qualified bids" sentence - only source [1] does. A faithfulness judge
+# reading the *real* `retrieval_context` sees that distinction; a judge
+# reading only the old abbreviated placeholder could not have.
 
 # Real, unedited Day 10 transcript for Q001 - see docs/eval-report.md,
 # "Demo output", lines under "Q001 (threshold): ...".
@@ -444,18 +492,41 @@ Q001_REQUIRED_TERMS = ("VP Procurement", "Finance review")
 
 Q091_SOURCES = [
     _source(1, "SOP-001", "Standard Operating Procedure — Three-Bid Requirement and Sourcing Exception Handling",
-            "Any exception above €250,000 must be reviewed by Procurement Governance before "
-            "the approver receives it."),
+            "The approver must be independent of the requesting business function. "
+            "Procurement Governance reviews every exception above €250,000 before the "
+            "approver receives it, and may return the request for further evidence. "
+            "Duration and Renewal Limits An approved exception is valid for a maximum of "
+            "12 months or for the duration of the specific award, whichever is shorter.",
+            chunk_id="SOP-001::chunk-12"),
     _source(2, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "Three qualified bids are required above €25,000 and up to €250,000 of total "
-            "committed value."),
+            "Tell Procurement Operations your genuine required date at intake so the "
+            "realistic route can be chosen. Do I need three quotes Three qualified bids "
+            "are required above €25,000 and up to €250,000 of total committed value. "
+            "Above €250,000 a formal request for proposal is required.",
+            chunk_id="FAQ-001::chunk-12"),
     _source(3, "FAQ-001", "FAQ — Purchase Orders, Approvals and Starting Work",
-            "A purchase cannot be split into smaller orders to stay under a threshold."),
+            "A three-year service at €20,000 per year is a €60,000 commitment and needs "
+            "VP Procurement approval with a Finance review, not Category Manager "
+            "approval. If you are unsure of the value, use a good-faith estimate at the "
+            "top of the expected range. Can I split a request to keep it under a "
+            "threshold No.",
+            chunk_id="FAQ-001::chunk-6"),
     _source(4, "POL-003", "Information Security and Data Protection Requirements for Technology Suppliers",
-            "Certification evidence is refreshed annually. Risk acceptance may not exceed "
-            "12 months and may not be renewed more than once."),
+            "Risk acceptance may not exceed 12 months and may not be renewed more than "
+            "once. Renewal and Continuous Assurance Certification evidence is refreshed "
+            "annually. A lapsed certificate is treated as a control failure and triggers "
+            "a review of whether the service may continue.",
+            chunk_id="POL-003::chunk-13"),
     _source(5, "SOP-001", "Standard Operating Procedure — Three-Bid Requirement and Sourcing Exception Handling",
-            "Records are retained for seven years."),
+            "On the second renewal the buyer must record a plan and a date for a "
+            "competitive event or a Category Council decision to designate the supplier "
+            "as strategic and single-sourced by design. Record Keeping and Audit Trail "
+            "The following must exist in Ariba Sourcing for every award above €25,000: "
+            "the requirement document issued to suppliers, the invitation list with "
+            "dates, the bids received or the exception form, the comparison or "
+            "evaluation record, the award recommendation, and the approval evidence. "
+            "Records are retained for seven years.",
+            chunk_id="SOP-001::chunk-14"),
 ]
 
 # Real, unedited Day 10 transcript for Q091 - see docs/eval-report.md,

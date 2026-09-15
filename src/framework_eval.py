@@ -61,6 +61,16 @@ to a `status="blocked"` result instead of a raised `ModuleNotFoundError` or
 a bare provider exception. `tests/test_framework_eval.py` proves both of
 those paths without ever calling OpenRouter.
 
+To be precise about what "deterministic" covers here: the default
+`live=False` runner path never imports `deepeval`/`ragas` at all, so it
+would work even if neither were installed. The adapter-shape tests
+(`to_deepeval_test_case`/`to_ragas_sample`) are a different, narrower
+guarantee - they *do* import the real `LLMTestCase`/`SingleTurnSample`
+classes (both are real `pyproject.toml` dependencies, so this is expected,
+not accidental), they just never reach the network. "Deterministic" means
+"no live call, no network, reproducible" throughout this file - not "never
+imports a framework."
+
 **What this deliberately does not do.** No contextual-recall or
 contextual-precision framework metrics (Day 11's `check_context_recall`
 already does the id-level version of that, and the design doc for today
@@ -78,7 +88,7 @@ import warnings
 
 from dotenv import load_dotenv
 
-from generation import OPENROUTER_BASE_URL
+from generation import OPENROUTER_BASE_URL, OPENROUTER_TIMEOUT_SECONDS
 
 # ---------------------------------------------------------------------------
 # Both frameworks are pointed at the exact same OpenRouter judge model, so a
@@ -96,6 +106,35 @@ from generation import OPENROUTER_BASE_URL
 # value is spelled out in this file.
 # ---------------------------------------------------------------------------
 JUDGE_MODEL = "openai/gpt-4o-mini"
+
+# Day 10 (`generation.py`) already learned this lesson the hard way, live:
+# an unbounded free-tier OpenRouter call can hang, and an unbounded
+# `max_tokens` gives no predictable worst-case cost/latency - see
+# `OPENROUTER_TIMEOUT_SECONDS`'s and `MAX_ANSWER_TOKENS`'s own comments in
+# `generation.py`. DeepEval's `FaithfulnessMetric` manages its own internal
+# OpenRouter client (built from the `deepeval set-openrouter` config) and
+# doesn't expose a per-call timeout/token-cap knob to this file - but RAGAS's
+# `ChatOpenAI` is built by hand right here (see `run_ragas_faithfulness`), so
+# it gets the same two guards Day 10's answer-generation client has: reusing
+# `OPENROUTER_TIMEOUT_SECONDS` (the exact same 60s bound, not a re-guessed
+# one) and a judge-specific token cap.
+#
+# `JUDGE_MAX_TOKENS` genuinely needed a real trial, the same way
+# `MAX_ANSWER_TOKENS` did in `generation.py`: RAGAS's `Faithfulness` doesn't
+# just ask one short question - internally it extracts a claims list from
+# `actual_output`, then generates a verdict *per claim* against
+# `retrieval_context`, so its token need scales with both the answer length
+# and how much context it was given. A first guess of 1024 ran fine for
+# Q001 but failed outright on Q091 (`status="error"`, "The LLM generation
+# was not completed. Please increase the max_tokens and try again.") - Q091
+# is both the longer answer and the query with five full-length retrieved
+# chunks (see the Day 12 fixture update above), so its claims/verdicts
+# generation needs more room. 4096 is generous enough that neither
+# calibration fixture hits the cap; it is not tuned tighter than that for
+# the same reason Day 10 eventually gave up tuning `MAX_ANSWER_TOKENS`
+# precisely and instead picked a comfortably large fixed budget - cost here
+# is negligible either way at OpenRouter's per-token pricing for this model.
+JUDGE_MAX_TOKENS = 4096
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +233,16 @@ def deepeval_status():
     succeed) is what lets `tests/test_framework_eval.py` prove the
     "dependency missing" contract with `monkeypatch.setitem(sys.modules,
     "deepeval", None)` instead of just asserting it in a docstring.
+
+    IMPORTANT: `"available"` here means exactly "the package imports and
+    `OPENROUTER_API_KEY` is set" - two cheap, local, pre-network checks. It
+    is *not* a guarantee that a live call will actually succeed. Day 12
+    itself proved that gap is real: DeepEval's configured judge model was a
+    typo (`openai/gpt-4.o-mini` instead of `openai/gpt-4o-mini`, see
+    `docs/eval-report.md`'s "Fixing the environment" section) for a while
+    with a correct key present the whole time - `deepeval_status()` would
+    have returned `"available"` throughout, because a broken model string
+    isn't something an import check or a key-presence check can see.
     """
     try:
         import deepeval  # noqa: F401
@@ -484,6 +533,8 @@ def run_ragas_faithfulness(case, threshold=0.5, live=False):
             api_key=os.environ["OPENROUTER_API_KEY"],
             base_url=OPENROUTER_BASE_URL,
             temperature=0.0,
+            timeout=OPENROUTER_TIMEOUT_SECONDS,
+            max_tokens=JUDGE_MAX_TOKENS,
         )
         faithfulness_metric = Faithfulness(llm=LangchainLLMWrapper(chat_model))
         score = faithfulness_metric.single_turn_score(to_ragas_sample(case))
