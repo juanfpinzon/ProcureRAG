@@ -10,3 +10,4 @@ data/*
 !data/corpus_v1/*.jsonl
 src/procurerag.egg-info/
 .env
+.env.local
