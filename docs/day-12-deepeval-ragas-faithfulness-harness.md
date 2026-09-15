@@ -27,7 +27,7 @@ Companion docs to read today — **be selective and exact**:
 
 Read these pages in this order:
 
-1. **DeepEval — `Introduction to LLM Evaluation Metrics`**  
+1. **DeepEval — `Introduction to LLM Evaluation Metrics`**  - Completed
    URL: `https://deepeval.com/docs/metrics-introduction`  
    Read sections:
    - `Core Concept` — test case vs. metric, 0–1 scores, reasons, threshold pass/fail.
@@ -35,7 +35,7 @@ Read these pages in this order:
    - `Required Test Case Parameters` — each metric needs specific fields.
    - Skim `Why Use deepeval Metrics?` only for the tradeoff vocabulary: LLM-as-judge, reasoning, caching, pytest integration, Confident AI ecosystem.
 
-2. **DeepEval — `Faithfulness`**  
+2. **DeepEval — `Faithfulness`**  - Completed
    URL: `https://deepeval.com/docs/metrics-faithfulness`  
    Read sections:
    - `Purpose` / overview — faithfulness checks whether `actual_output` factually aligns with `retrieval_context`.
@@ -44,34 +44,34 @@ Read these pages in this order:
    - Usage example enough to know the object shape: `FaithfulnessMetric(...)`, `LLMTestCase(...)`, `evaluate(...)`.
    - If time permits: skim optional parameters (`threshold`, `model`, `include_reason`, `strict_mode`, async/verbose/template) because they become Day 12 design knobs.
 
-3. **DeepEval — `Answer Relevancy`**  
+3. **DeepEval — `Answer Relevancy`**  - Completed
    URL: `https://deepeval.com/docs/metrics-answer-relevancy`  
    Read sections:
    - `Overview` — evaluates whether `actual_output` addresses `input`; referenceless; does not require expected answer.
    - `Required Arguments` — `input`, `actual_output`.
    - `How Is It Calculated` / calculation notes if visible — statement extraction and relevance judging; be able to explain why this is not the same as factual correctness.
 
-4. **DeepEval — `Contextual Relevancy`**  
+4. **DeepEval — `Contextual Relevancy`**  - Completed
    URL: `https://deepeval.com/docs/metrics-contextual-relevancy`  
    Read sections:
    - `Overview` — retriever-quality metric: is retrieved context relevant to the user input?
    - `Required Arguments` — `input`, `actual_output`, `retrieval_context`; note that `actual_output` is required by the test case shape even though the metric primarily evaluates context vs. input.
 
-5. **DeepEval — `Contextual Recall`**  
+5. **DeepEval — `Contextual Recall`**  - Completed
    URL: `https://deepeval.com/docs/metrics-contextual-recall`  
    Read sections:
    - `What It Measures` — whether `retrieval_context` contains the information needed to support `expected_output`.
    - `Required Test Case Arguments` — `input`, `actual_output`, `expected_output`, `retrieval_context`.
    - Compare this directly to ProcureRAG Day 11 `check_context_recall`, which is deterministic id-level recall over primary documents.
 
-6. **DeepEval — `Contextual Precision`**  
+6. **DeepEval — `Contextual Precision`**  - Completed
    URL: `https://deepeval.com/docs/metrics-contextual-precision`  
    Read sections:
    - `Overview` — whether relevant chunks are ranked above irrelevant chunks; especially useful for retriever/reranker evaluation.
    - `Required Test Case Arguments` — `input`, `actual_output`, `expected_output`, `retrieval_context`.
    - Map this to ProcureRAG's existing P@1/R@5/MRR@10/nDCG@5 and reranking evidence; DeepEval's judge may grade semantic relevance, while the project already has id/grade-based metrics.
 
-7. **DeepEval — `RAGAS` wrapper page**  
+7. **DeepEval — `RAGAS` wrapper page**  - Completed
    URL: `https://deepeval.com/docs/metrics-ragas`  
    Skim only after reading the native metrics. The key fact is that DeepEval exposes a RAGAS aggregate/wrapper around answer relevancy, faithfulness, contextual precision, and contextual recall, but DeepEval's docs recommend its native RAG metrics for debuggability, judge reasoning, JSON confinement, pytest integration, and Confident AI support.
 
@@ -79,14 +79,14 @@ Read these pages in this order:
 
 Read these pages in this order:
 
-1. **RAGAS — `Metrics` overview**  
+1. **RAGAS — `Metrics` overview**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/`  
    Read sections:
    - `Available Metrics` → `Retrieval Augmented Generation` taxonomy.
    - Note the names: `Context Precision`, `Context Recall`, `Context Entities Recall`, `Noise Sensitivity`, `Response Relevancy`, `Faithfulness`.
    - Also note non-RAG comparison metrics: `Factual Correctness`, `Semantic Similarity`, and traditional non-LLM metrics.
 
-2. **RAGAS — `Faithfulness`**  
+2. **RAGAS — `Faithfulness`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/faithfulness/`  
    Read sections:
    - Definition: factual consistency of `response` with `retrieved_contexts`, score 0–1.
@@ -94,41 +94,41 @@ Read these pages in this order:
    - Example enough to recognize the API shape: `Faithfulness(llm=...)`, `.ascore(user_input=..., response=..., retrieved_contexts=[...])`.
    - Interview point: this is the closest framework analogue to the missing Day 11 claim-level support check.
 
-3. **RAGAS — `Response Relevancy` / `Answer Relevancy`**  
+3. **RAGAS — `Response Relevancy` / `Answer Relevancy`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/answer_relevance/`  
    Read sections:
    - Definition: how directly and appropriately the response addresses user input; score 0–1-ish.
    - Calculation: generate artificial questions from the response and compare them to the original question with embeddings/cosine similarity.
    - Caveat: relevancy does not prove factual correctness; a very on-topic answer can still be wrong.
 
-4. **RAGAS — `Context Recall`**  
+4. **RAGAS — `Context Recall`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_recall/`  
    Read sections:
    - Definition: how many relevant documents/pieces of information were retrieved; recall is about not missing important evidence.
    - LLM-based path: breaks the `reference` answer into claims and checks whether each is attributable to retrieved context.
    - Skim `Non LLM Based Context Recall` / `ID Based Context Recall` if visible — this is the closest to ProcureRAG's deterministic Day 11 `check_context_recall`.
 
-5. **RAGAS — `Context Precision`**  
+5. **RAGAS — `Context Precision`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_precision/`  
    Read sections:
    - Definition: retriever ranks relevant chunks above irrelevant chunks.
    - Formula: mean of precision@k for relevant chunks in the retrieved list.
    - Skim variants: with reference answer, without reference, with reference contexts, and ID-based context precision. The ID-based variant is especially relevant because ProcureRAG has stable `doc_id` and `chunk_id` fields.
 
-6. **RAGAS — `Context Entities Recall`**  
+6. **RAGAS — `Context Entities Recall`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_entities_recall/`  
    Read sections:
    - Definition: entity overlap between reference and retrieved contexts.
    - Formula: common entities divided by reference entities.
    - Procurement mapping: possible future use for supplier IDs, contract IDs, approval roles, thresholds, and named systems like Ariba/SAP — not the Day 12 primary build.
 
-7. **RAGAS — `Factual Correctness`**  
+7. **RAGAS — `Factual Correctness`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/factual_correctness/`  
    Read sections:
    - Definition: compares generated `response` to `reference`, decomposes both into claims, uses NLI-style factual overlap.
    - Modes: precision, recall, F1. This is the framework analogue to Day 11's curated `expected_terms` check, but claim-based rather than substring-based.
 
-8. **RAGAS — `Semantic Similarity`**  
+8. **RAGAS — `Semantic Similarity`**  - Completed
    URL: `https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/semantic_similarity/`  
    Read sections:
    - Definition: embedding/cosine similarity between generated response and reference answer.
@@ -292,7 +292,7 @@ Recommended files Juan may create or modify when ready:
 - `tests/test_generation_eval.py` or a new `tests/test_framework_eval.py` — deterministic adapter/no-key tests only.
 - `docs/eval-report.md` — Day 12 addendum with real command output and caveats.
 - `docs/learning-log.md` — Day 12 evidence after building.
-- `pyproject.toml` / `uv.lock` — only if Juan deliberately chooses to install DeepEval or RAGAS today.
+- `pyproject.toml` / `uv.lock` — DeepEval has been added to uv env, login command executed and openrouter (openai/gpt-4.o-mini) set as default LLM for evals using the cli set-openrouter command (confirm it is properlytt set). For ragas I have executed the uv add ragas, not sure if we need rag_eval (which gave me error as we need python => 3.12). Ensure Ragas is properly working and adjust env python version if required, Ensure ragas also runs through openrouter (api key in .env file) and uses same openai/gpt-4.o-mini model same as DeepEval.
 
 Suggested implementation steps, not mandatory exact structure:
 

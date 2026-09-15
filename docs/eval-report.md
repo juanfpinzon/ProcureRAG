@@ -1481,6 +1481,329 @@ precise about what it does and does not cost:
   relevancy* (DeepEval) — checking specific required facts rather than a
   general semantic-similarity score against `expected_answer`.
 
+## Day 12: DeepEval/RAGAS faithfulness harness
+
+Date: 2026-09-15
+Implementation: `src/framework_eval.py` — `build_framework_eval_case` (the
+framework-neutral eval case: ProcureRAG's own `query_id`/`input`/
+`actual_output`/`expected_output`/`retrieval_context`/`source_metadata`/
+`deterministic_findings` vocabulary, built from a query row + `sources` +
+`answer_text`, independent of any framework); `deepeval_status`/
+`ragas_status` (the dependency/API-key boundary, returned as a plain
+`(status, reason)` pair, never a raised `ModuleNotFoundError`);
+`to_deepeval_test_case`/`to_ragas_sample` (reshape the neutral case into
+each framework's own vocabulary); `run_deepeval_faithfulness`/
+`run_ragas_faithfulness` (`live=False` by default — skip immediately, no
+import, no network; `live=True` runs the real judge call, through
+`FaithfulnessMetric`/`Faithfulness` respectively); `make_eval_result` (the
+shared result-dict shape). Tests in `tests/test_framework_eval.py` — 16
+deterministic tests, no network calls (verified: see "Gate re-run" below).
+
+### Gate re-run before building
+
+```
+./.venv/bin/pytest -q
+# 151 passed in 1.84s   (Day 12 kickoff baseline, before this day's work)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+### Fixing the environment before writing any adapter code
+
+Both `deepeval` and `ragas` were already `pyproject.toml` dependencies
+before today (added in a prior session), but neither was actually in a
+working state — this section documents the real, reproducible blockers
+found and how each was fixed, per today's instruction not to fake a live
+score and not to skip past a broken environment silently.
+
+1. **DeepEval's configured judge model was a typo.**
+   `.deepeval/.deepeval` (written by an earlier `deepeval set-openrouter`
+   run) recorded `"OPENROUTER_MODEL_NAME": "openai/gpt-4.o-mini"` — note the
+   literal `.` between `gpt-4` and `o-mini`. Checked directly against
+   OpenRouter's live model list
+   (`GET https://openrouter.ai/api/v1/models`): `openai/gpt-4.o-mini` does
+   not exist; the real slug is `openai/gpt-4o-mini`. This would have failed
+   every live DeepEval call with a "model not found" error, silently, the
+   first time `--live` was ever used. Fixed by re-running the CLI, which is
+   also how `deepeval diagnose` confirmed it stuck:
+
+   ```
+   ./.venv/bin/deepeval set-openrouter --model="openai/gpt-4o-mini" --temperature=0.0
+   # 🙌 Congratulations! You're now using OpenRouter `openai/gpt-4o-mini` for all evals that require an LLM.
+   ```
+
+2. **RAGAS did not import at all.** `import ragas` raised
+   `ModuleNotFoundError: No module named 'langchain_community.chat_models.vertexai'`.
+   Root cause: `ragas==0.3.1`'s `ragas/llms/base.py` does an unconditional,
+   top-level `from langchain_community.chat_models.vertexai import
+   ChatVertexAI`. `langchain-community`'s `Requires-Dist` in `ragas`'s own
+   metadata has no upper-bound pin, so `uv` resolved the newest
+   `langchain-community` (`0.4.2`, released 2026-05-22) — which no longer
+   ships a `chat_models/vertexai.py` submodule at all (confirmed by
+   inspecting `langchain_community-0.4.2`'s installed files directly; the
+   last version that still has it is `0.3.31`, confirmed by downloading that
+   wheel from PyPI and listing its contents). This is a real upstream
+   packaging bug in `ragas==0.3.1` (an unbounded dependency on a package
+   that later removed a module it imports unconditionally), **not** a
+   Python-version problem — `ragas`'s own metadata declares
+   `Requires-Python: >=3.9`, and this project's Python 3.11.7 satisfies it
+   with room to spare. (The earlier note in the Day 12 route doc about
+   needing Python 3.12 for something called `rag_eval` does not correspond
+   to anything in this repo's dependency graph — no such package name
+   appears anywhere in `uv.lock`, and nothing `ragas` actually depends on
+   requires 3.12.) Fixed by pinning `langchain-community` below the
+   breaking major version:
+
+   ```
+   uv add "langchain-community<0.4"
+   # - langchain-community==0.4.2
+   # + langchain-community==0.3.31
+   ```
+
+3. **A second, unrelated `ragas` import error surfaced immediately after
+   fix 2**: `ModuleNotFoundError: No module named 'PIL'`. `ragas/prompt/
+   multi_modal_prompt.py` does an unconditional `from PIL import Image`, and
+   that module is reached through `ragas`'s own top-level import chain
+   (`ragas` → `ragas.evaluation` → `ragas.metrics` →
+   `ragas.metrics.base` → `ragas.prompt` → `ragas.prompt.multi_modal_prompt`)
+   — even though `Pillow` is not declared anywhere in `ragas`'s
+   `Requires-Dist` (checked directly in its PyPI metadata: no `Pillow`/`PIL`
+   entry at all, not even under an optional extra). A second real, undeclared
+   packaging bug. Fixed with `uv add pillow`.
+
+After both fixes, `import ragas` succeeds cleanly and
+`./.venv/bin/pytest -q` still passes (167/167, see below) — the two `uv add`
+commands only changed `pyproject.toml`/`uv.lock`, nothing in `src`/`tests`
+depends on the newly-added `pillow` or the pinned `langchain-community`
+directly.
+
+### The adapter contract
+
+`build_framework_eval_case(query_row, sources, answer_text,
+deterministic_findings=None)` builds one plain dict in ProcureRAG's own
+vocabulary — deliberately not shaped like either framework yet:
+
+| Field | Source |
+|---|---|
+| `query_id` | `query_row["query_id"]` |
+| `input` | `query_row["query"]` |
+| `actual_output` | `answer_text`, as-is |
+| `expected_output` | `query_row["expected_answer"]` |
+| `retrieval_context` | `[source["text"] for source in sources]`, order preserved |
+| `source_metadata` | `source_id`/`doc_id`/`chunk_id`/`rank` per source, order preserved |
+| `deterministic_findings` | Day 11's `evaluate_generated_answer(...)` output, passed straight through, `[]` if not supplied |
+
+Two small, separate functions reshape that one dict per framework, so the
+vocabulary mismatch the Day 12 reading list warns about is visible in code,
+not hidden inside one big function:
+
+| ProcureRAG (neutral) | DeepEval `LLMTestCase` | RAGAS `SingleTurnSample` |
+|---|---|---|
+| `input` | `input` | `user_input` |
+| `actual_output` | `actual_output` | `response` |
+| `expected_output` | `expected_output` | *(not used by `Faithfulness`)* |
+| `retrieval_context` | `retrieval_context` | `retrieved_contexts` |
+
+`deepeval_status()`/`ragas_status()` each return a plain `("available",
+None)` / `("blocked", reason)` pair — never raise — checked by importing the
+package inside the function body (an `import deepeval`/`import ragas` that
+can fail is exactly what `tests/test_framework_eval.py` proves via
+`monkeypatch.setitem(sys.modules, "deepeval", None)`, without needing to
+actually uninstall either package) and then checking
+`OPENROUTER_API_KEY` is set. `run_deepeval_faithfulness`/
+`run_ragas_faithfulness` both default to `live=False`, which returns a
+`status="skipped"` result *before* importing anything framework-specific —
+this is what lets `tests/test_framework_eval.py` prove, not just assert,
+that the deterministic test suite never reaches `deepeval`, `ragas`, or the
+network (see e.g.
+`test_run_deepeval_faithfulness_defaults_to_skipped_without_touching_deepeval`,
+which sets `sys.modules["deepeval"] = None` and confirms the function still
+returns cleanly).
+
+### Demo output (real run, 2026-09-15)
+
+Deterministic path first — proves the adapter/status wiring with zero
+network calls:
+
+```
+./.venv/bin/pytest -q
+# 167 passed in 1.12s   (151 Day-11-and-earlier + 16 new Day 12 tests)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+Live path — `./.venv/bin/python src/framework_eval.py --live`, four real
+OpenRouter calls (`openai/gpt-4o-mini`, ~$0.0001 total at OpenRouter's
+published per-token pricing for this model):
+
+```
+Q001: What approval is required for a EUR 60,000 purchase order?
+  [PASS] deepeval/faithfulness: score=0.80 (threshold=0.5, judge_model=openai/gpt-4o-mini (OpenRouter))
+         reason: The score is 0.80 because the actual output incorrectly implies that a €60,000
+         purchase requires competition, while the retrieval context clearly states it does not
+         trigger a competition requirement due to being below the €250,000 threshold.
+  [FAIL] ragas/faithfulness: score=0.43 (threshold=0.5, judge_model=openai/gpt-4o-mini (OpenRouter))
+
+Q091: What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
+  [PASS] deepeval/faithfulness: score=0.80 (threshold=0.5, judge_model=openai/gpt-4o-mini (OpenRouter))
+         reason: The score is 0.80 because the actual output incorrectly states that only one bid
+         is needed for a commitment of EUR 120,000, while the retrieval context specifies that
+         three qualified bids are required. Additionally, it fails to mention that records for
+         awards above €25,000 must be retained for seven years, which is not limited to Ariba
+         Sourcing.
+  [PASS] ragas/faithfulness: score=0.55 (threshold=0.5, judge_model=openai/gpt-4o-mini (OpenRouter))
+```
+
+### A noisy-but-harmless DeepEval warning, and what it actually means
+
+The first `--live` runs printed a `UserWarning` on every DeepEval call:
+`Structured outputs not supported for model 'openai/gpt-4o-mini'. Falling
+back to regular generation with JSON parsing. Error: ... 'required' is
+required to be supplied and to be an array including every key in
+properties. Missing 'reason'.`
+
+Traced to the exact cause, in DeepEval's own installed source: DeepEval
+tries OpenAI's *strict* JSON-schema structured-output mode for every
+internal judge sub-call. Its own `FaithfulnessVerdict` schema
+(`deepeval/metrics/faithfulness/schema.py`) declares
+`reason: Optional[str] = Field(default=None)` — Pydantic correctly puts
+`reason` in the schema's `properties` but *not* in `required`, since it's
+optional. OpenAI's strict mode requires every property to also be listed as
+required; DeepEval's `_schema_response_format`
+(`deepeval/models/llms/gateway_model.py:391-412`) never patches the schema
+to satisfy that, so the provider (OpenRouter, proxying `openai/gpt-4o-mini`
+to Azure/OpenAI) rejects the request with exactly this 400 every time. This
+is a real, confirmed bug in `deepeval==4.2.3` — checked directly against
+PyPI, still the latest release, so it is not fixed by upgrading. It is not
+caused by this project's model/key configuration or by OpenRouter.
+
+It is also **harmless**: `gateway_model.py`'s own `except Exception:` block
+catches this and falls back to plain (non-schema-constrained) JSON parsing,
+which succeeds and is where every real score/reason in this doc actually
+came from — the warning only says "the fast path failed, here is the
+slow-but-working path," not "this run is broken." `run_deepeval_faithfulness`
+in `src/framework_eval.py` now suppresses this one, narrowly-matched warning
+message around the `metric.measure(...)` call (not warnings in general),
+with a comment pointing at the exact upstream lines above.
+
+### Live scores are not fully reproducible even at temperature=0.0
+
+Three independent `--live` runs of the exact same Q001/Q091 fixtures, same
+day, same model, produced different DeepEval scores and reason text each
+time — RAGAS was steadier, but not perfectly so:
+
+| Run | DeepEval Q001 | DeepEval Q091 | RAGAS Q001 | RAGAS Q091 |
+|---|---|---|---|---|
+| 1 (this doc's main demo output, above) | 0.80 | 0.80 | 0.43 | 0.55 |
+| 2 (Juan's own run) | 0.80 | 0.92 | 0.43 | 0.64 |
+| 3 (after the warning fix, above) | 1.00 | 0.80 | 0.43 | 0.55 |
+
+DeepEval's Q001 reason text changed materially each time it ran (run 1 and
+2 both invented a confused, backwards critique of the
+€25,000–€250,000 three-qualified-bids rule — in *different* wrong ways each
+time; run 3 instead returned "no contradictions present" and scored 1.00).
+RAGAS's Q001 score was identical (0.43) across all three runs; its Q091
+score matched on two of three (0.55, 0.64, 0.55).
+
+Two things worth taking from this, not one: first, the same class of
+judge-reasoning error (confusion about the three-bid competition threshold)
+showed up independently in two of three DeepEval runs — this is not a
+one-off fluke, it is a real, recurring failure mode for this judge model on
+this specific rule. Second, `temperature=0.0` (set for both frameworks —
+see `JUDGE_MODEL`'s usage in `run_ragas_faithfulness` and
+`GENERATION_TEMPERATURE` in `generation.py` for the same caveat on the
+answer-generation side) reduces but does not eliminate run-to-run variance
+on a hosted third-party API — a single live score, from either framework,
+is a sample, not a fixed ground truth. RAGAS's steadier scores here are
+based on only three runs and should not be read as a general "RAGAS is more
+reproducible than DeepEval" claim without a larger sample.
+
+### A live judge's reasoning can be wrong — a real example, not a hypothetical
+
+DeepEval's Q001 reason claims the retrieval context "clearly states it does
+not trigger a competition requirement due to being below the €250,000
+threshold." That is backwards. Source `[1]`/`[2]`'s real text (see
+`Q001_SOURCES` in `src/generation_eval.py`) says three qualified bids are
+required **above €25,000 and up to €250,000** — €60,000 is inside that
+range, so competition *does* apply, and the real Q001 answer text says
+exactly that (`"a €60,000 purchase also triggers a competition
+requirement — three qualified bids are required above €25,000..."`,
+correctly cited `[1][2]`). The judge model still returned a plausible,
+confidently-worded reason for a sub-1.0 score — it just got the direction of
+its own cited evidence wrong.
+
+This is precisely the Day 12 mindset the design doc asks for: **a framework
+metric is not automatically a better ground truth.** A score and a reason
+string are still an LLM's output, not a fact — Q001's role as a
+"known-clean" calibration anchor is what makes an error like this
+*catchable at all*: without already knowing Q001's transcript is fully
+supported by its cited sources, this reason would have read as a plausible
+critique instead of a judge mistake. Neither framework's score should be
+taken as a gate without a human spot-check against a case whose real answer
+is already known.
+
+### What Q001/Q091 calibration actually showed
+
+- **Neither framework cleanly separated Q001 (known-clean) from Q091
+  (known-incomplete) the way Day 11's deterministic checks do.** DeepEval
+  scored both at 0.80; RAGAS scored Q091 *higher* than Q001 (0.55 vs. 0.43).
+  If the goal were "does faithfulness alone catch Q091's missing-evidence
+  problem", the answer is no — and that is expected, not a bug: faithfulness
+  asks "is the answer honest about the sources it saw," not "did it see
+  enough." Q091's real answer never invents anything beyond its five
+  sources; it is faithful *and* incomplete, which is exactly the distinction
+  Day 11's `check_context_recall` (which does fail on Q091, cleanly, for
+  `POL-001`/`GUIDE-002`) exists to catch and faithfulness structurally
+  cannot.
+- **DeepEval's sub-1.0 Q001 score is itself informative, but not for the
+  reason DeepEval gave.** A well-calibrated human reading both the real
+  Q001 transcript and DeepEval's stated reason can tell the judge's
+  arithmetic-direction is wrong (see above) — which is a different, and
+  arguably more useful, Day 12 finding than "the harness works": it shows
+  *why* a judge score needs a reason attached, and why that reason still
+  needs a human who already knows the ground truth to check it.
+- **RAGAS gives no reason at all** — `Faithfulness.single_turn_score(...)`
+  returns a bare float, full stop. Without DeepEval's `reason` string next
+  to it, RAGAS's 0.43 (below its own 0.5 default threshold) for the
+  known-clean Q001 fixture would have been much harder to investigate or
+  trust either way. This is a real, structural capability gap between the
+  two frameworks' public APIs, not an oversight in `run_ragas_faithfulness`.
+
+### What is deterministic today vs. what needs a live judge (and a human)
+
+| Layer | Example | Network/API key? | Trustworthy as a sole gate? |
+|---|---|---|---|
+| Day 11 deterministic checks | `check_context_recall`, `check_citation_validity` | No | Yes, within their narrow, named scope |
+| DeepEval/RAGAS faithfulness (`live=False`) | adapter shape, `status="skipped"`/`"blocked"` | No | N/A — no score produced |
+| DeepEval/RAGAS faithfulness (`live=True`) | the scores/reason above | Yes | **No** — see the reasoning-error example above; useful as a second opinion, not a gate |
+
+### Caveats
+
+- Only one metric (faithfulness) was run live today, through both
+  frameworks, exactly as the design doc recommends ("pick one first live
+  metric, not every metric at once"). Answer relevancy, contextual
+  precision/recall, and factual correctness are adapter-ready (the neutral
+  case already carries `expected_output`/`retrieval_context`) but not
+  wired to a metric call.
+- `run_deepeval_faithfulness`/`run_ragas_faithfulness` catch any exception
+  from the live call itself and degrade to `status="error"` rather than
+  crash — this was not exercised live today (both frameworks succeeded on
+  both queries), only proven not to interfere with the deterministic
+  `live=False` path in `tests/test_framework_eval.py`.
+- Both live judge calls used `openai/gpt-4o-mini` via OpenRouter, the same
+  model for both frameworks (`JUDGE_MODEL` in `src/framework_eval.py`), so
+  the DeepEval-vs-RAGAS score gap above reflects the two frameworks'
+  different faithfulness prompts/scoring logic, not two different judge
+  models.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

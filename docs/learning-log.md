@@ -2085,26 +2085,29 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 ### What I built or drafted
 
 - Drafted Day 12 route in `docs/day-12-deepeval-ragas-faithfulness-harness.md`.
-- _TODO: Fill in after building the framework-eval adapter / harness._
+- `src/framework_eval.py` — the framework-eval bridge: a framework-neutral eval-case builder (`build_framework_eval_case`), dependency/key status checks (`deepeval_status`, `ragas_status`), per-framework adapters (`to_deepeval_test_case`, `to_ragas_sample`), and per-framework live-judge runners (`run_deepeval_faithfulness`, `run_ragas_faithfulness`), all behind an explicit `live=False`-by-default parameter.
+- `tests/test_framework_eval.py` — 16 new deterministic tests (adapter shape, source-order preservation, no-key behavior, no-dependency behavior via `sys.modules` patching, and proof that `live=False` never imports the framework).
+- Fixed two real, reproducible environment blockers before any of the above could run live: DeepEval's OpenRouter judge model was misconfigured (a typo, `openai/gpt-4.o-mini` instead of `openai/gpt-4o-mini`), and RAGAS failed to import at all (an upstream packaging bug — see "What failed or was confusing" below). Both fixed and verified live.
+- `docs/eval-report.md` — new "Day 12" section: environment fixes, the adapter contract, real command output (deterministic + live), a caught judge-reasoning error, and the Q001/Q091 calibration interpretation.
 
 ### Course / framework checkpoint completed
 
 - Boot.dev RAG chapter/lesson: **No new Boot.dev chapter today.** Chapter 10 — Augmented Generation is completed and serves as the baseline; Chapter 11 — Agentic remains deferred until this eval layer is understood.
-- DeepEval docs read:
-  - `Introduction to LLM Evaluation Metrics` (`https://deepeval.com/docs/metrics-introduction`) — _TODO: notes on RAG metric taxonomy, score/reason/threshold behavior, and required test-case fields._
-  - `Faithfulness` (`https://deepeval.com/docs/metrics-faithfulness`) — _TODO: notes on `input` / `actual_output` / `retrieval_context` and what faithfulness can/cannot catch._
-  - `Answer Relevancy` (`https://deepeval.com/docs/metrics-answer-relevancy`) — _TODO: notes on referenceless answer-on-topic scoring._
-  - `Contextual Relevancy` (`https://deepeval.com/docs/metrics-contextual-relevancy`) — _TODO: notes on retrieved-context relevance to query._
-  - `Contextual Recall` (`https://deepeval.com/docs/metrics-contextual-recall`) — _TODO: notes on `expected_output` + retrieved context completeness._
-  - `Contextual Precision` (`https://deepeval.com/docs/metrics-contextual-precision`) — _TODO: notes on whether relevant chunks are ranked above irrelevant chunks._
-  - Optional skim: `RAGAS` wrapper (`https://deepeval.com/docs/metrics-ragas`) — _TODO: notes on DeepEval's RAGAS wrapper vs native DeepEval metrics._
-- RAGAS docs read:
-  - `Metrics` overview (`https://docs.ragas.io/en/latest/concepts/metrics/`) — _TODO: taxonomy notes._
-  - `Faithfulness` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/faithfulness/`) — _TODO: supported response claims / total response claims._
-  - `Response Relevancy` / `Answer Relevancy` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/answer_relevance/`) — _TODO: generated-question / cosine-similarity framing._
-  - `Context Recall` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_recall/`) — _TODO: reference claims attributable to retrieved context; LLM vs non-LLM / ID-based variants._
-  - `Context Precision` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_precision/`) — _TODO: precision@k-style ranking of relevant chunks; reference/no-reference/ID-based variants._
-  - Optional: `Context Entities Recall`, `Factual Correctness`, `Semantic Similarity` — _TODO: procurement mapping and caveats._
+- DeepEval docs read (all marked completed in the route doc before building):
+  - `Introduction to LLM Evaluation Metrics` — core concept is test case + metric → 0–1 score + reason + threshold pass/fail; RAG metrics split into retriever-side (contextual precision/recall/relevancy) vs. generator-side (faithfulness, answer relevancy) metrics; every metric has a fixed required-field contract on `LLMTestCase`.
+  - `Faithfulness` — checks whether `actual_output` factually aligns with `retrieval_context`; required fields `input`/`actual_output`/`retrieval_context`; distinct from `HallucinationMetric` because it's scoped to *this answer's cited context*, not general world-knowledge hallucination.
+  - `Answer Relevancy` — referenceless, only needs `input`/`actual_output`; checks whether the answer addresses the question, not whether it's factually correct — an answer can be perfectly on-topic and still wrong.
+  - `Contextual Relevancy` — retriever-quality metric: is `retrieval_context` relevant to `input`; still requires `actual_output` on the test case even though the metric itself barely uses it.
+  - `Contextual Recall` — needs `input`/`actual_output`/`expected_output`/`retrieval_context`; checks whether the retrieved context contains what's needed to support the *expected* answer, not the actual one — closest framework analogue to `generation_eval.check_context_recall`, except DeepEval's version is LLM-judged text overlap and this project's is deterministic doc-id set membership.
+  - `Contextual Precision` — same four required fields as contextual recall; checks whether relevant chunks are ranked above irrelevant ones — maps to this project's existing P@1/R@5/MRR@10/nDCG@5, but judged semantically rather than via graded relevance labels.
+  - `RAGAS` wrapper page (skimmed) — DeepEval can wrap RAGAS's own metrics, but DeepEval's docs recommend its native metrics for debuggability/reasoning/JSON confinement/pytest integration — confirms building directly against both frameworks' native APIs (as done today) rather than through DeepEval's RAGAS wrapper was the right call for actually *comparing* them.
+- RAGAS docs read (all marked completed in the route doc before building):
+  - `Metrics` overview — taxonomy: Context Precision, Context Recall, Context Entities Recall, Noise Sensitivity, Response Relevancy, Faithfulness (RAG-specific), plus Factual Correctness/Semantic Similarity as non-RAG comparison metrics.
+  - `Faithfulness` — factual consistency of `response` vs. `retrieved_contexts`, formula = supported claims / total claims, API shape `Faithfulness(llm=...).ascore(user_input=..., response=..., retrieved_contexts=[...])` — matches what `run_ragas_faithfulness` actually calls (via the sync `single_turn_score(SingleTurnSample(...))` wrapper instead of the async `ascore`, for a simpler teaching-module call site).
+  - `Response Relevancy`/`Answer Relevancy` — generates synthetic questions from the response and compares them to the real question via embedding cosine similarity; explicitly does not prove factual correctness.
+  - `Context Recall` — LLM-based: breaks the `reference` answer into claims and checks each against retrieved context; a non-LLM/ID-based variant exists and is the closer analogue to `generation_eval.check_context_recall`.
+  - `Context Precision` — mean precision@k of relevant chunks in the retrieved list; has reference/no-reference/ID-based variants, with the ID-based one especially relevant given this project's stable `doc_id`/`chunk_id` fields.
+  - Skimmed: Context Entities Recall (entity overlap, future procurement-entity use), Factual Correctness (claim-decomposition precision/recall/F1 — framework analogue to `check_expected_terms`), Semantic Similarity (embedding cosine similarity — explicitly warned not to use alone, since it can stay high even when a critical number or approval role is wrong).
 
 ### Baseline evidence
 
@@ -2115,46 +2118,51 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 
 ### Framework-eval adapter / methodology evidence
 
-- Adapter input shape chosen: _TODO: Fill in._
-- Framework(s) attempted: _TODO: DeepEval / RAGAS / both / blocked._
-- Metrics targeted first: _TODO: e.g. faithfulness, answer relevancy, contextual recall._
-- Result shape chosen: _TODO: include score, threshold, passed, reason, status/error, judge model, context ids._
-- No-key/no-dependency behavior: _TODO: Fill in exact controlled failure behavior._
+- Adapter input shape chosen: a plain dict (`build_framework_eval_case`) with `query_id`/`input`/`actual_output`/`expected_output`/`retrieval_context`/`source_metadata`/`deterministic_findings` — matches the rest of the project's plain-dict convention (no dataclasses/pydantic anywhere in `generation.py`/`generation_eval.py`), built once and reshaped per framework by two small `to_*` functions rather than one function branching on framework.
+- Framework(s) attempted: both DeepEval and RAGAS, both reached a real live call successfully after fixing the two environment blockers (see below).
+- Metric targeted: faithfulness only, through both frameworks, per the design doc's "pick one first live metric" guidance.
+- Result shape chosen: `framework`, `metric`, `query_id`, `score`, `threshold`, `passed`, `reason`, `status`, `error`, `judge_model` (`make_eval_result`) — `status` is one of `"skipped"` (`live=False`, the default, zero network), `"blocked"` (dependency/key missing), `"ok"`, or `"error"` (live call raised, caught rather than crashing a multi-query sweep).
+- No-key/no-dependency behavior: `deepeval_status()`/`ragas_status()` return `("blocked", reason)` — never raise — checked by an in-function `import` (proven "not installed" via `monkeypatch.setitem(sys.modules, "deepeval"/"ragas", None)`, since both are real installed dependencies here) and an `OPENROUTER_API_KEY` presence check. `run_*_faithfulness(case, live=False)` (the default) returns `status="skipped"` *before* importing the framework at all — proven, not just asserted, by a test that poisons `sys.modules` and confirms the function still returns cleanly.
 - Calibration examples:
-  - Q001 expected behavior: _TODO: Fill in._
-  - Q091 expected behavior: _TODO: Fill in._
+  - Q001 expected behavior: should score high on faithfulness (its real transcript only makes claims its cited sources support). Actual: DeepEval 0.80/PASS, RAGAS 0.43/FAIL — see "What failed or was confusing" for why DeepEval's *reason* for not scoring 1.0 was itself factually wrong, and RAGAS gave no reason at all to check.
+  - Q091 expected behavior: per the design doc's own prediction, faithfulness might *not* catch Q091's missing-evidence problem, because the real transcript never invents anything beyond its five retrieved sources — it's faithful to what it saw, just incomplete. Actual: exactly that. DeepEval 0.80/PASS, RAGAS 0.55/PASS — both frameworks passed Q091 on faithfulness, while Day 11's deterministic `check_context_recall` still correctly fails it for missing `POL-001`/`GUIDE-002`. This is the clean confirmation the design doc predicted, seen in real judge output.
 
 ### Artifact / test evidence
 
-- Files created/modified: _TODO: Fill in._
-- Deterministic tests: _TODO: command + result._
-- Compile/lint gates: _TODO: command + result._
-- Framework/live judge status: _TODO: ran / blocked / deliberately deferred; include exact command and output if run._
-- Eval report update: _TODO: section name and summary._
+- Files created/modified: `src/framework_eval.py` (new), `tests/test_framework_eval.py` (new), `docs/eval-report.md` (Day 12 section added), `docs/learning-log.md` (this entry), `pyproject.toml`/`uv.lock` (`langchain-community` pinned `<0.4`, `pillow` added), `.deepeval/.deepeval` (model name corrected via CLI, not hand-edited).
+- Deterministic tests: `./.venv/bin/pytest -q` → `167 passed in 1.12s` (151 prior + 16 new, zero network calls — the new tests explicitly poison `sys.modules` for `deepeval`/`ragas` in several cases and still pass, proving no accidental import happens on the `live=False` path).
+- Compile/lint gates: `./.venv/bin/python -m compileall -q src tests` → clean; `./.venv/bin/python -m ruff check src tests` → `All checks passed!`.
+- Framework/live judge status: **ran live**, both frameworks, both fixtures — `./.venv/bin/python src/framework_eval.py --live` — 4 real OpenRouter calls via `openai/gpt-4o-mini`, real scores and (for DeepEval) real reason text recorded verbatim in `docs/eval-report.md`.
+- Eval report update: `docs/eval-report.md` → new "Day 12: DeepEval/RAGAS faithfulness harness" section — environment-fix writeup, adapter contract tables, deterministic + live command output, a documented DeepEval judge-reasoning error, the Q001/Q091 calibration interpretation, a deterministic-vs-judge trust table, and caveats.
 
 ### What failed or was confusing
 
-- _TODO: Fill in._
-- Expected confusion to resolve: faithfulness can be high for an answer that is faithful to incomplete retrieved context, while context recall / factual correctness may be needed to catch the missing reference evidence.
+- **RAGAS didn't import at all, for two separate reasons, before any adapter code could even be tested.** First: `ragas==0.3.1`'s `ragas/llms/base.py` does an unconditional top-level `from langchain_community.chat_models.vertexai import ChatVertexAI` — but `ragas`'s own PyPI metadata has no upper-bound pin on `langchain-community`, so `uv` had resolved `langchain-community==0.4.2` (released 2026-05-22), which no longer ships that submodule at all (confirmed by listing the installed package's files, and by downloading the `0.3.31` wheel from PyPI directly and confirming *it* still has the file). Fixed with `uv add "langchain-community<0.4"`. Second, immediately after: `ragas/prompt/multi_modal_prompt.py` does an unconditional `from PIL import Image`, and `Pillow` is not declared anywhere in `ragas`'s `Requires-Dist` — a second, real, undeclared-dependency packaging bug. Fixed with `uv add pillow`. Both are genuine upstream `ragas==0.3.1` packaging issues, not local misconfiguration — and notably, neither has anything to do with Python version (`ragas`'s own metadata declares `Requires-Python: >=3.9`, well under this project's 3.11.7). The route doc's note about a Python 3.12 requirement for something called `rag_eval` doesn't correspond to anything in this repo's actual dependency graph.
+- **DeepEval's previously-configured OpenRouter model was a typo that would have silently broken every live call.** `.deepeval/.deepeval` had `"OPENROUTER_MODEL_NAME": "openai/gpt-4.o-mini"` (an extra `.`) from an earlier `deepeval set-openrouter` run. Checked against OpenRouter's live `/models` endpoint: that exact string doesn't exist; `openai/gpt-4o-mini` does. Re-ran `deepeval set-openrouter --model="openai/gpt-4o-mini"` to fix it, confirmed via `deepeval diagnose`.
+- **A live judge's stated reason can be confidently wrong.** DeepEval's Q001 faithfulness reason claimed the retrieval context "clearly states it does not trigger a competition requirement due to being below the €250,000 threshold" — backwards: €60,000 is *above* the €25,000 floor that triggers the three-bid requirement, and the real Q001 answer correctly says so, citing the right sources. The judge still produced a fluent, wrong-direction explanation for a sub-1.0 score. Caught only because Q001's real answer text was already known to be correct — exactly the point of using it as a calibration anchor rather than trusting the first live score that comes back.
+- Expected confusion, confirmed exactly as predicted: faithfulness stayed high (both frameworks passed) on Q091 despite it being a known-incomplete answer, because faithfulness only checks the answer against the context it *did* see — it has no way to know `POL-001`/`GUIDE-002` should have been there. Context recall (Day 11's deterministic version) is what actually catches that, and did.
 
 ### What became clearer
 
-- _TODO: Fill in._
-- Expected explanation shape: framework metrics add semantic judgment and judge reasons, but deterministic project checks remain the reproducible baseline and calibration anchor.
+- The Day 11 vs. Day 12 boundary is not "deterministic checks are the rough draft, framework metrics are the real answer" — it's two genuinely different failure classes, and today's live run proved it rather than just asserting it: Day 11's `check_context_recall` is the *only* layer that caught Q091's real problem (missing primary documents); DeepEval/RAGAS faithfulness, run live, both said Q091 was fine.
+- A framework score without a reason (RAGAS) is much harder to trust or debug than a framework score with a wrong reason (DeepEval) — at least the wrong reason is falsifiable against the known-good Q001 transcript. A bare float has nothing to push back against.
+- "Add a framework judge" is not a one-line `pip install` in practice — both frameworks needed real environment debugging (a config typo, two separate unrelated upstream packaging bugs) before a single live call would succeed, which is itself a realistic, worth-remembering lesson about framework-eval adoption cost.
 
 ### What I can now explain in an interview
 
-- **Faithfulness vs answer relevancy:** _TODO: Fill in._
-- **Context recall vs context precision:** _TODO: Fill in._
-- **Why Q001/Q091 calibrate the judge:** _TODO: Fill in._
-- **Why LLM-as-judge scores need thresholds, reasons, and caveats:** _TODO: Fill in._
-- **How ProcureRAG data maps to DeepEval/RAGAS test cases:** _TODO: Fill in._
+- **Faithfulness vs answer relevancy:** faithfulness checks whether the answer's claims are supported by the retrieved context it was given (`input`/`actual_output`/`retrieval_context`); answer relevancy checks whether the answer actually addresses the question asked (`input`/`actual_output` only, no context needed). An answer can be faithful but off-topic, or relevant but unsupported by its sources — they catch different failure modes and neither implies the other.
+- **Context recall vs context precision:** context recall asks "does the retrieved context contain what's needed to support the *expected* answer" (recall — are we missing evidence); context precision asks "are the relevant chunks ranked above the irrelevant ones" (precision — is the good evidence buried under noise). Both need `expected_output` (or a reference), unlike faithfulness/relevancy.
+- **Why Q001/Q091 calibrate the judge:** without a case whose real answer is already known to be fully correct (Q001) and one known to be subtly incomplete (Q091), a judge's score has nothing concrete to be checked against — today's DeepEval Q001 run is the proof: the score alone (0.80) looked plausible, but only cross-checking against the known-correct Q001 transcript revealed the *reason* behind that score was factually backwards.
+- **Why LLM-as-judge scores need thresholds, reasons, and caveats:** a bare score is a single number produced by a model that can misread its own cited evidence, as shown today, live, not hypothetically. A reason string makes that checkable by a human; a threshold makes pass/fail explicit and adjustable; without both, a score is unfalsifiable.
+- **How ProcureRAG data maps to DeepEval/RAGAS test cases:** `query_row["query"]` → `input`/`user_input`; the generated answer text → `actual_output`/`response`; `[source["text"] for source in sources]`, order preserved → `retrieval_context`/`retrieved_contexts`; `query_row["expected_answer"]` → `expected_output` (DeepEval only uses this for contextual recall, not faithfulness; RAGAS's `Faithfulness` doesn't use it at all).
 
 ### What remains weak
 
-- _TODO: Fill in._
-- Likely candidates: judge variance, dependency/API-key boundary, threshold calibration, cost/latency, and whether framework metrics catch missing-but-unretrieved evidence as reliably as deterministic `context_recall`.
+- Only faithfulness was run live; answer relevancy, contextual recall/precision, and factual correctness are adapter-ready (the neutral case already carries `expected_output`) but genuinely untested against a live judge — the DeepEval-vs-RAGAS reasoning gap seen today on faithfulness might look different on a metric that uses `expected_output`.
+- Both live results are a single sample per (query, framework) pair — no repeated-run variance check was done, so whether DeepEval's 0.80/0.80 or RAGAS's 0.43/0.55 would hold up across repeated calls (temperature is set to 0.0 for both, but that doesn't guarantee byte-identical judge output on a hosted API — see `generation.py`'s own caveat about this for the answer-generation model) is unverified.
+- `run_deepeval_faithfulness`/`run_ragas_faithfulness`'s `status="error"` path (a live call that raises) was never actually exercised — both frameworks succeeded on both queries today, so that degrade-gracefully path is only proven not to interfere with the deterministic `live=False` tests, not proven against a real provider failure.
+- No claim-level, sentence-by-sentence support check exists yet at either the deterministic or framework layer for *individual* citations (e.g. "is citation `[3]` specifically supported by source 3's text, not just some source somewhere") — Day 11's own named gap, still open after Day 12.
 
 ### Next step
 
-- _TODO: Fill in after Day 12._
+- Wire DeepEval's contextual recall (needs `expected_output`, already in the neutral case) as a second live metric, specifically because it is the framework metric closest in spirit to Day 11's `check_context_recall` — a natural next calibration test would be whether contextual recall, unlike faithfulness, *does* penalize Q091 for its missing `POL-001`/`GUIDE-002` evidence, the way this session's plain faithfulness run did not.
