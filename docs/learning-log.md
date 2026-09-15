@@ -2079,3 +2079,82 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 ### Next step
 
 - Two real options, per the design doc's own framing of Day 11 as a bridge day: (a) extend `check_expected_terms`-style curated fixtures to a wider sample of the 93 queries before trusting the pattern generally, or (b) the harder step — a first LLM-as-judge faithfulness pass, calibrated against Q001 (known-good) and Q091 (known-incomplete) as anchor examples, so a judge model's score has something concrete to be checked against. Either is reasonable before starting Chapter 11 Agentic; the design doc's own stop condition only requires that this deterministic layer exist and be explainable, not that the next layer already be built.
+
+## 2026-09-15 — Day 12: DeepEval/RAGAS Faithfulness Harness
+
+### What I built or drafted
+
+- Drafted Day 12 route in `docs/day-12-deepeval-ragas-faithfulness-harness.md`.
+- _TODO: Fill in after building the framework-eval adapter / harness._
+
+### Course / framework checkpoint completed
+
+- Boot.dev RAG chapter/lesson: **No new Boot.dev chapter today.** Chapter 10 — Augmented Generation is completed and serves as the baseline; Chapter 11 — Agentic remains deferred until this eval layer is understood.
+- DeepEval docs read:
+  - `Introduction to LLM Evaluation Metrics` (`https://deepeval.com/docs/metrics-introduction`) — _TODO: notes on RAG metric taxonomy, score/reason/threshold behavior, and required test-case fields._
+  - `Faithfulness` (`https://deepeval.com/docs/metrics-faithfulness`) — _TODO: notes on `input` / `actual_output` / `retrieval_context` and what faithfulness can/cannot catch._
+  - `Answer Relevancy` (`https://deepeval.com/docs/metrics-answer-relevancy`) — _TODO: notes on referenceless answer-on-topic scoring._
+  - `Contextual Relevancy` (`https://deepeval.com/docs/metrics-contextual-relevancy`) — _TODO: notes on retrieved-context relevance to query._
+  - `Contextual Recall` (`https://deepeval.com/docs/metrics-contextual-recall`) — _TODO: notes on `expected_output` + retrieved context completeness._
+  - `Contextual Precision` (`https://deepeval.com/docs/metrics-contextual-precision`) — _TODO: notes on whether relevant chunks are ranked above irrelevant chunks._
+  - Optional skim: `RAGAS` wrapper (`https://deepeval.com/docs/metrics-ragas`) — _TODO: notes on DeepEval's RAGAS wrapper vs native DeepEval metrics._
+- RAGAS docs read:
+  - `Metrics` overview (`https://docs.ragas.io/en/latest/concepts/metrics/`) — _TODO: taxonomy notes._
+  - `Faithfulness` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/faithfulness/`) — _TODO: supported response claims / total response claims._
+  - `Response Relevancy` / `Answer Relevancy` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/answer_relevance/`) — _TODO: generated-question / cosine-similarity framing._
+  - `Context Recall` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_recall/`) — _TODO: reference claims attributable to retrieved context; LLM vs non-LLM / ID-based variants._
+  - `Context Precision` (`https://docs.ragas.io/en/latest/concepts/metrics/available_metrics/context_precision/`) — _TODO: precision@k-style ranking of relevant chunks; reference/no-reference/ID-based variants._
+  - Optional: `Context Entities Recall`, `Factual Correctness`, `Semantic Similarity` — _TODO: procurement mapping and caveats._
+
+### Baseline evidence
+
+- Kickoff checks:
+  - `./.venv/bin/pytest -q` → `151 passed in 1.84s`.
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+- Starting weakness: Day 11 has deterministic Q001/Q091 eval fixtures, but no framework-backed LLM-as-judge score yet. The key open question is whether DeepEval/RAGAS faithfulness/context metrics agree with the hand-built deterministic findings and where they disagree.
+
+### Framework-eval adapter / methodology evidence
+
+- Adapter input shape chosen: _TODO: Fill in._
+- Framework(s) attempted: _TODO: DeepEval / RAGAS / both / blocked._
+- Metrics targeted first: _TODO: e.g. faithfulness, answer relevancy, contextual recall._
+- Result shape chosen: _TODO: include score, threshold, passed, reason, status/error, judge model, context ids._
+- No-key/no-dependency behavior: _TODO: Fill in exact controlled failure behavior._
+- Calibration examples:
+  - Q001 expected behavior: _TODO: Fill in._
+  - Q091 expected behavior: _TODO: Fill in._
+
+### Artifact / test evidence
+
+- Files created/modified: _TODO: Fill in._
+- Deterministic tests: _TODO: command + result._
+- Compile/lint gates: _TODO: command + result._
+- Framework/live judge status: _TODO: ran / blocked / deliberately deferred; include exact command and output if run._
+- Eval report update: _TODO: section name and summary._
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+- Expected confusion to resolve: faithfulness can be high for an answer that is faithful to incomplete retrieved context, while context recall / factual correctness may be needed to catch the missing reference evidence.
+
+### What became clearer
+
+- _TODO: Fill in._
+- Expected explanation shape: framework metrics add semantic judgment and judge reasons, but deterministic project checks remain the reproducible baseline and calibration anchor.
+
+### What I can now explain in an interview
+
+- **Faithfulness vs answer relevancy:** _TODO: Fill in._
+- **Context recall vs context precision:** _TODO: Fill in._
+- **Why Q001/Q091 calibrate the judge:** _TODO: Fill in._
+- **Why LLM-as-judge scores need thresholds, reasons, and caveats:** _TODO: Fill in._
+- **How ProcureRAG data maps to DeepEval/RAGAS test cases:** _TODO: Fill in._
+
+### What remains weak
+
+- _TODO: Fill in._
+- Likely candidates: judge variance, dependency/API-key boundary, threshold calibration, cost/latency, and whether framework metrics catch missing-but-unretrieved evidence as reliably as deterministic `context_recall`.
+
+### Next step
+
+- _TODO: Fill in after Day 12._
