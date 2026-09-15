@@ -1244,6 +1244,184 @@ layer scored against the same rubric discipline Day 9 used for retrieval
 grades. That is explicitly next-layer work, not something this addendum
 claims to have solved.
 
+## Day 11: Grounded-answer evaluation + completeness checks
+
+Date: 2026-09-15
+Implementation: `src/generation_eval.py` — `primary_expected_doc_ids`/
+`context_doc_ids` (the two small shared helpers); `check_citation_validity`
+(reuses `generation.validate_citations` unchanged — citation hygiene is not
+re-derived, only re-shaped into a finding); `check_context_recall` (compares
+a query's grade-2/"primary" expected document ids against the doc ids
+actually present in the retrieved `sources`, regardless of citation — the
+check that catches a retrieval-side evidence gap); `check_expected_terms`
+(hand-curated required terms/facts, for curated queries only); `check_
+unsupported_inference` (a small hand-curated hedge-phrase scan — a proxy
+flag, not a faithfulness proof); `evaluate_generated_answer` (runs all
+four and returns one finding list); `make_finding` (the shared finding
+dict shape); `CURATED_FIXTURES` (the real Q001/Q091 sources and answer
+text Day 10's live run actually produced, hard-coded so no network call or
+pipeline load is needed to demonstrate any of this). Tests in
+`tests/test_generation_eval.py` — 16 deterministic tests, no network calls.
+
+### Gate re-run before building
+
+```
+./.venv/bin/pytest -q
+# 135 passed in 2.44s   (before Day 11's tests were added)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+### Why a fourth check layer, on top of Day 10's citations
+
+Day 10 already proved citation hygiene: every `[n]` in a generated answer
+either traces to a real retrieved source or is flagged as an orphan. Day
+10's own Q091 transcript (see above) came back with **zero orphan
+citations** — and it is still, provably, an incomplete answer: it cannot
+state the buyer's real approval band (Band 3, €50,000–€250,000) or the
+renewal usage-data evidence, because retrieval never put `POL-001` or
+`GUIDE-002` in front of the model in the first place. A citation checker
+has nothing to say about that, because every citation it *does* see really
+is valid. Day 11 exists to make that second, different kind of failure
+visible in code — not just in a paragraph of manual analysis, which is how
+Day 10's write-up caught it.
+
+### The four checks
+
+1. **`citation_validity`** — unchanged from Day 10, reused not
+   re-implemented. Fails on a hallucinated `[n]`.
+2. **`context_recall`** — compares the query's *primary* (`relevance_grades
+   == 2`, the same "primary" vocabulary `eval_metrics.primary_count` uses
+   on the retrieval side) expected document ids against every doc id in
+   the retrieved `sources`, independent of what got cited. A missing
+   primary document here means no amount of careful generation could have
+   produced a complete answer — the failure is at the retrieval boundary,
+   not the generation boundary. This is the check that automatically
+   catches Q091.
+3. **`expected_terms`** — for a small, hand-curated set of queries, asserts
+   that specific required facts/terms from the query's real
+   `expected_answer` appear in the generated text. Deliberately *not*
+   auto-derived from `expected_answer` — see "Known limitations" below for
+   why a generic keyword extractor was rejected in favor of a smaller,
+   honestly-scoped, hand-picked list.
+4. **`unsupported_inference`** — scans the answer text for a short,
+   hand-curated list of hedge/extrapolation phrases (`"at minimum"`,
+   `"equal or greater"`, ...). A hit is `severity="warn"`, not `"fail"`: it
+   flags a pattern worth a human or LLM-as-judge look, it does not itself
+   prove a claim is unsupported. It is not a made-up example — the real
+   Q091 transcript below contains this exact pattern.
+
+### Demo output (real run, 2026-09-15, `./.venv/bin/python src/generation_eval.py`)
+
+No network call, no API key, no retrieval pipeline load — `CURATED_FIXTURES`
+hard-codes the exact retrieved sources and generated-answer text Day 10's
+live run already produced for Q001 and Q091 (see "Demo output" above), so
+this only re-checks output that already exists:
+
+```
+Q001 (threshold): What approval is required for a EUR 60,000 purchase order?
+  [PASS] citation_validity: every [n] citation traces to a real retrieved source
+  [PASS] context_recall: every primary (grade-2) expected document reached the retrieved context
+  [PASS] unsupported_inference: no inference-marker phrasing detected
+  [PASS] expected_terms: answer text contains every curated required term/fact
+
+Q091 (multi_doc): What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
+  [PASS] citation_validity: every [n] citation traces to a real retrieved source
+  [FAIL] context_recall: primary document(s) ['GUIDE-002', 'POL-001'] were never retrieved - the retrieval step, not the generation step, is why the answer can't fully cover this query, regardless of how well it cites what it *did* receive
+         expected: ['GUIDE-002', 'POL-001', 'POL-003']
+         actual:   ['FAQ-001', 'POL-003', 'SOP-001']
+  [WARN] unsupported_inference: answer contains inference-marker phrasing ['at minimum', 'equal or greater'] - a claim may extrapolate past what its cited source actually states; this is a flag for human/LLM-as-judge review, not a proven faithfulness violation
+         expected: no hedged extrapolation beyond cited source text
+         actual:   ['at minimum', 'equal or greater']
+  [FAIL] expected_terms: answer text is missing required term(s)/fact(s): ['Band 3', 'usage data']
+         expected: ['Band 3', 'usage data']
+         actual:   []
+```
+
+**Reading this output is the actual Day 11 deliverable.** Q001 passes
+every check — clean citations, its one primary document (`POL-001`) is in
+context, its real required facts ("VP Procurement", "Finance review")
+appear in the answer, and no hedge-phrase pattern. Q091 shows exactly the
+three-way split the whole day exists to make visible: citation validity
+passes (the answer is honest about what it *did* see), `context_recall`
+fails and names precisely which primary documents were missing
+(`GUIDE-002`, `POL-001`), `expected_terms` fails as the direct
+downstream consequence (the answer never says "Band 3" or references
+usage data, because the documents that would justify saying them were
+never retrieved), and `unsupported_inference` flags the specific sentence
+where the model reasoned past its evidence ("a €120,000 commitment is of
+equal or greater significance, so this approval level applies at
+minimum") instead of following the prompt's own rule to say "not enough
+information" instead of guessing. Four different verdicts from one
+answer, each backed by a concrete reason — not one collapsed score.
+
+### What is deterministic today vs. what still needs human/LLM-as-judge review
+
+- **Deterministic and trustworthy as far as it goes**: `citation_validity`
+  and `context_recall` are both exact-match checks over ids — a document
+  id is either in `sources` or it isn't, a citation number either maps to
+  a real source or it doesn't. No judgment call, no threshold to tune.
+- **Deterministic, but honestly narrow**: `expected_terms` is a
+  case-insensitive substring match against a hand-curated list. It is
+  precise (in the sense that it cannot be fooled by paraphrase-nearness
+  scoring going wrong) but literal — a correct answer that states the same
+  fact in different words fails it, and it only exists at all for the
+  queries someone actually curated a term list for (two, today). Building
+  a generic version of this (derive required terms from `expected_answer`
+  automatically for all 93 queries) was deliberately rejected: it would
+  either need real NLP (fact/claim extraction) or a keyword heuristic
+  loose enough to silently mis-grade queries nobody checked by hand — the
+  exact "broad fake metric that cannot explain itself" the Day 11 design
+  doc warns against.
+- **A proxy, not a proof**: `unsupported_inference`'s hedge-phrase list is
+  the shallowest check here, and it says so in its own `severity="warn"`
+  rather than `"fail"`. It can only ever flag phrasing patterns, never
+  confirm or rule out that a specific claim is actually unsupported by its
+  cited source — that is exactly the kind of judgment call an
+  LLM-as-judge pass (DeepEval's faithfulness metric, or RAGAS's, both
+  named in `docs/day-11-grounded-answer-evaluation.md`) is built for, and
+  this project has not adopted either yet.
+- **A named, real gap in `expected_terms`'s matching**: the real Q091
+  transcript already contains the substring `"12 months"` — twice — for a
+  reason that has *nothing* to do with the renewal-timing evidence
+  `GUIDE-002` would have provided (it is POL-003's risk-acceptance-window
+  clause instead). `Q091_REQUIRED_TERMS` uses `"usage data"` specifically
+  to avoid this collision — a plain substring check cannot tell *which*
+  sense of a phrase it is matching, so a required term has to be chosen
+  carefully, by a human who has read the actual text, not picked
+  mechanically from `expected_answer`. This is recorded here rather than
+  smoothed over because it is a genuine limitation of check 3's method,
+  not just of this one fixture.
+- **A named, real gap in `context_recall`**: a query with zero grade-2
+  documents in `relevance_grades` passes this check vacuously (there is
+  nothing to check), which is a different thing from "checked and
+  confirmed complete." `check_context_recall`'s docstring says this
+  explicitly rather than letting a vacuous pass read the same as a real
+  one.
+
+### Mapping to DeepEval/RAGAS vocabulary (concepts reused, no framework adopted)
+
+- `context_recall` here is the deterministic, id-level ancestor of
+  DeepEval's *contextual recall* / RAGAS's *context recall* — both ask "did
+  retrieval bring back what a correct answer needs", scored here as exact
+  set membership over curated `relevance_grades` rather than an
+  LLM-judged score.
+- `citation_validity` plus `unsupported_inference` together are a narrow,
+  deterministic slice of *faithfulness* (DeepEval) / *faithfulness*
+  (RAGAS) — "does the answer's language stay inside its evidence" — with
+  citation validity proving the *traceability* half exactly, and the
+  hedge-phrase scan only ever approximating the *support* half.
+  Answer-relevancy scoring (is the answer actually about the question
+  asked) is not attempted at all today.
+- `expected_terms` is this project's hand-curated, substring-level stand-in
+  for *factual correctness* (RAGAS) / a curated-query slice of *answer
+  relevancy* (DeepEval) — checking specific required facts rather than a
+  general semantic-similarity score against `expected_answer`.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

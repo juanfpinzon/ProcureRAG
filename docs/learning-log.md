@@ -1949,17 +1949,24 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 ### What I built or drafted
 
 - Drafted Day 11 route in `docs/day-11-grounded-answer-evaluation.md`.
-- _TODO: Fill in Juan-owned implementation artifacts, likely `src/generation_eval.py` and `tests/test_generation_eval.py`, after building._
+- Built `src/generation_eval.py` (four deterministic checks — citation
+  validity, retrieval-context recall, curated expected-terms coverage,
+  hedge-phrase inference flag — plus `evaluate_generated_answer` wiring
+  them together and `CURATED_FIXTURES` holding Day 10's real Q001/Q091
+  sources and answer text) and `tests/test_generation_eval.py` (16
+  deterministic tests, no network calls). See `docs/eval-report.md`'s "Day
+  11: Grounded-answer evaluation + completeness checks" for the full
+  contract, real command output, and known limitations.
 
 ### Course checkpoint completed
 
 - Boot.dev RAG chapter/lesson: Chapter 10 — Augmented Generation, reactivated as an evaluation lens before moving to Chapter 11 Agentic.
-  - Lesson 1: `Augmented Generation` — _TODO: Fill in._
-  - Lesson 2: `LLM Summarization` — _TODO: Fill in._
-  - Lesson 3: `Conflict Resolution in Summaries` — _TODO: Fill in._
-  - Lesson 4: `Adding Citations` — _TODO: Fill in._
-  - Lesson 5: `Question Answering` — _TODO: Fill in._
-- Companion source notes: DeepEval/RAGAS vocabulary for faithfulness, answer/response relevancy, context precision/recall/relevancy, factual correctness, semantic similarity, and deterministic string/exact-match checks — _TODO: Fill in what was actually used._
+  - Lesson 1: `Augmented Generation` — Completed.
+  - Lesson 2: `LLM Summarization` — Completed.
+  - Lesson 3: `Conflict Resolution in Summaries` — Completed.
+  - Lesson 4: `Adding Citations` — Completed.
+  - Lesson 5: `Question Answering` — Completed.
+- Companion source notes: DeepEval/RAGAS vocabulary for faithfulness, answer/response relevancy, context precision/recall/relevancy, factual correctness, semantic similarity, and deterministic string/exact-match checks — used only as a mapping target, not integrated. `context_recall` is the deterministic, id-level ancestor of contextual/context recall; `citation_validity` + `unsupported_inference` together are a narrow, deterministic slice of faithfulness; `expected_terms` is a hand-curated, substring-level stand-in for factual correctness. See `docs/eval-report.md`'s Day 11 "Mapping to DeepEval/RAGAS vocabulary" section.
 
 ### Baseline evidence
 
@@ -1971,46 +1978,92 @@ gate re-run output for all of the above are in `docs/eval-report.md`'s
 
 ### Generation-eval contract / methodology evidence
 
-- _TODO: Fill in the eval input shape: query row, answer text, Day 10 sources, citation report, expected answer/evidence._
-- _TODO: Fill in the finding/output shape: query id, check name, pass/fail/severity, expected evidence/fact, actual cited/context docs, reason._
-- _TODO: Fill in the exact checks implemented._
-  - Citation validity / orphan source ids: _TODO._
-  - Source-support / faithfulness proxy: _TODO._
-  - Answer completeness against expected answer/evidence: _TODO._
-  - Retrieval-context recall or missing expected docs: _TODO._
+- Eval input shape: `evaluate_generated_answer(query_row, sources, answer_text, required_terms=None)`
+  — `query_row` is a real row from `data/corpus_v1/example_queries.jsonl`
+  (needs `query_id` and `relevance_grades`), `sources` is Day 10's
+  `generation.build_sources` output shape, `answer_text` is the generated
+  answer string, `required_terms` is an optional hand-curated tuple of
+  facts a curated query's answer must mention.
+- Finding/output shape (`make_finding`): `query_id`, `check`, `passed`,
+  `severity` (`"info"`/`"fail"`/`"warn"`), `message`, `expected`, `actual`,
+  `cited_doc_ids` — every finding carries `cited_doc_ids`, not just
+  citation-related ones, so a reader never has to cross-reference a
+  separate report.
+- Checks implemented (`src/generation_eval.py`):
+  - Citation validity / orphan source ids: `check_citation_validity` —
+    reuses `generation.validate_citations` unchanged, fails on a
+    hallucinated `[n]`.
+  - Retrieval-context recall / missing expected docs: `check_context_recall`
+    — compares grade-2 ("primary") `relevance_grades` doc ids against every
+    doc id in the retrieved `sources`, independent of citation. This is
+    the check that automatically catches Q091.
+  - Answer completeness against expected answer/evidence: `check_expected_terms`
+    — case-insensitive substring match against a hand-curated
+    `required_terms` list, curated queries only.
+  - Source-support / faithfulness proxy: `check_unsupported_inference` —
+    scans for a hand-curated list of hedge/extrapolation phrases
+    (`"at minimum"`, `"equal or greater"`, ...); a hit is `severity="warn"`,
+    a flag for human/LLM-as-judge review, not a proven violation.
 
 ### Artifact / test evidence
 
-- Files created or modified: _TODO: Fill in._
-- Deterministic tests: _TODO: Fill in exact command and result._
-- Compile/lint gates: _TODO: Fill in exact command and result._
-- Demo / CLI output: _TODO: Fill in `./.venv/bin/python src/generation_eval.py` or equivalent output._
-- Q091 failure evidence: _TODO: Explain exactly which automated finding catches the known incomplete-answer behavior._
-- Passing-control evidence: _TODO: Explain the passing fixture, likely Q001 or another simple query._
+- Files created: `src/generation_eval.py`, `tests/test_generation_eval.py`.
+  Files modified: `docs/eval-report.md` (new "Day 11" section),
+  `docs/learning-log.md` (this entry).
+- Deterministic tests: `./.venv/bin/pytest -q` → `151 passed in 0.67s`
+  (135 before Day 11 + 16 new in `tests/test_generation_eval.py`).
+- Compile/lint gates: `./.venv/bin/python -m compileall -q src tests` →
+  clean, no output. `./.venv/bin/python -m ruff check src tests` → `All
+  checks passed!`.
+- Demo / CLI output: `./.venv/bin/python src/generation_eval.py` — see
+  `docs/eval-report.md`'s Day 11 "Demo output" section for the full,
+  real, unedited transcript.
+- Q091 failure evidence: `context_recall` fails automatically and names
+  the exact missing primary documents (`GUIDE-002`, `POL-001`);
+  `expected_terms` fails as the direct downstream consequence (the answer
+  never says "Band 3" or references usage data); `unsupported_inference`
+  flags the exact sentence where the model reasoned past its evidence
+  ("...equal or greater significance, so this approval level applies at
+  minimum"). All three run against Q091's *real* `relevance_grades` loaded
+  from `data/corpus_v1/example_queries.jsonl`, not a hand-typed stand-in
+  (`tests/test_generation_eval.py::test_curated_q091_fixture_is_caught_automatically_not_just_by_reading_it`).
+- Passing-control evidence: Q001's real Day 10 transcript passes all four
+  checks — `POL-001` (its one primary document) is in the retrieved
+  context, its citations have zero orphans, its curated required terms
+  ("VP Procurement", "Finance review") both appear in the answer, and no
+  hedge-phrase pattern is present
+  (`tests/test_generation_eval.py::test_curated_q001_fixture_passes_every_check`).
+
 
 ### What failed or was confusing
 
-- _TODO: Fill in._
-- Hint: separate three failure classes clearly: (1) orphan/decorative citation, (2) cited source does not support a claim, (3) answer omits required evidence even though its cited claims are individually supported.
+- Three failure classes are easy to conflate at first, and only one of them was covered before today: (1) an **orphan citation** — cites `[7]` when only 5 sources exist (Day 10's `validate_citations` catches this). (2) A **valid-but-unsupported citation** — cites `[3]`, and `[3]` is real, but the sentence next to it claims more than `[3]` actually says (nothing in this project mechanically proves this; `check_unsupported_inference`'s hedge-phrase scan is only a weak, indirect proxy for it — that's *why* it's `severity="warn"`, not `"fail"`). (3) An answer whose individual cited claims are all fine, but that omits required evidence entirely because that evidence was never retrieved (`check_context_recall` catches this — it's the new one Day 11 adds).
+- `check_context_recall` deliberately checks **every retrieved source**, not just the cited ones. It would be an easy, wrong shortcut to check it against cited docs only — that would just be re-measuring citation behavior again, not the actual retrieval gap.
+- The `"12 months"` collision in Q091's real transcript (POL-003's unrelated risk-acceptance clause happens to use the same phrase `GUIDE-002`'s renewal-timing evidence would have used) is the clearest proof that a plain substring check for `check_expected_terms` is fragile by construction — not a bug to fix later, a property of the method that has to be worked around by picking required terms carefully, by hand, after reading the real text.
 
 ### What became clearer
 
-- _TODO: Fill in._
-- Hint: explain why source ids prove traceability, not support; why completeness requires reference evidence; and why retrieval-context recall and generated-answer faithfulness are separate axes.
+- Why a source id proves *traceability*, not *support*: `[3]` existing and being cited only proves the model didn't invent a source number out of nothing. It proves nothing about whether the sentence sitting next to `[3]` is actually what source `[3]`'s text says.
+- Why completeness needs *reference evidence*, not just a coherent-sounding answer: an answer can be fluent, internally consistent, and still wrong by omission if the right chunk never reached the prompt. `expected_answer` / `relevance_grades` are the only way to catch that from outside the model — reading the answer alone can't, because there's nothing in the answer itself that flags what's missing.
+- Why retrieval-context recall and generated-answer faithfulness are separate axes, not two views of the same thing: they are genuinely different systems (retrieval vs. generation) failing in different ways, and Q091 proves they move independently — it has *good* faithfulness behavior (zero orphan citations, no fabricated source numbers) and *bad* context recall (two of three primary documents missing) at the same time.
 
 ### What I can now explain in an interview
 
-- **Citation validity vs. source support:** _TODO: Fill in._
-- **Faithfulness/groundedness vs. answer completeness:** _TODO: Fill in._
-- **Why Q091 is a better eval target than only Q001:** _TODO: Fill in._
-- **Why deterministic fixtures come before LLM-as-judge frameworks:** _TODO: Fill in._
-- **How this maps to DeepEval/RAGAS terms later:** _TODO: Fill in._
+- **Citation validity vs. source support:** citation validity (`check_citation_validity`, reusing Day 10's `validate_citations`) only proves a `[n]` number maps to a real retrieved source — an integrity check on the numbering, blind to sentence content. Source support/faithfulness would require actually reading the cited source's text and confirming it backs the specific claim next to it. Day 11 does not solve this: `check_unsupported_inference`'s hedge-phrase scan is a shallow, hand-curated proxy, not a real support check — which is exactly why it returns `severity="warn"` instead of `"fail"`.
+- **Faithfulness/groundedness vs. answer completeness:** faithfulness asks "is everything the answer states backed by the context it actually saw?" Completeness asks "does the answer cover everything the query needs, including evidence retrieval never surfaced?" An answer can be perfectly faithful to an incomplete context and still be a wrong/incomplete answer overall — that is exactly Q091: faithful to what it saw (no orphan citations), incomplete relative to `expected_answer` (missing `POL-001`/`GUIDE-002`), and those two properties are measured by different checks (`unsupported_inference` vs. `context_recall` + `expected_terms`) because they can fail independently.
+- **Why Q091 is a better eval target than only Q001:** Q001 passes every check trivially, because its one primary document (`POL-001`) was retrieved and its answer echoes the retrieved sources directly — it proves the happy path works, but proves nothing about whether the eval layer can *catch* a failure. Q091 is a real, already-documented failure (`multi_doc`, two of three primary documents missing from the retrieved context) that a citation-only check is structurally blind to — it's the fixture that actually tests whether Day 11's checks do their job, not just whether they run without crashing.
+- **Why deterministic fixtures come before LLM-as-judge frameworks:** the deterministic checks here are exact set/substring comparisons — reproducible, free, and inspectable in a few lines, calibrated against a failure this project already knows is real (Q091). An LLM-as-judge metric (DeepEval/RAGAS faithfulness) needs its own rubric, its own model choice, and its own calibration examples before its score means anything at all — building the hand-checked baseline first is what would let a future judge model's score actually be graded against something known-correct, instead of trusted on faith.
+- **How this maps to DeepEval/RAGAS terms later:** `check_context_recall` is the deterministic, id-level ancestor of DeepEval's contextual recall / RAGAS's context recall (exact set membership here, an LLM judgment call there). `check_citation_validity` plus `check_unsupported_inference` together are a narrow, deterministic slice of faithfulness — citation validity proves the *traceability* half exactly, the hedge-phrase scan only ever approximates the *support* half. `check_expected_terms` is a hand-curated, substring-level stand-in for factual correctness / a curated slice of answer relevancy. Answer relevancy itself (is the answer actually on-topic for the question asked) isn't attempted at all yet.
 
 ### What remains weak
 
-- _TODO: Fill in._
-- Expected candidates: LLM-as-judge calibration, broader query coverage beyond curated fixtures, real claim segmentation, framework-backed RAGAS/DeepEval runs, tracing/observability, and the underlying `multi_doc` retrieval gap.
+- `check_expected_terms` only has curated terms for 2 of the 93 v1 queries (Q001, Q091) — there is no generic coverage, by design, and extending it means hand-reading more `expected_answer`s.
+- `check_unsupported_inference`'s hedge-phrase list is hand-picked and small — a model that extrapolates without using one of those specific phrases sails through undetected.
+- `check_context_recall` passes vacuously on any query with zero grade-2 (`relevance_grades`) documents — a real gap named in its own docstring, not hidden.
+- No real claim-level source-support check exists yet — confirming that a *specific* cited sentence is actually backed by its source's text (not just that the source number is real) is still the single largest gap the Day 11 design doc named up front.
+- The underlying `multi_doc` retrieval weakness (Day 9's reranked `multi_doc` P@1 at 0.600 over 5 queries) is still unfixed — Day 11 only makes its downstream effect on the generated answer visible in code; it does not repair retrieval.
+- No framework-backed (DeepEval/RAGAS) run has happened yet — comparing this project's hand-built checks against a real LLM-judge score, to see where they agree and disagree, is still future work.
 
 ### Next step
 
-- _TODO: Fill in after Day 11 is complete._
+- Two real options, per the design doc's own framing of Day 11 as a bridge day: (a) extend `check_expected_terms`-style curated fixtures to a wider sample of the 93 queries before trusting the pattern generally, or (b) the harder step — a first LLM-as-judge faithfulness pass, calibrated against Q001 (known-good) and Q091 (known-incomplete) as anchor examples, so a judge model's score has something concrete to be checked against. Either is reasonable before starting Chapter 11 Agentic; the design doc's own stop condition only requires that this deterministic layer exist and be explainable, not that the next layer already be built.
