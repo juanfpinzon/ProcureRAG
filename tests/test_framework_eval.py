@@ -328,3 +328,43 @@ def test_run_ragas_faithfulness_live_without_key_is_blocked_not_an_error():
     assert result["status"] == "blocked"
     assert result["score"] is None
     assert "OPENROUTER_API_KEY" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# run_deepeval_contextual_recall (Day 13): same skip/blocked/ok/error
+# contract as run_deepeval_faithfulness, different DeepEval metric class.
+# ---------------------------------------------------------------------------
+
+
+def test_run_deepeval_contextual_recall_defaults_to_skipped_without_touching_deepeval():
+    # Same "poison sys.modules" proof as the faithfulness test above: if
+    # this function tried to import deepeval at all on the live=False
+    # (default) path, this would fail with ImportError instead of a clean
+    # skipped result.
+    framework_eval = _load_framework_eval_module()
+    case = _case()
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setitem(sys.modules, "deepeval", None)
+
+        result = framework_eval.run_deepeval_contextual_recall(case)
+
+    assert result["status"] == "skipped"
+    assert result["score"] is None
+    assert result["framework"] == "deepeval"
+    assert result["metric"] == "contextual_recall"
+    assert result["query_id"] == case["query_id"]
+
+
+def test_run_deepeval_contextual_recall_live_without_key_is_blocked_not_an_error():
+    framework_eval = _load_framework_eval_module()
+    case = _case()
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+        result = framework_eval.run_deepeval_contextual_recall(case, live=True)
+
+    assert result["status"] == "blocked"
+    assert result["score"] is None
+    assert "OPENROUTER_API_KEY" in result["error"]

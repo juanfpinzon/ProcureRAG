@@ -2184,7 +2184,22 @@ What this confirmed about the review process itself: the first-pass harness wasn
 ### What I built or drafted
 
 - Drafted Day 13 route in `docs/day-13-generation-error-analysis-multidoc-repair-plan.md`.
-- _TODO: Fill in Juan-owned artifact(s): docs-only taxonomy, any code module, tests, eval-report section, contextual-recall wiring if built._
+- `src/error_analysis.py` (new): a six-label failure taxonomy
+  (`ROOT_CAUSE_LABELS`), a `build_case_record` function that reuses Day 11's
+  `evaluate_generated_answer` unchanged and packages its findings into one
+  human-labeled case, and `build_cases`, which assembles the five real Day
+  13 cases (Q001/Q091 reused from `generation_eval.CURATED_FIXTURES`;
+  Q093/Q016/Q004 built from a fresh, real retrieval run plus one live
+  OpenRouter generation call each, captured today).
+- `src/framework_eval.py`: added `run_deepeval_contextual_recall`, wiring
+  DeepEval's `ContextualRecallMetric` with the exact same
+  skip/blocked/ok/error contract `run_deepeval_faithfulness` already uses.
+- `tests/test_error_analysis.py` (new, 8 tests) and two new tests in
+  `tests/test_framework_eval.py` for the contextual-recall wiring.
+- `docs/eval-report.md` — new "Day 13: Generation error analysis + multi-doc
+  repair plan" section with the full case table, root-cause writeups, the
+  live DeepEval contextual-recall comparison, and the recommended repair
+  path.
 
 ### Course / framework checkpoint completed
 
@@ -2195,14 +2210,14 @@ What this confirmed about the review process itself: the first-pass harness wasn
   - Chapter 10 Lesson 4: `Adding Citations` — reactivated.
   - Chapter 10 Lesson 5: `Question Answering` — reactivated.
 - DeepEval docs checkpoint:
-  - `Contextual Recall` — _TODO: summarize how `expected_output` + `retrieval_context` maps to ProcureRAG Q001/Q091._
-  - `Contextual Precision` — _TODO: summarize ranking-order interpretation and why it does not replace P@1/R@5/MRR@10/nDCG@5._
-  - `Answer Relevancy` — _TODO: summarize why referenceless relevance is not factual correctness or completeness._
+  - `Contextual Recall` — needs `input`/`actual_output`/`expected_output`/`retrieval_context` (confirmed against the installed `deepeval==4.2.3` `ContextualRecallMetric` constructor signature directly, not just the docs page). Maps onto ProcureRAG as: `query_row["query"]` → `input`, the generated answer → `actual_output`, `query_row["expected_answer"]` → `expected_output`, `[source["text"] for source in sources]` → `retrieval_context` — the same four fields `to_deepeval_test_case` already builds for faithfulness, since faithfulness just never used the third one. Ran it live against Q001/Q091 today (see `docs/eval-report.md`): it is the framework metric closest to `check_context_recall` in spirit, but scored Q091 0.80/PASS despite two whole primary documents being absent — a real, live-caught limitation, not a hypothetical one.
+  - `Contextual Precision` — ranking-order metric: are relevant chunks ranked above irrelevant ones, same four required fields as contextual recall. Not run live today. It answers a different question than P@1/R@5/MRR@10/nDCG@5 (which use this project's own graded relevance labels, not an LLM judge's semantic read) and is not a replacement for them — a good future contrast metric, not a priority ahead of the error-analysis work this day was actually about.
+  - `Answer Relevancy` — only needs `input`/`actual_output`, no expected answer or retrieval context. Explicitly the wrong metric for Day 13's question: an answer can be perfectly on-topic (highly "relevant") and still be exactly Q091's failure mode — incomplete because of missing evidence — since relevancy never looks at whether the right evidence was retrieved at all.
 - RAGAS docs checkpoint:
-  - `Context Recall` — _TODO: summarize LLM-based, non-LLM, and ID-based variants._
-  - `Context Precision` — _TODO: summarize reference-based precision, utilization, and ranking sensitivity._
+  - `Context Recall` — LLM-based variant breaks a reference answer into claims and checks each against retrieved context; a non-LLM/string-matching variant exists as a deterministic contrast; the ID-based variant compares `retrieved_context_ids` against `reference_context_ids` directly — the closest RAGAS analogue to this project's own `check_context_recall`, since ProcureRAG already has stable `doc_id`/`chunk_id` fields on every source. Not wired or run live this session (DeepEval's contextual recall was the one live metric added today, per the "pick one first metric" convention Day 12 established) — a natural next-day candidate specifically because the ID-based variant would compare doc-id sets the same deterministic way the existing check already does, rather than relying on an LLM's sentence-level judgment.
+  - `Context Precision` — mean precision@k of relevant chunks; has a reference-answer variant, a no-reference `ContextUtilization` variant, and documented ranking-sensitivity behavior (the score moves if the same relevant/irrelevant chunks are reordered). Not run today; same ranking-vs-coverage distinction as DeepEval's contextual precision above.
 - Error-analysis method checkpoint:
-  - Hamel/Shreya error-analysis reading — _TODO: record notes for dataset/traces, open coding, axial coding/failure taxonomy, and iterative refinement._
+  - Hamel/Shreya error-analysis reading — the actual method this day followed, not just read about: **Creating a Dataset** (five real traces — Q001/Q091 reused from already-committed Day 10 transcripts, Q093/Q016/Q004 from a fresh real retrieval + live generation run today, not synthetic placeholders); **Open Coding** (each case's `notes` in `src/error_analysis.py` is a human-written, open-ended read of that case's real evidence — e.g. noticing Q093's answer states one contract's deadband as if it were universal, which nothing in Day 11's existing checks was looking for); **Axial Coding** (grouping those open-coded notes into `ROOT_CAUSE_LABELS` — noticing `retrieval_miss` needed to cover two genuinely different situations, and that Q016 needed a sixth kind of label — `answer_completeness_gap` — because "context_recall passed" turned out not to mean "nothing is missing"); **Iterative Refinement** — explicitly *not* claimed complete after five cases (see `docs/eval-report.md`'s Day 13 caveats): `context_truncation_or_construction` and `citation_source_support_gap` are real labels no case today happened to need, and five traces is not enough to claim the taxonomy has stopped revealing new failure modes.
 
 ### Baseline evidence
 
@@ -2214,66 +2229,232 @@ What this confirmed about the review process itself: the first-pass harness wasn
 
 ### Failure taxonomy / case-inspection evidence
 
-- Case record shape chosen: _TODO: Fill in fields actually used — e.g. `query_id`, query type, expected primary docs, retrieved docs/chunks, generated answer, citation status, deterministic findings, optional judge findings, human root-cause label, recommended repair._
-- Failure taxonomy labels:
-  - `retrieval_miss` — _TODO: define in Juan's words._
-  - `context_truncation_or_construction` — _TODO: define in Juan's words._
-  - `citation_source_support_gap` — _TODO: define in Juan's words._
-  - `answer_completeness_gap` — _TODO: define in Juan's words._
-  - `judge_or_metric_disagreement` — _TODO: define in Juan's words._
-  - `passes_control` — _TODO: define in Juan's words._
+- Case record shape chosen (`build_case_record` in `src/error_analysis.py`):
+  `query_id`, `query_type`, `difficulty`, `question`,
+  `expected_primary_doc_ids` / `retrieved_doc_ids` /
+  `missing_primary_doc_ids` (all read straight off Day 11's
+  `check_context_recall` finding, not recomputed), `cited_doc_ids` /
+  `citation_status` (off `check_citation_validity`), one
+  `human_root_cause_label` (validated against `ROOT_CAUSE_LABELS`,
+  `ValueError` on anything else), free-text `notes` /
+  `recommended_repair` / `verification_signal` (human-written, not
+  computed), and the full Day 11 `findings` list attached for anyone who
+  wants the underlying detail without re-running anything.
+- Failure taxonomy labels (`ROOT_CAUSE_LABELS`):
+  - `retrieval_miss` — a primary document never reached the retrieved
+    context at all; no prompt or generation change could have fixed it,
+    because the model was never shown the evidence.
+  - `context_truncation_or_construction` — the evidence was found
+    somewhere upstream in the pipeline but got cut before reaching the
+    prompt (e.g. a `max_sources` cap). Not exercised by today's five cases,
+    but named because it is a real, distinct way a case like this could
+    fail without being a retrieval-miss.
+  - `citation_source_support_gap` — a citation points at a real, retrieved
+    source (so `check_citation_validity` passes), but the specific claim
+    next to that citation isn't actually supported by that source's text.
+    Different from an orphan citation, which Day 11 already catches; also
+    not exercised by today's five cases.
+  - `answer_completeness_gap` — every needed document reached context
+    (`check_context_recall` passes), but the answer still leaves out
+    something the query genuinely needed. Q016's real failure mode.
+  - `judge_or_metric_disagreement` — a deterministic finding and a live
+    judge score disagree, or the judge's stated reason doesn't hold up
+    against the real evidence. Q091's DeepEval contextual-recall run is a
+    real, borderline example: not a flat contradiction, but a 0.80 pass
+    score that tells a much softer story than Day 11's clean fail.
+  - `passes_control` — every Day 11 check passes and the answer matches
+    `expected_answer`. Q001 and Q004.
 
 | Query | Slice / difficulty | Expected primary docs | Observed context docs | Root-cause label | Evidence note | Recommended repair / signal |
 |---|---|---|---|---|---|---|
-| Q001 | easy control | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Q091 | multi_doc hard anchor | `GUIDE-002`, `POL-001`, `POL-003`, plus sibling expected ids per corpus row | _TODO_ | _TODO_ | Missing `POL-001` / `GUIDE-002` in generated-answer context is the known anchor finding. | _TODO_ |
-| _TODO_ | multi_doc sibling | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| _TODO_ | multi_doc or hard sibling | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| _TODO_ | non-multi_doc contrast | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Q001 | threshold / easy control | POL-001 | POL-001 (+ FAQ-001 secondary) | `passes_control` | Every Day 11 check passes; required terms present. | None needed — calibration control. |
+| Q091 | multi_doc / hard anchor | `GUIDE-002`, `POL-001`, `POL-003` | `POL-003` only | `retrieval_miss` | Missing `POL-001`/`GUIDE-002` in generated-answer context is the known anchor finding; citations still clean, faithfulness 1.00/1.00 (Day 12). | Raise multi_doc top-k; verify `missing_primary_doc_ids == []`. |
+| Q093 | multi_doc / hard sibling | `CONTRACT-001`, `CONTRACT-003`, `GUIDE-003`, `MEMO-001` | `CONTRACT-003`, `GUIDE-003`, `MEMO-001` (+`GUIDE-001` secondary) | `retrieval_miss` | Missing `CONTRACT-001` (Acme's 3% figure) makes the answer state Batavia's 2% deadband as if universal — a false-universal answer, not just an incomplete one. | Per-document diversity cap on the pre-rerank chunk shortlist. |
+| Q016 | multi_doc / hard sibling | `GUIDE-001`, `POL-004` | `GUIDE-001`, `POL-004` (both present) | `answer_completeness_gap` | `check_context_recall` passes, but `GUIDE-001` is never cited and the "logistics ≤40%" tier from `expected_answer` never appears — a chunk-level gap `check_context_recall`'s document-level check can't see. | Retrieve a second chunk per document for multi_doc queries. |
+| Q004 | lookup / medium, non-multi_doc contrast | POL-001 | POL-001 | `passes_control` | Straightforward single-document query works normally outside the multi_doc slice. | None needed — second calibration control. |
 
 ### Contextual-recall / framework evidence, if attempted
 
-- DeepEval contextual recall: _TODO: command, model, threshold, Q001/Q091 score + reason, and whether the reason matches deterministic evidence._
-- RAGAS context recall / ID-based context recall: _TODO: command or reason deferred; score/result if run._
-- Comparison to deterministic Day 11 `check_context_recall`: _TODO: state where the framework agrees/disagrees and why._
-- Caveat: _TODO: record provider flakiness, judge-reasoning errors, missing key/dependency status, or no-live-run blocker if any._
+- DeepEval contextual recall: ran live, Q001 and Q091, via
+  `run_deepeval_contextual_recall(case, live=True)` (`openai/gpt-4o-mini`,
+  threshold 0.5) — see `docs/eval-report.md`'s Day 13 section for the exact
+  command. Q001: score 1.00, reason cites node 4's approval/Finance-review
+  text directly. Q091: score **0.80, PASS** — the reason flags only the
+  missing "HICP plus 2 percentage points" renewal-uplift detail; it does
+  **not** flag the missing Band-3 approval-band citation or the missing
+  12-months-out usage-data guidance as unsupported.
+- RAGAS context recall / ID-based context recall: not run this session —
+  DeepEval's contextual recall was the one live metric added today, per
+  the "pick one first metric" convention Day 12 already established. The
+  ID-based RAGAS variant remains the most promising next candidate,
+  specifically because it would compare `doc_id` sets the same
+  deterministic way `check_context_recall` already does.
+- Comparison to deterministic Day 11 `check_context_recall`: **they
+  disagree in an important way on Q091.** Day 11's check fails cleanly and
+  names exactly which two documents are missing. DeepEval's contextual
+  recall passes (0.80 ≥ 0.5) and catches a much narrower gap. A framework
+  metric purpose-built to compare `expected_output` against
+  `retrieval_context` still under-caught what a deterministic `doc_id`
+  check caught immediately.
+- Caveat: this is a single live sample per (query, metric) pair, same
+  caveat Day 12 already recorded for faithfulness — no repeated-run
+  variance check was done. `OPENROUTER_API_KEY` was present and the call
+  succeeded on the first attempt; no dependency/key blocker was hit this
+  session (unlike Day 12's environment-fixing detour).
 
 ### Artifact / test evidence
 
-- Files created or modified: _TODO: Fill in after Juan's work._
-- Deterministic tests: _TODO: command and result._
-- Compile/lint gates: _TODO: command and result._
-- Demo / eval output: _TODO: command and key output._
-- Eval report update: _TODO: section name and what it records._
+- Files created or modified: `src/error_analysis.py` (new),
+  `src/framework_eval.py` (`run_deepeval_contextual_recall` added, `main()`
+  updated), `tests/test_error_analysis.py` (new), `tests/test_framework_eval.py`
+  (two tests added), `docs/eval-report.md` (Day 13 section added),
+  `docs/learning-log.md` (this entry).
+- Deterministic tests: `./.venv/bin/pytest -q` → `177 passed in 1.11s`
+  (167 baseline + 8 new in `tests/test_error_analysis.py` + 2 new in
+  `tests/test_framework_eval.py`, zero network calls).
+- Compile/lint gates: `./.venv/bin/python -m compileall -q src tests` →
+  clean; `./.venv/bin/python -m ruff check src tests` → `All checks
+  passed!`.
+- Demo / eval output: `./.venv/bin/python src/error_analysis.py` prints all
+  five cases' root cause, evidence, and repair recommendation with zero
+  network calls (every fixture is already-captured real evidence);
+  `./.venv/bin/python src/framework_eval.py --live` now also runs
+  `run_deepeval_contextual_recall` for Q001/Q091 alongside the existing
+  Day 12 faithfulness calls.
+- Eval report update: `docs/eval-report.md` → new "Day 13: Generation error
+  analysis + multi-doc repair plan" section — companion-reading table,
+  taxonomy/case-record shape, the five-case table, precise Q091/Q093/Q016
+  root-cause writeups, the live DeepEval contextual-recall comparison, the
+  recommended repair path with tradeoffs, and caveats.
 
 ### Recommended Q091 / multi-doc repair path
 
-- Root cause statement: _TODO: one precise paragraph separating retrieval/context failure from prompt/generation failure._
-- Recommended first repair: _TODO: e.g. per-document diversity, multi-doc top-k expansion, context-recall gate, reranker/candidate-pool adjustment, or another evidence-backed path._
-- Tradeoffs: _TODO: latency/cost/context length/precision risks._
-- Verification signal: _TODO: what exact metric/test/output should improve and what would count as a regression._
+- Root cause statement: Q091 fails because `POL-001` and `GUIDE-002` never
+  reach the five-source generation context the reranker builds — not
+  because of prompt wording, not a citation bug, and not something either
+  live judge metric (faithfulness or contextual recall) reliably flags,
+  since neither does, cleanly.
+- Recommended first repair: raise `top_k` in `two_stage_rerank`/
+  `build_sources` specifically for `multi_doc`-type queries (5 → 8-10) —
+  the cheapest, most targeted experiment, since Q016's real transcript
+  already proves the generator correctly synthesizes multiple sources once
+  it has them; the bottleneck observed today is retrieval depth, not
+  generation quality.
+- A second, complementary repair (motivated by Q093, where 2 of 5 shortlist
+  slots went to the same `MEMO-001` document): add a per-document diversity
+  cap to the pre-rerank chunk shortlist so a flat top-k increase can't be
+  filled by the same 1-2 documents again on a query whose evidence is
+  spread across 4-5 different contracts/policies.
+- Tradeoffs: a larger top-k means a longer, costlier prompt and a higher
+  chance of conflicting-scope evidence the model has to actively resolve
+  (already covered by `generation.py`'s prompt rule #2, but exercised more
+  often); a diversity cap can push out a genuinely strong second chunk from
+  the same document on a single-document query, so it should be scoped to
+  `multi_doc`-type queries only, not applied globally.
+- Verification signal: re-run `check_context_recall` (or
+  `error_analysis.build_cases`) for Q091 and Q093 after either change -
+  both must report an empty `missing_primary_doc_ids` list. A prompt-only
+  change would leave that signal untouched. Q001 and Q004 (the two
+  `passes_control` cases) must still pass every Day 11 check afterward, to
+  prove the fix didn't trade a multi_doc improvement for a noisier context
+  that confuses the easy cases.
 
 ### What failed or was confusing
 
-- _TODO: Fill in real confusion, blocker, metric disagreement, live-provider issue, or evidence mismatch._
+- Nothing environment-related failed this session (`OPENROUTER_API_KEY`
+  was already correctly configured from Day 12's fixes) - the real
+  "failure" worth recording is conceptual: DeepEval's contextual recall,
+  the metric explicitly chosen because it uses the two fields faithfulness
+  ignores, still scored Q091 a passing 0.80. Reading its reason text
+  closely showed why: it checks whether *sentences* in `expected_answer`
+  are supported, and enough of the model's precedent-based reasoning reads
+  as approval-adjacent to a judge that the specific missing citation (the
+  real Band-3 rule from `POL-001`) doesn't get flagged as clearly as a
+  doc-id-based check flags a missing document.
+- Retrieving real sources for Q093 surfaced a case sharper than the plan
+  anticipated: it wasn't just "an incomplete answer" but a **confidently
+  wrong, falsely-universal one** (stating Batavia's 2% deadband as if it
+  applied to every contract) - a more concerning failure mode than Q091's,
+  because the citations attached to the wrong claim are all individually
+  valid, so skimming the answer for citation hygiene alone would not catch
+  it.
 
 ### What became clearer
 
-- _TODO: Fill in what the case inspection clarified about retrieval vs generation ownership._
-- _TODO: Fill in what the taxonomy changed about prioritization vs aggregate metrics._
+- Retrieval failure and generation failure really are different owners,
+  confirmed with three separate real cases today, not just Q091: Q091 and
+  Q093 are both `retrieval_miss` (the generator did nothing wrong given
+  what it saw), while Q016 is a case where retrieval succeeded and the
+  *generation* step still under-used what it was given - the taxonomy only
+  becomes useful once there's more than one case in each bucket to compare.
+- Document-level `check_context_recall` has a real blind spot Day 11 never
+  needed to name until Q016 exposed it: a document reaching context is not
+  the same as the specific fact needed reaching context. That gap needed a
+  sixth label (`answer_completeness_gap`) that isn't just "retrieval was
+  wrong."
+- Aggregate metrics (P@1/R@5/nDCG@5, or even a live faithfulness/contextual
+  recall score) would not have surfaced any of today's three real failure
+  descriptions on their own - only reading actual retrieved sources next to
+  the actual generated text, case by case, surfaced "states one contract's
+  number as universal" and "the right document was there but the wrong
+  chunk of it was."
 
 ### What I can now explain in an interview
 
-- **Faithful but incomplete answers:** _TODO: Explain how an answer can be fully supported by the context it saw while still missing required evidence that retrieval omitted._
-- **Error taxonomy:** _TODO: Explain how trace review / open coding / axial coding turns concrete failures into eval priorities._
-- **Contextual recall vs contextual precision:** _TODO: Explain missing-evidence detection vs ranking-order quality._
-- **Repair selection:** _TODO: Explain how to decide between retrieval/context construction, prompt/generation, and judge/eval fixes._
+- **Faithful but incomplete answers:** an answer is scored against the
+  context it was actually shown - if retrieval never surfaced a required
+  document, the answer can honestly report everything it saw (faithful)
+  while still missing what a correct answer needs (incomplete). Q091
+  proves this live: 1.00/1.00 faithfulness, and Day 11's deterministic
+  check still correctly fails it for two missing primary documents.
+- **Error taxonomy:** open coding is reading real traces and writing
+  open-ended notes about what actually went wrong in each one, without
+  presupposing the categories; axial coding is grouping those notes into a
+  small set of labels afterward. Today's five cases needed six labels, not
+  because six were picked in advance, but because Q016's evidence didn't
+  fit the labels Q091 alone would have suggested.
+- **Contextual recall vs contextual precision:** contextual recall asks
+  whether the retrieved context contains what the *expected* answer
+  needed - a missing-evidence question. Contextual precision asks whether
+  the relevant chunks that were retrieved are ranked above the irrelevant
+  ones - a ranking-quality question. A retrieval pass can have perfect
+  precision (no noise in what it returned) while still failing recall
+  (missing something it never returned at all), and vice versa.
+- **Repair selection:** first check whether the required evidence was ever
+  in the generation context at all (a deterministic doc-id check, not a
+  live judge score). If it's absent, fix retrieval/context construction -
+  no prompt change can make a model cite evidence it never saw. If it's
+  present but unused, misused, or contradicted, then look at
+  prompt/generation/citation behavior. Today's evidence (Q091, Q093 both
+  missing evidence; Q016's evidence present but under-used) is a real,
+  worked example of applying that decision rule to three different real
+  cases with three different right answers.
 
 ### What remains weak
 
-- _TODO: Fill in remaining Week 3 gate weakness after Day 13._
-- _TODO: Note whether Chapter 11 Agentic is now ready or still deferred._
+- The taxonomy has not reached "iterative refinement" saturation - five
+  cases is enough to justify six labels, not enough to claim no seventh
+  failure mode exists. `context_truncation_or_construction` and
+  `citation_source_support_gap` are both named but unexercised.
+- No repair from today's recommended path has actually been implemented or
+  re-verified yet - Day 13's deliverable is the diagnosis and a
+  evidence-backed repair plan with a stated verification signal, not the
+  repair itself (per the design doc's own stop condition).
+- Document-level `check_context_recall` still cannot see a chunk-level gap
+  like Q016's - that limitation is now named, but no chunk-level coverage
+  check has been built to close it.
+- Chapter 11 Agentic remains appropriately deferred: today's evidence shows
+  the generation-eval loop is diagnostic (it can explain *why* Q091/Q093
+  fail and propose a specific, verifiable fix), which is the bar the design
+  doc set before adding agentic retrieval workflows on top of a still-being
+  -tuned retrieval layer.
 
 ### Next step
 
-- _TODO: Fill in the next day route based on the actual Day 13 evidence. Candidate paths: implement the recommended Q091 repair, expand contextual-recall/context-precision framework coverage, or move into Chapter 11 Agentic only if the Week 3 generation-eval evidence is strong enough._
+- Implement the recommended Q091/Q093 repair (multi_doc top-k increase,
+  optionally combined with a per-document diversity cap on the pre-rerank
+  shortlist) and re-run `check_context_recall`/`error_analysis.build_cases`
+  on Q091, Q093, Q001, and Q004 to confirm the verification signal moves
+  without regressing the two controls - the natural next building step
+  given today's evidence, ahead of adding RAGAS ID-based context recall or
+  moving into Chapter 11 Agentic._

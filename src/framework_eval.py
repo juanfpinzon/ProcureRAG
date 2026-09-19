@@ -71,16 +71,28 @@ not accidental), they just never reach the network. "Deterministic" means
 "no live call, no network, reproducible" throughout this file - not "never
 imports a framework."
 
-**What this deliberately does not do.** No contextual-recall or
-contextual-precision framework metrics (Day 11's `check_context_recall`
-already does the id-level version of that, and the design doc for today
-says to use framework context metrics as *contrast*, not a replacement - see
-`docs/day-12-deepeval-ragas-faithfulness-harness.md`). No answer-relevancy
-metric either - one metric, run through two frameworks, calibrated against
-two known fixtures, is the whole Day 12 scope. No RAGAS "reason"/explanation
-text is invented: RAGAS's `Faithfulness.single_turn_score` genuinely only
-returns a number, unlike DeepEval's `FaithfulnessMetric.reason` - that
-capability gap is real and is reported as `reason=None`, not padded.
+**What this deliberately does not do.** No contextual-precision or RAGAS
+context-recall framework metrics, and no answer-relevancy metric - Day 12's
+scope was one metric (faithfulness) through two frameworks, calibrated
+against two known fixtures; that stays true here for RAGAS.
+
+**Day 13 addition: DeepEval contextual recall.** `run_deepeval_contextual_recall`
+below adds exactly one more DeepEval metric, for a reason the Day 12 run
+itself surfaced: faithfulness structurally cannot catch Q091's real problem
+(missing primary documents), because it only ever asks "is the answer
+honest about the context it saw" - never "did it see enough." Contextual
+recall asks a different question that actually uses the two ingredients
+faithfulness ignores, `expected_output` and `retrieval_context` - "does the
+retrieved context contain what `expected_output` needed?" - which is the
+framework metric closest in spirit to Day 11's own `check_context_recall`.
+It reuses the exact same `to_deepeval_test_case` adapter, the exact same
+`live=False`-by-default/`status` contract, and the exact same
+skip/blocked/ok/error shape as `run_deepeval_faithfulness` - the only thing
+that changes is which DeepEval metric class gets constructed and measured.
+See `docs/eval-report.md`'s Day 13 section for the live Q001/Q091 run this
+was calibrated against, and why its reason text still needs a human check
+against the deterministic evidence, exactly like faithfulness's reason did
+in Day 12.
 """
 
 import os
@@ -445,6 +457,99 @@ def run_deepeval_faithfulness(case, threshold=0.5, live=False):
     )
 
 
+def run_deepeval_contextual_recall(case, threshold=0.5, live=False):
+    """Run DeepEval's `ContextualRecallMetric` against one case.
+
+    Line-for-line the same shape as `run_deepeval_faithfulness` above -
+    same `live=False`-by-default skip, same `deepeval_status()` blocked
+    check, same `status="error"` catch-all - because the only thing that
+    actually differs between "faithfulness" and "contextual recall" here is
+    which DeepEval metric class gets built and measured. Keeping that
+    structure identical (rather than writing one generic
+    `_run_deepeval_metric(metric_class, ...)` helper) is a deliberate,
+    small amount of repetition: with only two metrics, a reader can compare
+    this function to `run_deepeval_faithfulness` line by line and see
+    exactly what changed, instead of chasing an extra layer of indirection
+    for a two-case abstraction that doesn't earn its keep yet.
+
+    Unlike faithfulness, `ContextualRecallMetric` reads `expected_output`
+    (the query's real `expected_answer`) as well as `retrieval_context` -
+    both already present on `to_deepeval_test_case`'s output, unchanged
+    from Day 12, since faithfulness simply never needed that third field
+    before now.
+    """
+    if not live:
+        return make_eval_result(
+            framework="deepeval",
+            metric="contextual_recall",
+            query_id=case["query_id"],
+            score=None,
+            threshold=threshold,
+            passed=None,
+            reason=None,
+            status="skipped",
+            error="live=False (the default) - pass live=True to actually call the judge model.",
+            judge_model=None,
+        )
+
+    status, reason = deepeval_status()
+    if status == "blocked":
+        return make_eval_result(
+            framework="deepeval",
+            metric="contextual_recall",
+            query_id=case["query_id"],
+            score=None,
+            threshold=threshold,
+            passed=None,
+            reason=None,
+            status="blocked",
+            error=reason,
+            judge_model=None,
+        )
+
+    try:
+        from deepeval.metrics import ContextualRecallMetric
+
+        metric = ContextualRecallMetric(threshold=threshold, model=None, include_reason=True)
+        test_case = to_deepeval_test_case(case)
+
+        # Same known deepeval==4.2.3 strict-JSON-schema quirk documented in
+        # detail on `run_deepeval_faithfulness` above - DeepEval itself
+        # already catches this and falls back to a working, unconstrained
+        # JSON parse, so the warning is pure noise here too.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=r"Structured outputs not supported for model .*", category=UserWarning
+            )
+            metric.measure(test_case)
+    except Exception as exc:  # noqa: BLE001 - see make_eval_result's docstring on "error"
+        return make_eval_result(
+            framework="deepeval",
+            metric="contextual_recall",
+            query_id=case["query_id"],
+            score=None,
+            threshold=threshold,
+            passed=None,
+            reason=None,
+            status="error",
+            error=str(exc),
+            judge_model=None,
+        )
+
+    return make_eval_result(
+        framework="deepeval",
+        metric="contextual_recall",
+        query_id=case["query_id"],
+        score=metric.score,
+        threshold=threshold,
+        passed=metric.success,
+        reason=metric.reason,
+        status="ok",
+        error=None,
+        judge_model=metric.evaluation_model,
+    )
+
+
 # ---------------------------------------------------------------------------
 # RAGAS adapter: neutral case -> SingleTurnSample -> Faithfulness
 # ---------------------------------------------------------------------------
@@ -567,7 +672,8 @@ def run_ragas_faithfulness(case, threshold=0.5, live=False):
 
 
 # ---------------------------------------------------------------------------
-# CLI/demo: Q001 + Q091, both frameworks, faithfulness only
+# CLI/demo: Q001 + Q091, faithfulness through both frameworks, plus Day 13's
+# DeepEval contextual recall
 # ---------------------------------------------------------------------------
 
 
@@ -586,16 +692,17 @@ def _print_eval_result(result):
 
 
 def main() -> None:
-    """Build Q001/Q091 framework-eval cases and run faithfulness through both.
+    """Build Q001/Q091 framework-eval cases and run every wired metric.
 
     No `--live` flag means: build both cases (no network needed for that -
     they're plain dict reshaping over `generation_eval.CURATED_FIXTURES`,
     the same already-committed Day 10 transcripts Day 11 uses) and print
     `status="skipped"` for every metric, proving the adapter wiring end to
     end without spending a live API call. Pass `--live` to actually call
-    OpenRouter for both Q001 and Q091, through both frameworks - four live
-    calls total, using the cheap `openai/gpt-4o-mini` model (see
-    `docs/eval-report.md`'s Day 12 section for real cost/output).
+    OpenRouter for both Q001 and Q091 - faithfulness through both
+    frameworks plus Day 13's DeepEval contextual recall, six live calls
+    total, using the cheap `openai/gpt-4o-mini` model (see
+    `docs/eval-report.md`'s Day 12/13 sections for real cost/output).
     """
     import argparse
 
@@ -603,12 +710,13 @@ def main() -> None:
     from hybrid_search import load_example_queries
 
     parser = argparse.ArgumentParser(
-        description="Day 12: DeepEval + RAGAS faithfulness over the Q001/Q091 calibration fixtures."
+        description="Day 12/13: DeepEval + RAGAS faithfulness, plus DeepEval contextual recall, "
+        "over the Q001/Q091 calibration fixtures."
     )
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Actually call the OpenRouter judge model (4 live calls). Default: adapter-only, no network.",
+        help="Actually call the OpenRouter judge model (6 live calls). Default: adapter-only, no network.",
     )
     args = parser.parse_args()
 
@@ -627,6 +735,7 @@ def main() -> None:
         print(f"\n{case['query_id']}: {case['input']}")
         _print_eval_result(run_deepeval_faithfulness(case, live=args.live))
         _print_eval_result(run_ragas_faithfulness(case, live=args.live))
+        _print_eval_result(run_deepeval_contextual_recall(case, live=args.live))
 
 
 if __name__ == "__main__":

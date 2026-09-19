@@ -1968,6 +1968,338 @@ pronounced now.)
   its public API, so that side of the live-boundary contract is bounded
   only by whatever DeepEval's own internal client defaults to.
 
+## Day 13: Generation error analysis + multi-doc repair plan
+
+Date: 2026-09-19
+Implementation: `src/error_analysis.py` (new) — `ROOT_CAUSE_LABELS` (the
+six-label failure taxonomy); `build_case_record` (turns one
+`(query, sources, answer_text)` triple plus a human-written label/notes/
+repair/verification into one Day 13 case record, by reusing Day 11's
+`evaluate_generated_answer` unchanged rather than re-implementing any
+check); `build_cases` (the five real Day 13 cases: Q001/Q091 reused from
+`generation_eval.CURATED_FIXTURES`, plus new Q093/Q016/Q004 fixtures built
+from a real retrieval + live generation run today). `src/framework_eval.py`
+gained one addition — `run_deepeval_contextual_recall`, DeepEval's
+`ContextualRecallMetric` wired with the exact same `live=False`-default/
+skip/blocked/ok/error contract as `run_deepeval_faithfulness`. Tests:
+`tests/test_error_analysis.py` (new, 8 tests) and two new tests in
+`tests/test_framework_eval.py` for the contextual-recall wiring — all
+deterministic, zero network calls.
+
+### Gate re-run before building
+
+```
+./.venv/bin/pytest -q
+# 167 passed in 2.37s   (Day 13 kickoff baseline, before this day's work)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+### Companion reading notes (Block 1)
+
+| Source / metric | What it measures | Required fields | ProcureRAG mapping | Caveat |
+|---|---|---|---|---|
+| DeepEval `ContextualRecallMetric` | Whether `retrieval_context` contains what `expected_output` needed | `input`, `actual_output`, `expected_output`, `retrieval_context` (confirmed directly from the installed `deepeval==4.2.3` constructor signature: `ContextualRecallMetric(threshold=0.5, model=None, include_reason=True, ...)`) | `query_row["query"]`, generated answer, `query_row["expected_answer"]`, `[source["text"] for source in sources]` — identical adapter fields Day 12's `to_deepeval_test_case` already builds | An LLM judge sentence-matches `expected_output` against context; it is not the same operation as comparing `doc_id` sets, and — as today's live run below shows — can pass a case even when whole primary *documents* are missing, if the sentences it does check happen to be covered elsewhere |
+| DeepEval Contextual Precision | Whether relevant chunks in `retrieval_context` are ranked above irrelevant ones | same four fields as contextual recall | ranked `sources[].text` + `expected_answer` | Not run today — it is a ranking-order metric, not a missing-evidence one; the design doc says to use it as contrast, not as a replacement for this project's existing P@1/R@5/MRR@10/nDCG@5 tables (`docs/eval-report.md`, Day 7–9) |
+| DeepEval Answer Relevancy | Whether `actual_output` addresses `input` | `input`, `actual_output` only | not run today | Explicitly the wrong tool for Day 13: an answer can be perfectly on-topic and still wrong or incomplete, which is exactly the failure mode this day is about |
+| RAGAS Context Recall (LLM-based / non-LLM / ID-based) | Whether retrieved context covers a reference answer's claims | LLM-based: `user_input`/`retrieved_contexts`/`reference`; ID-based: `retrieved_context_ids`/`reference_context_ids` | ID-based variant maps directly onto this project's stable `doc_id`/`chunk_id` fields — closest framework analogue to `generation_eval.check_context_recall` | Not run live today (DeepEval's contextual recall was the one live metric this day added, per the design doc's "pick one first metric" instruction from Day 12); the ID-based variant remains the most promising RAGAS candidate for a future day, since it would compare doc-id sets the same deterministic way `check_context_recall` already does |
+| RAGAS Context Precision (reference / `ContextUtilization` / ranking sensitivity) | Mean precision@k of relevant chunks, with or without a reference answer | reference-based needs `reference`; `ContextUtilization` needs only the generated response | not run today | A ranking-quality metric, same caveat as DeepEval's contextual precision above |
+| Hamel/Shreya error analysis (`Creating a Dataset` → `Open Coding` → `Axial Coding` → `Iterative Refinement`) | How to find real failure modes before writing more evals | representative traces + human-written open-ended notes, later grouped into a taxonomy | This is the actual method Day 13 follows: `build_cases` in `src/error_analysis.py` is five real traces, each hand-labeled by reading its actual evidence (open coding), grouped under `ROOT_CAUSE_LABELS` (axial coding) | The taxonomy is not "iteratively refined" past this first pass yet — five cases is enough to notice `retrieval_miss` appearing twice for two different reasons (Q091, Q093) and a fifth, different label (`answer_completeness_gap`, Q016) show up, but the design doc's own "iterative refinement" step (keep going until new cases stop revealing new failure modes) genuinely needs more than five cases to claim saturation |
+
+### The failure taxonomy and case-record shape (Block 2)
+
+`ROOT_CAUSE_LABELS` (`src/error_analysis.py`) — six labels, one per case,
+each pointing at a different owner for the fix:
+
+- `retrieval_miss` — a primary document never reached the retrieved context
+  at all; no generation/prompt change could have fixed it.
+- `context_truncation_or_construction` — evidence was found somewhere
+  upstream but cut before it reached the prompt (not exercised by today's
+  five cases — named because it is a real, distinct failure mode a future
+  case could hit, e.g. a `max_sources` cap dropping a relevant chunk that
+  first-stage retrieval *did* surface).
+- `citation_source_support_gap` — a citation points at a real source, but
+  the specific claim next to it isn't actually supported by that source's
+  text (also not exercised by today's five cases; distinct from an orphan
+  citation, which Day 11's `check_citation_validity` already catches).
+- `answer_completeness_gap` — every needed document reached context, but
+  the answer still omits something the query needed (Q016, below).
+- `judge_or_metric_disagreement` — a deterministic finding and a live judge
+  score disagree, or the judge's stated reason doesn't hold up (see the
+  DeepEval contextual-recall run below — a real, borderline instance of
+  this: DeepEval didn't flatly disagree with Day 11, but its 0.80 pass score
+  on Q091 tells a much softer story than Day 11's clean fail).
+- `passes_control` — every Day 11 check passes and the answer matches
+  `expected_answer` (Q001, Q004).
+
+Each case record (`build_case_record`) carries: `query_id`, `query_type`,
+`difficulty`, `question`, `expected_primary_doc_ids` /
+`retrieved_doc_ids` / `missing_primary_doc_ids` (all read straight off Day
+11's `check_context_recall` finding), `cited_doc_ids` /
+`citation_status` (off `check_citation_validity`), one
+`human_root_cause_label` (validated against `ROOT_CAUSE_LABELS`, `ValueError`
+otherwise — see `test_build_case_record_rejects_an_unrecognized_root_cause_label`),
+free-text `notes` / `recommended_repair` / `verification_signal`, and the
+full Day 11 `findings` list attached for anyone who wants the underlying
+detail. The label, notes, repair, and verification are **human-written**,
+not computed — see `src/error_analysis.py`'s module docstring for why
+automating the label itself would just be inventing a second, unverified
+opinion instead of doing the open-coding step the Hamel/Shreya method
+actually asks for.
+
+### The five cases (Block 2/3A)
+
+| Query | Type / difficulty | Expected primary docs | Retrieved primary docs | Context recall | Citation validity | Root cause | Recommended repair |
+|---|---|---|---|---|---|---|---|
+| Q001 | threshold / easy | POL-001 | POL-001 (+ FAQ-001, secondary) | pass | pass | `passes_control` | none needed |
+| Q091 | multi_doc / hard | GUIDE-002, POL-001, POL-003 | POL-003 only | **fail** (missing GUIDE-002, POL-001) | pass | `retrieval_miss` | raise multi_doc top-k / re-check reranked shortlist depth |
+| Q093 | multi_doc / hard | CONTRACT-001, CONTRACT-003, GUIDE-003, MEMO-001 | CONTRACT-003, GUIDE-003, MEMO-001 (+ GUIDE-001, secondary) | **fail** (missing CONTRACT-001) | pass | `retrieval_miss` | per-document diversity cap on the chunk shortlist |
+| Q016 | multi_doc / hard | GUIDE-001, POL-004 | GUIDE-001, POL-004 (both present) | pass | pass | `answer_completeness_gap` | retrieve a second chunk per document for multi_doc queries |
+| Q004 | lookup / medium | POL-001 | POL-001 | pass | pass | `passes_control` | none needed |
+
+Full per-case sources, real generated-answer text, and the exact
+notes/repair/verification-signal reasoning are in `src/error_analysis.py`
+(`Q093_SOURCES`/`Q093_ANSWER_TEXT`, `Q016_SOURCES`/`Q016_ANSWER_TEXT`,
+`Q004_SOURCES`/`Q004_ANSWER_TEXT`, and `build_cases`'s per-case `notes`
+arguments) — not re-typed here to avoid the report and the code drifting
+out of sync with each other. Q093/Q016/Q004 sources were captured by
+re-running the real retrieval pipeline (`chunk_corpus` →
+`build_chunk_lexical_index`/`build_chunk_semantic_index` →
+`two_stage_rerank`, `top_k=5`, fully deterministic, no LLM) and the answer
+text by one live OpenRouter call per query through
+`generation.generate_answer` with the default model, both on 2026-09-19.
+
+### Q091: the precise root-cause statement the design doc asks for
+
+Q091's root cause is **missing primary evidence, not a bad answer.**
+`POL-001` (the source that actually states the Band 3 approval-band
+definition) and `GUIDE-002` (the source with the "start 12 months out with
+usage data" renewal-timing guidance) never reached the five sources the
+reranker handed to the generator. Every claim the model does make is
+honestly derived from what it *did* see (`SOP-001`, `FAQ-001`, `POL-003`)
+— Day 12's live faithfulness run already scored this 1.00/1.00
+(DeepEval/RAGAS) for exactly that reason. The visible symptom
+(`"a €120,000 commitment is of equal or greater significance, so this
+approval level applies at minimum"` — reasoning from precedent instead of
+citing the real rule) is a *downstream consequence* of the missing
+evidence, not an independent prompt bug: no amount of prompt tuning can
+make a model cite a document it was never shown.
+
+### Q093: a second retrieval miss, and a sharper version of the same risk
+
+Q093's `expected_answer` is explicitly scoped: "it varies by contract" —
+Batavia's clause uses a 2% deadband (`CONTRACT-003`), Acme's fuel surcharge
+uses 3% (`CONTRACT-001`), and the negotiation guide recommends a 2–3% range
+in general (`GUIDE-003`). Only `CONTRACT-001` failed to reach context.
+The live-generated answer, quoted in full in `src/error_analysis.py`,
+states: *"the deadband that applies to your indexation clauses is
+**plus or minus 2%**"* — clean citations, zero orphans, and still wrong for
+any buyer whose contract is actually Acme's. This is the sharpest version
+of the design doc's "it depends" risk named in Block 2: a retrieval miss on
+a query whose correct answer is genuinely scoped per-document does not just
+produce an incomplete answer, it can produce a **confidently wrong,
+falsely-universal one** — worse than an honest "I don't have enough
+evidence," and harder to catch by only skimming the answer, since the
+citations attached to the wrong claim are all individually valid.
+
+### Q016: retrieval succeeded, generation still left something out
+
+Q016 is the deliberate contrast to Q091/Q093: `check_context_recall`
+**passes** — both `GUIDE-001` and `POL-004` are in the retrieved context.
+But `GUIDE-001` (source `[3]`) is never cited, and the live-generated answer
+never states the "in logistics, price should not exceed 40%"
+category-guidance tier that `expected_answer` names alongside the 60%
+policy ceiling and the 30% temperature-controlled-transport figure — both
+of which the answer *does* state correctly. The retrieved `GUIDE-001` chunk
+in context (`Q016_SOURCES[2]`) only covers evaluation *dimensions*, not the
+40% figure — that sentence lives in a different chunk of the same document
+that this `top_k=5` pass didn't happen to surface. This is a genuinely
+different failure from Q091/Q093: **the document-level context_recall check
+cannot see it**, because it only asks "did this `doc_id` reach context,"
+not "did the specific chunk with the fact I need reach context." Naming
+that as a real limitation of the deterministic check, rather than treating
+"context_recall passed" as proof the answer is complete, is itself a Day 13
+finding.
+
+### DeepEval contextual recall, live, Q001 + Q091 (Block 3A step 5)
+
+Command:
+
+```
+./.venv/bin/python -c "
+from dotenv import load_dotenv; load_dotenv()
+from generation_eval import CURATED_FIXTURES
+from hybrid_search import load_example_queries
+from framework_eval import build_framework_eval_case, run_deepeval_contextual_recall
+queries_by_id = {r['query_id']: r for r in load_example_queries()}
+for fixture in CURATED_FIXTURES:
+    q = queries_by_id[fixture['query_id']]
+    case = build_framework_eval_case(q, fixture['sources'], fixture['answer_text'])
+    print(run_deepeval_contextual_recall(case, live=True))
+"
+```
+
+Real output (2026-09-19, `openai/gpt-4o-mini` via OpenRouter, threshold 0.5):
+
+```
+Q001: What approval is required for a EUR 60,000 purchase order?
+  status=ok score=1.0 passed=True judge_model=openai/gpt-4o-mini (OpenRouter)
+  reason: The score is 1.00 because the expected output perfectly aligns with the information provided
+  in node 4 regarding the €60,000 commitment requiring VP Procurement approval and a Finance review,
+  as well as the cumulative nature of approvals.
+
+Q091: What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
+  status=ok score=0.8 passed=True judge_model=openai/gpt-4o-mini (OpenRouter)
+  reason: The score is 0.80 because most of the sentences in the expected output are well-supported by
+  the nodes in retrieval context, particularly the requirements for approvals and certifications.
+  However, the specific mention of 'HICP plus 2 percentage points' does not have a corresponding node,
+  which slightly lowers the score.
+```
+
+**Comparison to the deterministic `check_context_recall` — the exact
+comparison the design doc requires before trusting a live judge:**
+
+- **Q001**: both checks agree cleanly. Deterministic: pass (POL-001
+  present). DeepEval contextual recall: 1.00.
+- **Q091**: the two checks tell a **very different story**, and this is the
+  headline Day 13 finding from adding this metric. Day 11's deterministic
+  `check_context_recall` fails cleanly and specifically: `POL-001` and
+  `GUIDE-002` are named as missing. DeepEval's contextual recall **passes**
+  (0.80 ≥ 0.5 threshold) and only flags one narrower gap — the "HICP plus 2
+  percentage points" renewal-uplift detail. It does not flag the missing
+  Band 3 approval-band citation or the missing 12-months-out usage-data
+  renewal guidance as unsupported, because *some* sentence in
+  `expected_answer` about approvals happens to be loosely supported by what
+  *was* retrieved (the model's own precedent-based reasoning reads as
+  approval-adjacent to the judge, even though it never cites the real
+  Band-3 rule). **A framework contextual-recall score, even one built for
+  exactly this purpose, still under-caught what a deterministic `doc_id`
+  check caught immediately and precisely.** This is the same lesson Day 12
+  learned about faithfulness, one layer deeper: a better-targeted framework
+  metric is real progress (0.80 is at least lower than faithfulness's 1.00
+  on the same case), but it is still a softer, sentence-level judgment call
+  that a human has to check against ground truth — not a replacement for
+  the deterministic, doc-id-based gate.
+
+This case is labeled `judge_or_metric_disagreement` in spirit (see
+`ROOT_CAUSE_LABELS` above) even though it is layered on top of Q091's
+primary `retrieval_miss` label — the case record only carries one label,
+and `retrieval_miss` is the actual root cause; the judge-disagreement is
+recorded in Q091's `notes` field instead of a second label, per this
+module's one-label-per-case design.
+
+### Recommended Q091 / multi-doc repair path
+
+**Root cause, stated precisely (restated from above):** Q091 fails because
+two primary documents (`POL-001`, `GUIDE-002`) never reach the five-source
+generation context the reranker builds — not because of prompt wording,
+not because of a citation bug, and not because faithfulness or contextual
+recall (both run live) reliably catch it, since neither does, cleanly.
+
+**Recommended first repair:** raise `top_k` in
+`reranking.two_stage_rerank`/`generation.build_sources` specifically for
+`multi_doc`-type queries (e.g. 5 → 8–10), rather than editing the prompt.
+This is the cheapest, most targeted next experiment given today's evidence:
+Q091's own real transcript shows the model already handles multiple
+documents correctly when it has them (Q016's answer correctly separates the
+60%/30–50%/30% tiers from three different sources) — the actual bottleneck
+observed today is retrieval depth on `multi_doc` queries, not the
+generator's ability to synthesize multiple sources.
+
+**A second, complementary repair worth testing alongside it (motivated by
+Q093):** add a per-document diversity cap to the chunk shortlist before
+reranking — e.g. no more than 2 chunks from the same `doc_id` in the
+pre-rerank pool — so a `multi_doc` query whose relevant evidence is spread
+across 4–5 different contracts/policies (like Q093) doesn't have its
+shortlist filled by several chunks of the same 1–2 documents before a
+different, equally relevant document ever gets a chance to compete for a
+slot. A flat top-k increase alone does not guarantee this: Q093's `top_k=5`
+pool already spent 2 of 5 slots on the same `MEMO-001` document.
+
+**Tradeoffs:**
+
+- A larger `top_k` means a longer prompt (more tokens, higher generation
+  cost/latency per Day 10's `MAX_ANSWER_TOKENS` budget) and a slightly
+  higher chance of the model encountering conflicting-scope evidence it has
+  to actively resolve (the exact prompt rule #2 in `generation.py` already
+  exists for) rather than just ignoring quietly.
+- A per-document diversity cap can push out a strong, correctly single-doc
+  answer's best supporting chunk (e.g. two genuinely useful chunks from the
+  same policy for a `threshold`-type query) in favor of a less relevant
+  chunk from a different document, purely to satisfy the cap — it needs to
+  be scoped to `multi_doc`-type queries, not applied globally.
+- Neither repair touches the prompt itself, deliberately: per this design
+  doc's "How would you decide whether to fix retrieval or prompt wording?"
+  drill answer, the evidence gathered today says the bottleneck is
+  retrieval depth/diversity, not the generator's handling of what it's
+  given — so prompt-tuning around this would be optimizing the wrong layer.
+
+**Verification signal:** re-run `error_analysis.build_cases` (or just
+`generation_eval.check_context_recall`) for Q091 and Q093 after either
+change — both must report an empty `missing_primary_doc_ids` list. A
+prompt-only change would leave that signal untouched, which is exactly why
+it — not a higher faithfulness/contextual-recall score, and not a human
+"the answer reads better now" impression — is the right thing to check
+before calling either repair successful. A regression check on Q001 and
+Q004 (the two `passes_control` cases) after the change is equally
+important: both must still pass every Day 11 check, proving the fix didn't
+trade a `multi_doc` improvement for a widened, noisier context that
+confuses the easy cases.
+
+### Artifact / test evidence
+
+```
+./.venv/bin/pytest -q
+# 177 passed in 1.11s   (167 baseline + 8 new in tests/test_error_analysis.py + 2 new in
+#                         tests/test_framework_eval.py)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+Files created/modified: `src/error_analysis.py` (new), `src/framework_eval.py`
+(`run_deepeval_contextual_recall` added, `main()` updated to run it),
+`tests/test_error_analysis.py` (new), `tests/test_framework_eval.py`
+(two tests added), `docs/eval-report.md` (this section), `docs/learning-log.md`
+(Day 13 entry filled in).
+
+### Caveats
+
+- Only five cases were inspected, not a larger sample — enough to see two
+  distinct flavors of `retrieval_miss` and one `answer_completeness_gap`
+  that document-level `check_context_recall` structurally cannot detect,
+  but the Hamel/Shreya "iterative refinement" step (keep sampling until new
+  traces stop revealing new failure modes) has not been run to saturation
+  yet — a reasonable next-day scope, not a Day 13 gap being hidden.
+  `context_truncation_or_construction` and `citation_source_support_gap`
+  are both real, named labels in `ROOT_CAUSE_LABELS` that no case today
+  happened to need — worth watching for in future traces rather than
+  assumed absent from the system.
+- DeepEval contextual recall was run live for Q001/Q091 only, per the
+  design doc's "run it against Q001/Q091 first, not all 93 queries"
+  instruction — it was not run for Q093/Q016/Q004, so its
+  agrees/disagrees-with-deterministic pattern is confirmed for exactly two
+  cases, not generalized further.
+- RAGAS context recall (LLM-based, non-LLM, or ID-based) was not wired or
+  run this session — DeepEval's contextual recall was the one live metric
+  this day added, matching the "pick one first metric" instruction Day 12
+  already established as this project's convention.
+- Q093/Q016/Q004's retrieved sources and generated answers are each from
+  one live run captured on 2026-09-19 (`generation.DEFAULT_OPENROUTER_MODEL`,
+  temperature 0.0) — like Day 10's own transcripts, this is a frozen,
+  hard-coded fixture from here on (`src/error_analysis.py`), not something
+  re-generated on every test run; a different live run on a different day
+  could produce different wording (though the underlying retrieval gaps,
+  being deterministic BM25 + local embeddings + local reranker, would not
+  change unless the pipeline itself changes).
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still
