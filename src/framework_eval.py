@@ -343,12 +343,12 @@ def make_eval_result(
 def to_deepeval_test_case(case):
     """Reshape one neutral eval case into DeepEval's `LLMTestCase`.
 
-    Only the three fields `FaithfulnessMetric` actually requires -`input`,
-    `actual_output`, `retrieval_context` - plus `expected_output`, which
-    faithfulness itself ignores but a later contextual-recall pass (not
-    built today - see the module docstring) would need, so building it in
-    here now costs nothing and saves a second near-identical adapter
-    function later.
+    Carries the three fields `FaithfulnessMetric` actually requires -
+    `input`, `actual_output`, `retrieval_context` - plus `expected_output`,
+    which faithfulness itself ignores but `ContextualRecallMetric` (added
+    Day 13 - see `run_deepeval_contextual_recall` below) does need. Building
+    it in from the start (Day 12) meant no second, near-identical adapter
+    function was needed once contextual recall was actually wired up.
     """
     from deepeval.test_case import LLMTestCase
 

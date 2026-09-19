@@ -21,14 +21,14 @@ below) and a **case record** shape that carries the evidence a reader needs
 to check that label without re-running anything.
 
 This is deliberately *not* a general tracing/observability platform. It is
-five real, hand-picked cases (`CASES` below), each built from either an
-already-committed Day 10 transcript (Q001, Q091 - reused from
+five real, hand-picked cases (`build_cases` below), each built from either
+an already-committed Day 10 transcript (Q001, Q091 - reused from
 `generation_eval.CURATED_FIXTURES`, not re-typed) or a fresh, real run of
 this project's own retrieval pipeline plus a live OpenRouter generation call
-(Q093, Q016, Q004 - captured on 2026-09-19, see each fixture's comment for
-the exact command). See `docs/eval-report.md`'s Day 13 section for the full
-per-case write-up and the recommended Q091/multi-doc repair path this
-taxonomy leads to.
+(Q093, Q016, Q004 - captured on 2026-09-19; see `docs/eval-report.md`'s Day
+13 section, "The five cases" subsection, for the exact commands this was
+captured with). See that same section for the full per-case write-up and
+the recommended Q091/multi-doc repair path this taxonomy leads to.
 
 **Why a human picks the label, not a heuristic.** `build_case_record` below
 does not *compute* `human_root_cause_label` - it requires the caller to pass
@@ -51,7 +51,7 @@ on top of Day 11/12, not a fifth deterministic check.
 from generation_eval import CURATED_FIXTURES, _source, evaluate_generated_answer
 
 # ---------------------------------------------------------------------------
-# The failure taxonomy: six labels, each meant to point at a different owner
+# The failure taxonomy: seven labels, each meant to point at a different owner
 # for the fix - see the Day 13 design doc's "Retrieval failure and generation
 # failure are different owners" section. A case gets exactly one label; real
 # secondary observations go in its free-text `notes` instead of a second
@@ -69,14 +69,30 @@ ROOT_CAUSE_LABELS = (
     # cap). Distinct from `retrieval_miss`: the fix here is "show the model
     # more of what was already found", not "search differently."
     "context_truncation_or_construction",
+    # The right *document* reached context - Day 11's document-level
+    # `check_context_recall` passes - but the one chunk of that document
+    # carrying the fact `expected_answer` actually needs was never
+    # retrieved; a different chunk of the same document was. This is still
+    # a retrieval/context-construction failure, not a generation one: the
+    # model cannot cite a fact it was never shown, even from a document it
+    # otherwise saw plenty of. `check_context_recall`'s document-level
+    # granularity is structurally blind to this - it can only ever confirm
+    # "some chunk of this doc_id arrived," never "the chunk with the fact I
+    # need arrived."
+    "chunk_level_retrieval_gap",
     # A cited source id is real (Day 11's `check_citation_validity` passes),
     # but the specific claim next to that citation is not actually
     # supported by that source's text - a citation that points at the wrong
     # evidence, not a hallucinated one.
     "citation_source_support_gap",
-    # All the right documents reached the model's context, but the answer
-    # still leaves out something the query genuinely needed - the retrieval
-    # step did its job; the generation step under-used what it was given.
+    # Every chunk of every right document reached the model's context (both
+    # at the document level AND the specific-fact/chunk level - see
+    # `chunk_level_retrieval_gap` above for the narrower case this label
+    # excludes), but the answer still leaves out something the query
+    # genuinely needed. Retrieval did its job completely; generation
+    # under-used what it was actually given. None of today's five cases
+    # need this label - see the module docstring's "iterative refinement"
+    # caveat.
     "answer_completeness_gap",
     # A deterministic finding (Day 11) and a live judge score (Day 12)
     # disagree, or the judge's own stated reason does not hold up against
@@ -294,23 +310,28 @@ Q016_SOURCES = [
 ]
 
 # Real, live transcript captured 2026-09-19. Unlike Q093, retrieval fully
-# succeeded here - both primary documents (GUIDE-001, POL-004) are in
-# `Q016_SOURCES` above, so this is NOT a `retrieval_miss` case. The gap is
-# one level downstream: `expected_answer` names three tiers - the 60%
-# policy ceiling, the 30-50% services band, AND a stricter "in logistics
-# price should not exceed 40%" category rule - but that 40%-logistics-cap
-# sentence is not in GUIDE-001's retrieved chunk (source [3] here only
-# covers evaluation *dimensions*, not the 40% figure, which lives in a
-# GUIDE-001 chunk this top_k=5 retrieval pass didn't happen to surface).
-# GUIDE-001 (the right document) reached the model - source [3] - but was
-# never cited (`uncited_ids` includes 3), and the general logistics-40% rule
-# never appears in the answer at all. The answer correctly reports the 60%
-# ceiling, the 30-50% services band, and the 30% temperature-controlled RFP
-# figure - it is not wrong, it is simply less complete than the full
-# `expected_answer`, and the retrieved evidence for the missing piece is a
-# narrower slice-of-a-slice than context_recall's document-level check can
-# see (see this case's `notes` in `docs/eval-report.md` for that limitation
-# spelled out).
+# succeeded at the DOCUMENT level - both primary documents (GUIDE-001,
+# POL-004) are in `Q016_SOURCES` above, so document-level
+# `check_context_recall` passes and this is NOT a `retrieval_miss` case.
+# But the gap is still on the retrieval/context-construction side, not the
+# generation side: `expected_answer` names three tiers - the 60% policy
+# ceiling, the 30-50% services band, AND a stricter "in logistics price
+# should not exceed 40%" category rule - and that 40%-logistics-cap
+# sentence is simply absent from every chunk shown to the model. GUIDE-001
+# (the right document) reached the model - source [3] - but the specific
+# chunk retrieved from it covers evaluation *dimensions*, not the 40%
+# figure, which lives in a *different* chunk of GUIDE-001 this top_k=5
+# retrieval pass didn't happen to surface. The model cannot cite a fact it
+# was never shown, from any document; it did not "have the evidence and
+# fail to use it" - it never had this particular chunk at all. This is
+# `chunk_level_retrieval_gap`, not `answer_completeness_gap`: the answer
+# correctly reports every figure it *was* given (60% ceiling, 30-50% band,
+# 30% temperature-controlled RFP figure) - it is not wrong, and the
+# generator is not the layer that under-performed here. The failure is
+# `check_context_recall`'s own document-level granularity: it can only ever
+# confirm "some chunk of this doc_id arrived," not "the chunk with the fact
+# I need arrived" - see this case's `notes` in `docs/eval-report.md` for
+# that limitation spelled out.
 Q016_ANSWER_TEXT = (
     "**Maximum Price Weighting in Tender Evaluation**\n\n"
     "Under the general Competitive Sourcing and Bidding Policy (POL-004), **price may not exceed 60% of "
@@ -406,9 +427,9 @@ def build_cases(queries_by_id):
 
     `queries_by_id` is `{query_id: query_row}` from
     `hybrid_search.load_example_queries()` - passed in rather than loaded
-    here, so this function (and `CASES` below) stays a pure function of
-    already-loaded data, easy to call once from `main()` or from a test
-    without re-reading the corpus file every time.
+    here, so this function stays a pure function of already-loaded data,
+    easy to call once from `main()` or from a test without re-reading the
+    corpus file every time.
     """
     q001_fixture = _fixture("Q001")
     q091_fixture = _fixture("Q091")
@@ -492,31 +513,36 @@ def build_cases(queries_by_id):
             queries_by_id["Q016"],
             Q016_SOURCES,
             Q016_ANSWER_TEXT,
-            human_root_cause_label="answer_completeness_gap",
+            human_root_cause_label="chunk_level_retrieval_gap",
             notes=(
                 "Contrast case: both primary documents (GUIDE-001, POL-004) DID reach the "
-                "retrieved context here - check_context_recall passes. But GUIDE-001 (source "
-                "[3]) is never cited, and the answer omits the 'in logistics price should not "
-                "exceed 40%' category-guidance tier that expected_answer names alongside the "
-                "60% policy ceiling and the 30% temperature-controlled figure. The document "
-                "was present; the specific fact was not in the chunk that got retrieved from "
-                "it, and the model did not flag the gap. Proof that 'multi_doc' failures are "
-                "not all the same failure - this one is a narrower, chunk-level completeness "
-                "gap, not a document-level retrieval miss."
+                "retrieved context here - document-level check_context_recall passes. But the "
+                "specific chunk of GUIDE-001 that carries the 'in logistics price should not "
+                "exceed 40%' category-guidance tier (which expected_answer names alongside the "
+                "60% policy ceiling and the 30% temperature-controlled figure) was never "
+                "retrieved - a different chunk of the same document was (source [3], which "
+                "covers evaluation dimensions, not the 40% figure). GUIDE-001 is uncited in the "
+                "answer as a result. This is NOT the generator failing to use evidence it had - "
+                "it never had this chunk. It is a retrieval/context-construction failure that "
+                "document-level context_recall is structurally unable to see, because that "
+                "check only asks 'did any chunk of this doc_id arrive,' never 'did the chunk "
+                "with the fact I need arrive.' Proof that 'multi_doc' failures are not all the "
+                "same failure, and that document-level recall passing is not proof the right "
+                "evidence actually reached the model."
             ),
             recommended_repair=(
                 "Retrieve more chunks per document (or a second chunk) for GUIDE-001 "
                 "specifically on this query, rather than treating one retrieved chunk per "
                 "document as sufficient evidence that the document's full guidance reached "
-                "the model - document-level context_recall cannot see this gap, which is "
-                "itself worth naming as a limitation of that check."
+                "the model - this is a retrieval/context-construction fix, not a prompt or "
+                "generation change, since the model was never shown the missing chunk."
             ),
             verification_signal=(
-                "The regenerated answer should name the logistics-specific 40% ceiling "
-                "alongside the 60% policy ceiling and the 30% temperature-controlled figure; "
-                "a chunk-level (not just document-level) coverage check against "
-                "expected_answer's named figures would catch this before a human has to "
-                "re-read the transcript."
+                "A chunk-level (not just document-level) coverage check against "
+                "expected_answer's named figures should confirm the logistics-40% chunk of "
+                "GUIDE-001 entered the retrieved context; the regenerated answer should then "
+                "name the logistics-specific 40% ceiling alongside the 60% policy ceiling and "
+                "the 30% temperature-controlled figure."
             ),
         ),
         build_case_record(

@@ -186,11 +186,16 @@ def test_build_cases_q093_is_a_retrieval_miss_on_a_different_document():
     assert q093["missing_primary_doc_ids"] == ["CONTRACT-001"]
 
 
-def test_build_cases_q016_context_recall_passes_but_is_still_incomplete():
+def test_build_cases_q016_document_level_recall_passes_but_chunk_level_does_not():
     # The contrast case that proves "multi_doc" isn't one single failure
-    # mode: both primary documents WERE retrieved (context_recall passes),
-    # but the answer still omits a fact from expected_answer - a different
-    # taxonomy label from Q091/Q093's retrieval_miss.
+    # mode: both primary documents WERE retrieved at the document level
+    # (context_recall passes), but the specific chunk carrying the fact
+    # expected_answer needs was never retrieved - a real gap, but still a
+    # retrieval/context-construction one, not a generation one. This is
+    # `chunk_level_retrieval_gap`, NOT `answer_completeness_gap` - the
+    # latter would mean the model had the fact and failed to use it, which
+    # is not what happened here (see error_analysis.py's Q016 fixture
+    # comment for the full correction).
     error_analysis = _load_error_analysis_module()
     queries_by_id = _real_queries_by_id(error_analysis)
     cases_by_id = {case["query_id"]: case for case in error_analysis.build_cases(queries_by_id)}
@@ -198,4 +203,4 @@ def test_build_cases_q016_context_recall_passes_but_is_still_incomplete():
     q016 = cases_by_id["Q016"]
     assert q016["context_recall_status"] == "pass"
     assert q016["missing_primary_doc_ids"] == []
-    assert q016["human_root_cause_label"] == "answer_completeness_gap"
+    assert q016["human_root_cause_label"] == "chunk_level_retrieval_gap"

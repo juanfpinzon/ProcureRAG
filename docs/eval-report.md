@@ -2012,26 +2012,43 @@ deterministic, zero network calls.
 
 ### The failure taxonomy and case-record shape (Block 2)
 
-`ROOT_CAUSE_LABELS` (`src/error_analysis.py`) — six labels, one per case,
+`ROOT_CAUSE_LABELS` (`src/error_analysis.py`) — seven labels, one per case,
 each pointing at a different owner for the fix:
 
-- `retrieval_miss` — a primary document never reached the retrieved context
-  at all; no generation/prompt change could have fixed it.
+- `retrieval_miss` — a primary *document* never reached the retrieved
+  context at all; no generation/prompt change could have fixed it (Q091,
+  Q093).
 - `context_truncation_or_construction` — evidence was found somewhere
   upstream but cut before it reached the prompt (not exercised by today's
   five cases — named because it is a real, distinct failure mode a future
   case could hit, e.g. a `max_sources` cap dropping a relevant chunk that
   first-stage retrieval *did* surface).
+- `chunk_level_retrieval_gap` — the right *document* reached context
+  (document-level `check_context_recall` passes), but the specific *chunk*
+  of that document carrying the fact `expected_answer` needs was never
+  retrieved — a different chunk of the same document was (Q016, below).
+  Still a retrieval/context-construction failure, not a generation one:
+  the model cannot cite a fact from a chunk it was never shown, even from a
+  document it otherwise saw. Added after Q016's real evidence showed
+  `answer_completeness_gap` (below) would have mislabeled a retrieval-side
+  failure as a generation-side one — see "Q016" below for the full
+  correction.
 - `citation_source_support_gap` — a citation points at a real source, but
   the specific claim next to it isn't actually supported by that source's
-  text (also not exercised by today's five cases; distinct from an orphan
+  text (not exercised by today's five cases; distinct from an orphan
   citation, which Day 11's `check_citation_validity` already catches).
-- `answer_completeness_gap` — every needed document reached context, but
-  the answer still omits something the query needed (Q016, below).
+- `answer_completeness_gap` — every chunk of every needed document reached
+  context (at both the document level and the specific-fact/chunk level —
+  see `chunk_level_retrieval_gap` above for the narrower case this label
+  excludes), but the answer still omits something the query needed. **Not
+  exercised by today's five cases** — Q016 was originally labeled this way
+  and was corrected to `chunk_level_retrieval_gap` after closer reading
+  showed the missing evidence never reached the model at all (see "Q016"
+  below).
 - `judge_or_metric_disagreement` — a deterministic finding and a live judge
   score disagree, or the judge's stated reason doesn't hold up (see the
   DeepEval contextual-recall run below — a real, borderline instance of
-  this: DeepEval didn't flatly disagree with Day 11, but its 0.80 pass score
+  this: DeepEval didn't flatly disagree with Day 11, but its pass score
   on Q091 tells a much softer story than Day 11's clean fail).
 - `passes_control` — every Day 11 check passes and the answer matches
   `expected_answer` (Q001, Q004).
@@ -2058,7 +2075,7 @@ actually asks for.
 | Q001 | threshold / easy | POL-001 | POL-001 (+ FAQ-001, secondary) | pass | pass | `passes_control` | none needed |
 | Q091 | multi_doc / hard | GUIDE-002, POL-001, POL-003 | POL-003 only | **fail** (missing GUIDE-002, POL-001) | pass | `retrieval_miss` | raise multi_doc top-k / re-check reranked shortlist depth |
 | Q093 | multi_doc / hard | CONTRACT-001, CONTRACT-003, GUIDE-003, MEMO-001 | CONTRACT-003, GUIDE-003, MEMO-001 (+ GUIDE-001, secondary) | **fail** (missing CONTRACT-001) | pass | `retrieval_miss` | per-document diversity cap on the chunk shortlist |
-| Q016 | multi_doc / hard | GUIDE-001, POL-004 | GUIDE-001, POL-004 (both present) | pass | pass | `answer_completeness_gap` | retrieve a second chunk per document for multi_doc queries |
+| Q016 | multi_doc / hard | GUIDE-001, POL-004 | GUIDE-001, POL-004 (both present at the document level) | pass (document-level) | pass | `chunk_level_retrieval_gap` | retrieve a second chunk per document for multi_doc queries |
 | Q004 | lookup / medium | POL-001 | POL-001 | pass | pass | `passes_control` | none needed |
 
 Full per-case sources, real generated-answer text, and the exact
@@ -2066,12 +2083,59 @@ notes/repair/verification-signal reasoning are in `src/error_analysis.py`
 (`Q093_SOURCES`/`Q093_ANSWER_TEXT`, `Q016_SOURCES`/`Q016_ANSWER_TEXT`,
 `Q004_SOURCES`/`Q004_ANSWER_TEXT`, and `build_cases`'s per-case `notes`
 arguments) — not re-typed here to avoid the report and the code drifting
-out of sync with each other. Q093/Q016/Q004 sources were captured by
-re-running the real retrieval pipeline (`chunk_corpus` →
-`build_chunk_lexical_index`/`build_chunk_semantic_index` →
-`two_stage_rerank`, `top_k=5`, fully deterministic, no LLM) and the answer
-text by one live OpenRouter call per query through
-`generation.generate_answer` with the default model, both on 2026-09-19.
+out of sync with each other.
+
+**Exact capture command (Q093/Q016/Q004 sources + answer text), run from
+repo root on 2026-09-19** — real deterministic retrieval
+(`chunk_corpus` → `build_chunk_lexical_index`/`build_chunk_semantic_index`
+→ `two_stage_rerank`, `top_k=5`, fully deterministic, no LLM) followed by
+one live OpenRouter call per query through `generation.generate_answer`
+with the default model. `PYTHONPATH=src` is required here because these
+modules are plain scripts, not an installed package — see
+`tests/test_generation_eval.py`'s own `_load_module` docstring for the same
+constraint on the test side:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python -c "
+from dotenv import load_dotenv
+load_dotenv()
+from chunked_search import build_chunk_lexical_index, build_chunk_semantic_index
+from chunking import chunk_corpus
+from hybrid_search import load_example_queries
+from preprocessing import load_data
+from reranking import load_cross_encoder, two_stage_rerank
+from semantic_search import load_embedding_model
+from generation import build_sources, generate_answer, make_openrouter_client
+
+data = load_data()
+chunks = chunk_corpus(data)
+embedding_model = load_embedding_model()
+chunk_lexical_index = build_chunk_lexical_index(chunks)
+chunk_semantic_index = build_chunk_semantic_index(chunks, embedding_model)
+cross_encoder_model = load_cross_encoder()
+queries_by_id = {q['query_id']: q for q in load_example_queries()}
+client = make_openrouter_client()
+
+for qid in ['Q093', 'Q016', 'Q004']:
+    row = queries_by_id[qid]
+    reranked = two_stage_rerank(row['query'], chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, top_k=5)
+    sources = build_sources(reranked)
+    result = generate_answer(row['query'], sources, client)
+    print(qid, [s['doc_id'] for s in sources])
+    print(result['answer'])
+    print(result['citations'])
+"
+```
+
+Re-running just the retrieval half of this (no `client`/`generate_answer`
+call) reproduces the exact same `doc_id` order shown in the table above,
+confirming retrieval is deterministic; the live `generate_answer` call can
+produce different wording on a different run (see the judge-variance
+caveat under "DeepEval contextual recall" below for the same point applied
+to a judge call instead of a generation call) — the frozen
+`Q093_ANSWER_TEXT`/`Q016_ANSWER_TEXT`/`Q004_ANSWER_TEXT` transcripts in
+`src/error_analysis.py` are this specific 2026-09-19 run, not a
+guaranteed-reproducible-verbatim output of this command on a later day.
 
 ### Q091: the precise root-cause statement the design doc asks for
 
@@ -2106,31 +2170,43 @@ falsely-universal one** — worse than an honest "I don't have enough
 evidence," and harder to catch by only skimming the answer, since the
 citations attached to the wrong claim are all individually valid.
 
-### Q016: retrieval succeeded, generation still left something out
+### Q016: document-level retrieval succeeded, chunk-level retrieval didn't
 
-Q016 is the deliberate contrast to Q091/Q093: `check_context_recall`
-**passes** — both `GUIDE-001` and `POL-004` are in the retrieved context.
-But `GUIDE-001` (source `[3]`) is never cited, and the live-generated answer
-never states the "in logistics, price should not exceed 40%"
-category-guidance tier that `expected_answer` names alongside the 60%
-policy ceiling and the 30% temperature-controlled-transport figure — both
-of which the answer *does* state correctly. The retrieved `GUIDE-001` chunk
-in context (`Q016_SOURCES[2]`) only covers evaluation *dimensions*, not the
-40% figure — that sentence lives in a different chunk of the same document
-that this `top_k=5` pass didn't happen to surface. This is a genuinely
-different failure from Q091/Q093: **the document-level context_recall check
-cannot see it**, because it only asks "did this `doc_id` reach context,"
-not "did the specific chunk with the fact I need reach context." Naming
-that as a real limitation of the deterministic check, rather than treating
-"context_recall passed" as proof the answer is complete, is itself a Day 13
-finding.
+Q016 is the deliberate contrast to Q091/Q093: document-level
+`check_context_recall` **passes** — both `GUIDE-001` and `POL-004` are in
+the retrieved context. But `GUIDE-001` (source `[3]`) is never cited, and
+the live-generated answer never states the "in logistics, price should not
+exceed 40%" category-guidance tier that `expected_answer` names alongside
+the 60% policy ceiling and the 30% temperature-controlled-transport figure
+— both of which the answer *does* state correctly. The retrieved
+`GUIDE-001` chunk in context (`Q016_SOURCES[2]`) only covers evaluation
+*dimensions*, not the 40% figure — that sentence lives in a *different*
+chunk of the same document that this `top_k=5` pass didn't happen to
+surface.
+
+**This is not a generation failure — it is misclassified as one if labeled
+`answer_completeness_gap`.** The model never saw the 40%-logistics chunk at
+all; it cannot be faulted for "under-using evidence it was given" when that
+specific evidence never reached it. The correct label is
+`chunk_level_retrieval_gap`: a genuinely different failure from Q091/Q093's
+document-level `retrieval_miss`, but still owned by retrieval/context
+construction, not generation. The distinction matters for the same reason
+the whole taxonomy exists — it tells a reader *where* to spend the next
+engineering hour. This is also a real limitation of the deterministic
+`check_context_recall` itself, worth naming plainly: it only asks "did this
+`doc_id` reach context," never "did the specific chunk with the fact I need
+reach context," so "context_recall passed" is not proof the answer had
+everything it needed.
 
 ### DeepEval contextual recall, live, Q001 + Q091 (Block 3A step 5)
 
-Command:
+Command — run from repo root; `PYTHONPATH=src` is required for the same
+reason as the retrieval/generation capture command above (these modules
+are plain scripts, not an installed package, so `generation_eval`,
+`hybrid_search`, and `framework_eval` won't resolve without it):
 
-```
-./.venv/bin/python -c "
+```bash
+PYTHONPATH=src ./.venv/bin/python -c "
 from dotenv import load_dotenv; load_dotenv()
 from generation_eval import CURATED_FIXTURES
 from hybrid_search import load_example_queries
@@ -2143,47 +2219,78 @@ for fixture in CURATED_FIXTURES:
 "
 ```
 
-Real output (2026-09-19, `openai/gpt-4o-mini` via OpenRouter, threshold 0.5):
+(The narrow entry point above is `run_deepeval_contextual_recall` only, for
+exactly the Q001/Q091 calibration pair the design doc asks to check first.
+`./.venv/bin/python src/framework_eval.py --live` also works from repo
+root without `PYTHONPATH` — it's the module's own `if __name__ ==
+"__main__"` entry point — but it additionally runs both frameworks'
+faithfulness metrics on every fixture, which is more than this specific
+check needs.)
+
+**Real output is provider/judge-variable — this was directly reproduced,
+not assumed.** Two consecutive re-runs of the exact command above, back to
+back, `openai/gpt-4o-mini` via OpenRouter, threshold 0.5:
 
 ```
-Q001: What approval is required for a EUR 60,000 purchase order?
-  status=ok score=1.0 passed=True judge_model=openai/gpt-4o-mini (OpenRouter)
+Run 1 — Q001: score=1.00 passed=True
   reason: The score is 1.00 because the expected output perfectly aligns with the information provided
-  in node 4 regarding the €60,000 commitment requiring VP Procurement approval and a Finance review,
-  as well as the cumulative nature of approvals.
+  in node 4 regarding the €60,000 commitment requiring VP Procurement approval and the cumulative
+  nature of approvals.
+Run 1 — Q091: score=0.50 passed=True
+  reason: The score is 0.50 because while the sentence about the €120,000 needing VP Procurement
+  approval connects well with node 1 regarding procurement governance, the requirements for ISO 27001
+  and the renewal process are not addressed in the retrieval context, leading to a partial alignment.
 
-Q091: What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?
-  status=ok score=0.8 passed=True judge_model=openai/gpt-4o-mini (OpenRouter)
+Run 2 — Q001: score=1.00 passed=True
+  reason: The score is 1.00 because the expected output is fully supported by the information in the
+  retrieval context, specifically referencing the €60,000 commitment and the approval requirements
+  detailed in nodes 3 and 4.
+Run 2 — Q091: score=0.80 passed=True
   reason: The score is 0.80 because most of the sentences in the expected output are well-supported by
-  the nodes in retrieval context, particularly the requirements for approvals and certifications.
+  the nodes in the retrieval context, particularly the requirements for approvals and certifications.
   However, the specific mention of 'HICP plus 2 percentage points' does not have a corresponding node,
   which slightly lowers the score.
 ```
 
+A later independent re-run (same command, same fixtures, done in review)
+saw Q001 dip to 0.75 while Q091 landed at 0.80–1.00 across two more runs —
+both queries showed real score movement, Q001 included, and every single
+run of Q091 still passed. **The exact scores above should not be treated as
+a stable, reproducible ground truth** — `temperature=0.0` on the judge call
+narrows sampling variance but does not eliminate it on a hosted API (see
+`generation.py`'s own caveat about this same limitation for the
+answer-generation model), and DeepEval's internal claims-then-verdicts
+process for this metric gives the judge more surface area for run-to-run
+disagreement than a single faithfulness score does.
+
 **Comparison to the deterministic `check_context_recall` — the exact
 comparison the design doc requires before trusting a live judge:**
 
-- **Q001**: both checks agree cleanly. Deterministic: pass (POL-001
-  present). DeepEval contextual recall: 1.00.
-- **Q091**: the two checks tell a **very different story**, and this is the
-  headline Day 13 finding from adding this metric. Day 11's deterministic
-  `check_context_recall` fails cleanly and specifically: `POL-001` and
-  `GUIDE-002` are named as missing. DeepEval's contextual recall **passes**
-  (0.80 ≥ 0.5 threshold) and only flags one narrower gap — the "HICP plus 2
-  percentage points" renewal-uplift detail. It does not flag the missing
-  Band 3 approval-band citation or the missing 12-months-out usage-data
-  renewal guidance as unsupported, because *some* sentence in
-  `expected_answer` about approvals happens to be loosely supported by what
-  *was* retrieved (the model's own precedent-based reasoning reads as
-  approval-adjacent to the judge, even though it never cites the real
-  Band-3 rule). **A framework contextual-recall score, even one built for
-  exactly this purpose, still under-caught what a deterministic `doc_id`
-  check caught immediately and precisely.** This is the same lesson Day 12
-  learned about faithfulness, one layer deeper: a better-targeted framework
-  metric is real progress (0.80 is at least lower than faithfulness's 1.00
-  on the same case), but it is still a softer, sentence-level judgment call
-  that a human has to check against ground truth — not a replacement for
-  the deterministic, doc-id-based gate.
+- **Q001**: both checks agree in spirit across every run observed — a clear
+  pass, even though the exact score wobbles (0.75–1.00). Deterministic:
+  pass (`POL-001` present, unambiguous doc-id set membership, no variance
+  possible).
+- **Q091**: the two checks tell a **very different story on every single
+  run**, and this — not any one exact score — is the headline Day 13
+  finding from adding this metric. Day 11's deterministic
+  `check_context_recall` fails cleanly and specifically, identically every
+  time it runs: `POL-001` and `GUIDE-002` are named as missing. DeepEval's
+  contextual recall **passed Q091 in all four runs observed** (0.50, 0.80,
+  0.80, 1.00 — every one at or above the 0.5 threshold), while never
+  flagging the missing Band-3 approval-band citation or the missing
+  12-months-out usage-data renewal guidance as the reason for its
+  imperfect score — it flagged narrower gaps instead (an unaddressed ISO
+  27001 mention in one run, the "HICP plus 2 percentage points" detail in
+  another). **A framework contextual-recall score, even one built for
+  exactly this purpose, consistently under-caught what a deterministic
+  `doc_id` check catches immediately, precisely, and every time.** This is
+  the same lesson Day 12 learned about faithfulness, one layer deeper: a
+  better-targeted framework metric is real, visible progress (every
+  observed Q091 score here is below faithfulness's 1.00 on the same case),
+  but it remains a softer, sentence-level, provider-variable judgment call
+  that a human has to check against ground truth on every run — not a
+  replacement for the deterministic, doc-id-based gate, which needs no such
+  check because it has no such variance.
 
 This case is labeled `judge_or_metric_disagreement` in spirit (see
 `ROOT_CAUSE_LABELS` above) even though it is layered on top of Q091's
@@ -2270,18 +2377,62 @@ Files created/modified: `src/error_analysis.py` (new), `src/framework_eval.py`
 (two tests added), `docs/eval-report.md` (this section), `docs/learning-log.md`
 (Day 13 entry filled in).
 
+### Code-review fixes (same day, after the first pass above)
+
+A review of the first Day 13 pass raised five points, addressed in order of
+severity:
+
+1. **Required — Q016 was mislabeled `answer_completeness_gap`.** That
+   label's own definition requires all needed evidence to have reached
+   context, with generation under-using it — but Q016's own recorded
+   evidence already showed the missing "logistics ≤40%" fact was never in
+   any retrieved chunk at all. **Fixed** by adding a seventh taxonomy
+   label, `chunk_level_retrieval_gap` (document-level recall passes,
+   chunk-level/fact-level recall fails), and relabeling Q016 with it
+   throughout this section, the case table, and `src/error_analysis.py`.
+   This is the correction that matters most for Day 13's stated purpose —
+   the original label put a retrieval-owned failure in the generation
+   column.
+2. **Required — the documented live contextual-recall command was not
+   reproducible from repo root.** It imported `generation_eval`/
+   `hybrid_search`/`framework_eval` directly with no `src` on
+   `PYTHONPATH`, and failed with `ModuleNotFoundError` on an actual
+   from-scratch re-run. **Fixed** by prefixing it with `PYTHONPATH=src`
+   (see "DeepEval contextual recall" below), and noting
+   `./.venv/bin/python src/framework_eval.py --live` as the alternative
+   entry point that needs no `PYTHONPATH`.
+3. **Required/Medium — the recorded live contextual-recall scores (Q001
+   1.00, Q091 0.80) were presented as fixed facts rather than one sample of
+   a variable judge call.** Re-running the corrected command twice showed
+   real movement (Q091: 0.50, then 0.80); an independent review re-run saw
+   Q001 dip to 0.75 and Q091 land at 0.80–1.00. **Fixed** by replacing the
+   single "real output" block with multiple actual runs and rewriting the
+   comparison-to-deterministic-check conclusion around the defensible
+   claim — not an exact score, but that the judge consistently passes Q091
+   across a real score range while deterministic recall is invariant.
+4. **Medium — the Q093/Q016/Q004 fixture comments claimed an "exact
+   command" that did not actually exist anywhere in the repo.** **Fixed**
+   by adding the real, actually-run `PYTHONPATH=src` retrieval+generation
+   capture command under "The five cases" below, and confirming its
+   retrieval half reproduces the exact `doc_id` order in the case table.
+5. **Nit — a stale docstring in `to_deepeval_test_case`** still said
+   contextual recall was "not built today," true in Day 12 and false after
+   this day's `run_deepeval_contextual_recall` addition. **Fixed.**
+
 ### Caveats
 
 - Only five cases were inspected, not a larger sample — enough to see two
-  distinct flavors of `retrieval_miss` and one `answer_completeness_gap`
+  distinct flavors of `retrieval_miss` and one `chunk_level_retrieval_gap`
   that document-level `check_context_recall` structurally cannot detect,
   but the Hamel/Shreya "iterative refinement" step (keep sampling until new
   traces stop revealing new failure modes) has not been run to saturation
   yet — a reasonable next-day scope, not a Day 13 gap being hidden.
-  `context_truncation_or_construction` and `citation_source_support_gap`
-  are both real, named labels in `ROOT_CAUSE_LABELS` that no case today
-  happened to need — worth watching for in future traces rather than
-  assumed absent from the system.
+  `context_truncation_or_construction`, `citation_source_support_gap`, and
+  `answer_completeness_gap` are all real, named labels in
+  `ROOT_CAUSE_LABELS` that no case today happened to need — notably,
+  `answer_completeness_gap` (a genuine generation-owned completeness
+  failure) is now an open question rather than an assumed-common failure
+  mode, after Q016 turned out not to be an instance of it.
 - DeepEval contextual recall was run live for Q001/Q091 only, per the
   design doc's "run it against Q001/Q091 first, not all 93 queries"
   instruction — it was not run for Q093/Q016/Q004, so its
