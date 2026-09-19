@@ -2178,3 +2178,102 @@ A review of the first Day 12 pass raised five points; all five addressed, most i
 5. **`deepeval_status()`/`ragas_status() == "available"` only means "importable + key present," not "a live call will work"** — Day 12's own model-typo bug (point 1 back in the original build) is the proof: that check would have read `"available"` the whole time the typo was live, since a broken model string isn't visible to an import or key-presence check. Documented explicitly in both functions' docstrings rather than left implicit.
 
 What this confirmed about the review process itself: the first-pass harness wasn't wrong about its *mechanics* (adapter shape, dependency boundary, live/skip gating all held up under review) — the gaps were in evidence fidelity (abbreviated context), operational hardening (no timeout/cap), dependency hygiene (transitive-only import), and precision of claims (what "deterministic" actually covers). All four are exactly the kind of thing that's invisible from inside the code that wrote itself and obvious from a second, adversarial read — which is the whole argument for getting one before calling a harness "done."
+
+## 2026-09-19 — Day 13: Generation Error Analysis + Multi-Doc Repair Plan
+
+### What I built or drafted
+
+- Drafted Day 13 route in `docs/day-13-generation-error-analysis-multidoc-repair-plan.md`.
+- _TODO: Fill in Juan-owned artifact(s): docs-only taxonomy, any code module, tests, eval-report section, contextual-recall wiring if built._
+
+### Course / framework checkpoint completed
+
+- Boot.dev RAG chapter/lesson: **No new Boot.dev chapter today.** Chapter 10 — Augmented Generation remains the baseline; Chapter 11 — Agentic is still deferred until the generation-eval / error-analysis loop is explainable.
+  - Chapter 10 Lesson 1: `Augmented Generation` — reactivated.
+  - Chapter 10 Lesson 2: `LLM Summarization` — reactivated.
+  - Chapter 10 Lesson 3: `Conflict Resolution in Summaries` — reactivated.
+  - Chapter 10 Lesson 4: `Adding Citations` — reactivated.
+  - Chapter 10 Lesson 5: `Question Answering` — reactivated.
+- DeepEval docs checkpoint:
+  - `Contextual Recall` — _TODO: summarize how `expected_output` + `retrieval_context` maps to ProcureRAG Q001/Q091._
+  - `Contextual Precision` — _TODO: summarize ranking-order interpretation and why it does not replace P@1/R@5/MRR@10/nDCG@5._
+  - `Answer Relevancy` — _TODO: summarize why referenceless relevance is not factual correctness or completeness._
+- RAGAS docs checkpoint:
+  - `Context Recall` — _TODO: summarize LLM-based, non-LLM, and ID-based variants._
+  - `Context Precision` — _TODO: summarize reference-based precision, utilization, and ranking sensitivity._
+- Error-analysis method checkpoint:
+  - Hamel/Shreya error-analysis reading — _TODO: record notes for dataset/traces, open coding, axial coding/failure taxonomy, and iterative refinement._
+
+### Baseline evidence
+
+- Kickoff checks:
+  - `./.venv/bin/pytest -q` → `167 passed in 3.69s`.
+  - `./.venv/bin/python -m compileall -q src tests` → clean, no output.
+  - `./.venv/bin/python -m ruff check src tests` → `All checks passed!`.
+- Starting weakness: Q091 remains the known anchor where Day 11 deterministic context recall fails for missing primary evidence (`POL-001`, `GUIDE-002`), while Day 12 faithfulness can still pass because the answer is judged against the incomplete context it saw.
+
+### Failure taxonomy / case-inspection evidence
+
+- Case record shape chosen: _TODO: Fill in fields actually used — e.g. `query_id`, query type, expected primary docs, retrieved docs/chunks, generated answer, citation status, deterministic findings, optional judge findings, human root-cause label, recommended repair._
+- Failure taxonomy labels:
+  - `retrieval_miss` — _TODO: define in Juan's words._
+  - `context_truncation_or_construction` — _TODO: define in Juan's words._
+  - `citation_source_support_gap` — _TODO: define in Juan's words._
+  - `answer_completeness_gap` — _TODO: define in Juan's words._
+  - `judge_or_metric_disagreement` — _TODO: define in Juan's words._
+  - `passes_control` — _TODO: define in Juan's words._
+
+| Query | Slice / difficulty | Expected primary docs | Observed context docs | Root-cause label | Evidence note | Recommended repair / signal |
+|---|---|---|---|---|---|---|
+| Q001 | easy control | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Q091 | multi_doc hard anchor | `GUIDE-002`, `POL-001`, `POL-003`, plus sibling expected ids per corpus row | _TODO_ | _TODO_ | Missing `POL-001` / `GUIDE-002` in generated-answer context is the known anchor finding. | _TODO_ |
+| _TODO_ | multi_doc sibling | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| _TODO_ | multi_doc or hard sibling | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| _TODO_ | non-multi_doc contrast | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+
+### Contextual-recall / framework evidence, if attempted
+
+- DeepEval contextual recall: _TODO: command, model, threshold, Q001/Q091 score + reason, and whether the reason matches deterministic evidence._
+- RAGAS context recall / ID-based context recall: _TODO: command or reason deferred; score/result if run._
+- Comparison to deterministic Day 11 `check_context_recall`: _TODO: state where the framework agrees/disagrees and why._
+- Caveat: _TODO: record provider flakiness, judge-reasoning errors, missing key/dependency status, or no-live-run blocker if any._
+
+### Artifact / test evidence
+
+- Files created or modified: _TODO: Fill in after Juan's work._
+- Deterministic tests: _TODO: command and result._
+- Compile/lint gates: _TODO: command and result._
+- Demo / eval output: _TODO: command and key output._
+- Eval report update: _TODO: section name and what it records._
+
+### Recommended Q091 / multi-doc repair path
+
+- Root cause statement: _TODO: one precise paragraph separating retrieval/context failure from prompt/generation failure._
+- Recommended first repair: _TODO: e.g. per-document diversity, multi-doc top-k expansion, context-recall gate, reranker/candidate-pool adjustment, or another evidence-backed path._
+- Tradeoffs: _TODO: latency/cost/context length/precision risks._
+- Verification signal: _TODO: what exact metric/test/output should improve and what would count as a regression._
+
+### What failed or was confusing
+
+- _TODO: Fill in real confusion, blocker, metric disagreement, live-provider issue, or evidence mismatch._
+
+### What became clearer
+
+- _TODO: Fill in what the case inspection clarified about retrieval vs generation ownership._
+- _TODO: Fill in what the taxonomy changed about prioritization vs aggregate metrics._
+
+### What I can now explain in an interview
+
+- **Faithful but incomplete answers:** _TODO: Explain how an answer can be fully supported by the context it saw while still missing required evidence that retrieval omitted._
+- **Error taxonomy:** _TODO: Explain how trace review / open coding / axial coding turns concrete failures into eval priorities._
+- **Contextual recall vs contextual precision:** _TODO: Explain missing-evidence detection vs ranking-order quality._
+- **Repair selection:** _TODO: Explain how to decide between retrieval/context construction, prompt/generation, and judge/eval fixes._
+
+### What remains weak
+
+- _TODO: Fill in remaining Week 3 gate weakness after Day 13._
+- _TODO: Note whether Chapter 11 Agentic is now ready or still deferred._
+
+### Next step
+
+- _TODO: Fill in the next day route based on the actual Day 13 evidence. Candidate paths: implement the recommended Q091 repair, expand contextual-recall/context-precision framework coverage, or move into Chapter 11 Agentic only if the Week 3 generation-eval evidence is strong enough._
