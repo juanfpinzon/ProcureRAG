@@ -2432,9 +2432,10 @@ What this confirmed about the review process itself: the first-pass harness wasn
   ever actually been shown the missing fact.
 - Document-level `check_context_recall` has a real blind spot Day 11 never
   needed to name until Q016 exposed it: a document reaching context is not
-  the same as the specific fact needed reaching context. That gap needed a
-  sixth label (`answer_completeness_gap`) that isn't just "retrieval was
-  wrong."
+  the same as the specific fact needed reaching context. That gap needed the
+  new `chunk_level_retrieval_gap` label, so it can stay retrieval-owned
+  without collapsing into either whole-document `retrieval_miss` or
+  generation-owned `answer_completeness_gap`.
 - Aggregate metrics (P@1/R@5/nDCG@5, or even a live faithfulness/contextual
   recall score) would not have surfaced any of today's three real failure
   descriptions on their own - only reading actual retrieved sources next to
