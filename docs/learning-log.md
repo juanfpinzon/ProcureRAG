@@ -2933,3 +2933,136 @@ severe first (full technical detail in `docs/eval-report.md`'s matching
 ./.venv/bin/python src/regression_suite.py --verify-retrieval # 6/6 [OK] vs the live pipeline
 ./.venv/bin/python src/generation.py                          # Q091 now retrieves 10 sources, live
 ```
+
+## 2026-09-21 — Day 15: Week 3 Gate Review + Next-Week Readiness
+
+Linear: HER-282 — Day 15 loop: Week 3 gate review + next-week readiness.
+
+Route doc: `docs/day-15-week3-gate-review-next-week-readiness.md`.
+
+Related gate: HER-268 — Week 3 gate: grounded generation + RAG eval harness.
+
+### Course / docs target
+
+- Boot.dev: no new chapter required before the Week 3 gate review.
+- Reactivate Chapter 10 — `Augmented Generation`, `LLM Summarization`,
+  `Conflict Resolution in Summaries`, `Adding Citations`, and `Question
+  Answering`.
+- Preview only after the gate is clean: Chapter 11 — `Recursive RAG` and
+  `Agentic Search`.
+- Companion docs: Day 12–14 DeepEval/RAGAS/Langfuse metric vocabulary and
+  `docs/study-plan-linear-alignment-2026-09-09.md` for Week 4 readiness.
+
+### Objective
+
+_TODO: Fill in._
+
+Expected shape:
+
+- State whether Week 3 is gate-ready, not just whether tests pass.
+- Explain the retrieval → generation → eval → error-analysis → regression
+  suite story in one paragraph.
+- Name why Day 15 exists after Day 14's repair: full `multi_doc` slice
+  remeasurement plus HER-268 closure readiness.
+
+### Artifact inventory / gate verdict
+
+_TODO: Fill in._
+
+Expected shape:
+
+| Gate criterion | Evidence artifact | Command / file | Verdict | Caveat |
+|---|---|---|---|---|
+| Grounded generation path exists | TODO | TODO | TODO | TODO |
+| 2+ code-based evals | TODO | TODO | TODO | TODO |
+| 1 LLM-as-judge eval exists or is scoped | TODO | TODO | TODO | TODO |
+| Error analysis captures real failures | TODO | TODO | TODO | TODO |
+| Regression/failure-mode checks exist | TODO | TODO | TODO | TODO |
+| Interview explanation is ready | TODO | TODO | TODO | TODO |
+
+### Verification outputs
+
+_TODO: Fill in real command output._
+
+Expected commands:
+
+```bash
+./.venv/bin/pytest -q
+./.venv/bin/python -m compileall -q src tests
+./.venv/bin/python -m ruff check src tests
+./.venv/bin/python src/regression_suite.py
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+./.venv/bin/python src/eval_metrics.py
+# optional live if run:
+./.venv/bin/python src/regression_suite.py --live
+./.venv/bin/python src/generation.py
+```
+
+### Full multi_doc slice remeasurement
+
+_TODO: Fill in._
+
+Minimum cases: Q005, Q016, Q091, Q092, Q093.
+
+Expected shape:
+
+| Query | Default config evidence | Repaired config evidence | Verdict |
+|---|---|---|---|
+| Q005 | TODO | TODO | TODO |
+| Q016 | TODO | TODO | TODO |
+| Q091 | TODO | TODO | TODO |
+| Q092 | TODO | TODO | TODO |
+| Q093 | TODO | TODO | TODO |
+
+Notes to include:
+
+- Whether Q016/Q091/Q093 remain fixed under the current pipeline.
+- Whether Q005/Q092 improve, regress, or stay effectively unchanged.
+- Whether `MULTI_DOC_RETRIEVAL_CONFIG` is safe to describe as a full-slice
+  improvement or only a targeted repair.
+
+### Error-analysis highlights and remaining weaknesses
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Q091: distinguish fixed missing-primary-doc gap from still-visible `Band
+  3` term/chunk gap.
+- Q093: state whether the missing `CONTRACT-001` problem remains fixed.
+- Q016: state whether `GUIDE-001::chunk-2` remains present.
+- Any Q005/Q092 finding from the full-slice check.
+
+### What I can now explain in an interview
+
+_TODO: Fill in._
+
+Expected bullets:
+
+- Retrieval quality vs answer quality.
+- Faithfulness vs contextual recall vs answer relevance.
+- Why LLM-as-judge scores are evidence samples, not hard gates.
+- Why Q091 drove the eval design.
+- Why an agentic/recursive retrieval loop should be motivated by a specific
+  failure signal, not by framework enthusiasm.
+
+### What remains weak
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Name any open gap with owner, impact, and next verification signal.
+- If HER-268 cannot close yet, list the exact remaining task(s).
+- If HER-268 can close, name the first Week 4 / Chapter 11 target.
+
+### Next step
+
+_TODO: Fill in after the gate review._
+
+Expected shape:
+
+- If clean: close HER-268 / HER-282 after Hermes review and start Week 4 with
+  a Chapter 11 route grounded in the strongest remaining failure signal.
+- If not clean: execute the shortest remaining evidence task before any
+  agentic implementation.
