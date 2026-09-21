@@ -442,7 +442,7 @@ def main() -> None:
     from dotenv import load_dotenv
     from hybrid_search import load_example_queries
     from preprocessing import load_data
-    from reranking import load_cross_encoder, two_stage_rerank
+    from reranking import load_cross_encoder, retrieval_config_for_query_type, two_stage_rerank
     from semantic_search import load_embedding_model
 
     # Reads `.env` (walking up from this file's directory, so it finds the
@@ -472,13 +472,26 @@ def main() -> None:
         query_row = queries_by_id[query_id]
         query = query_row["query"]
 
+        # Day 14 Block 3B: which retrieval config to use is a per-query
+        # decision (multi_doc queries need a deeper, diversity-capped pool
+        # to reach documents like POL-001/GUIDE-002/CONTRACT-001 that a flat
+        # top_k=5 cannot surface - see reranking.py's own module-level
+        # comment for the real diagnostic numbers behind this). A code
+        # review correctly caught that this repair was only exercised in
+        # `regression_suite.py`'s hard-coded fixture-capture script and
+        # never reached this actual generation entry point - so a real run
+        # of `python src/generation.py` would still have silently used the
+        # old, narrower config for Q091 even after the repair "shipped".
+        # Reading the config here, at the one place sources are actually
+        # built for generation, is what closes that gap.
+        retrieval_config = retrieval_config_for_query_type(query_row["query_type"])
         reranked = two_stage_rerank(
             query,
             chunk_lexical_index,
             chunk_semantic_index,
             embedding_model,
             cross_encoder_model,
-            top_k=5,
+            **retrieval_config,
         )
         sources = build_sources(reranked)
 

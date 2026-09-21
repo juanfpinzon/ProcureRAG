@@ -297,6 +297,264 @@ def test_attach_live_results_leaves_the_synthetic_cases_unjudged():
 
 
 # ---------------------------------------------------------------------------
+# Code-review fix #1: Q091's residual "Band 3" term-level gap must be
+# visible in `deterministic_match`/`table_note`, not silently ignored by
+# only checking missing docs/citation/chunks.
+# ---------------------------------------------------------------------------
+
+
+def test_q091_term_level_gap_is_visible_not_hidden_behind_as_expected():
+    regression_suite = _load_regression_suite_module()
+    queries_by_id = _real_queries_by_id(regression_suite)
+    rows_by_id = {row["case_id"]: row for row in regression_suite.run_deterministic_suite(queries_by_id)}
+
+    row = rows_by_id["retrieval-miss-q091"]
+    # The real, known gap: "Band 3" is missing from the repaired answer
+    # text even though "usage data" is present - evaluate_case must report
+    # this, not silently drop it the way it did before this fix.
+    assert row["missing_terms"] == ["Band 3"]
+    # It is still "as expected" - because the case spec explicitly declares
+    # ["Band 3"] as the CURRENT expected state, not because the gap is
+    # ignored. deterministic_match=True here means "matches its declared,
+    # tracked gap", not "everything passed".
+    assert row["deterministic_match"] is True
+    # And the gap must actually be visible in what gets printed - not just
+    # present in a field a reader has to know to look for.
+    assert "Band 3" in row["table_note"]
+    assert "term-level gap" in row["table_note"]
+
+
+def test_a_wrongly_optimistic_expected_missing_terms_is_flagged_as_a_mismatch():
+    # Proves the fix is a real gate, not decoration: if Q091's case spec
+    # claimed expected_missing_terms=[] (falsely implying "Band 3" is no
+    # longer missing), evaluate_case must catch that as a mismatch - this
+    # is exactly the failure mode the code review found (a real
+    # deterministic failure printing as deterministic_verdict=match).
+    regression_suite = _load_regression_suite_module()
+    queries_by_id = _real_queries_by_id(regression_suite)
+    query_row = queries_by_id["Q091"]
+
+    optimistic_case_spec = dict(regression_suite.REGRESSION_CASES[2])  # retrieval-miss-q091
+    assert optimistic_case_spec["case_id"] == "retrieval-miss-q091"
+    optimistic_case_spec["expected_missing_terms"] = []
+
+    row = regression_suite.evaluate_case(optimistic_case_spec, query_row)
+
+    assert row["missing_terms"] == ["Band 3"]  # the real, unchanged result
+    assert row["deterministic_match"] is False
+
+
+def test_a_case_with_no_required_terms_is_never_penalized_for_a_check_it_never_ran():
+    # control-q004 has required_terms=None - check_expected_terms never
+    # runs for it, so missing_terms must be [] (not None, not an error),
+    # matching check_expected_terms's own "not applicable is different from
+    # failing" rule.
+    regression_suite = _load_regression_suite_module()
+    queries_by_id = _real_queries_by_id(regression_suite)
+    rows_by_id = {row["case_id"]: row for row in regression_suite.run_deterministic_suite(queries_by_id)}
+
+    row = rows_by_id["control-q004"]
+    assert row["missing_terms"] == []
+    assert row["deterministic_match"] is True
+
+
+# ---------------------------------------------------------------------------
+# Code-review fix #3: a retrieval-pipeline verification lane, separate from
+# the frozen-fixture lane above - rebuilds sources from a (fake, for
+# testability) retrieval pipeline instead of reading a hard-coded fixture,
+# and compares the result against the same expectations.
+# ---------------------------------------------------------------------------
+
+
+class _FakeEmbeddingModelForPipelineCheck:
+    """Same FakeEmbeddingModel pattern `tests/test_reranking.py` uses - a
+    dict lookup keyed by the exact text the real model would receive.
+    """
+
+    def __init__(self, embeddings):
+        self.embeddings = embeddings
+
+    def encode(self, texts, *, normalize_embeddings, show_progress_bar):
+        return [self.embeddings[text] for text in texts]
+
+
+class _FakeCrossEncoderForPipelineCheck:
+    def __init__(self, scores_by_pair):
+        self.scores_by_pair = scores_by_pair
+
+    def predict(self, pairs):
+        return [self.scores_by_pair[pair] for pair in pairs]
+
+
+def _tiny_pipeline_fixture():
+    """A 2-document, 2-chunk corpus small enough to build entirely by hand -
+    no real embedding/cross-encoder model, no network, no model download.
+    DOC-A shares vocabulary with the query (BM25) and points the same
+    direction as the query vector (semantic); DOC-B does neither, so DOC-A
+    reliably wins both signals and reaches context.
+    """
+    chunked_search = _load_module("chunked_search")
+
+    chunks = [
+        {
+            "chunk_id": "DOC-A::chunk-0",
+            "document_id": "DOC-A",
+            "chunk_index": 0,
+            "text": "widget pricing rules apply here",
+            "title": "Widget Policy",
+        },
+        {
+            "chunk_id": "DOC-B::chunk-0",
+            "document_id": "DOC-B",
+            "chunk_index": 0,
+            "text": "unrelated shipping schedule info",
+            "title": "Shipping",
+        },
+    ]
+    chunk_lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+
+    query = "What are the widget pricing rules?"
+    embedding_model = _FakeEmbeddingModelForPipelineCheck(
+        {
+            "Widget Policy widget pricing rules apply here": [1.0, 0.0],
+            "Shipping unrelated shipping schedule info": [0.0, 1.0],
+            query: [1.0, 0.0],
+        }
+    )
+    chunk_semantic_index = chunked_search.build_chunk_semantic_index(chunks, embedding_model)
+
+    cross_encoder_model = _FakeCrossEncoderForPipelineCheck(
+        {
+            (query, "Widget Policy widget pricing rules apply here"): 5.0,
+            (query, "Shipping unrelated shipping schedule info"): 1.0,
+        }
+    )
+
+    query_row = {
+        "query_id": "T1",
+        "query": query,
+        "query_type": "lookup",  # non-multi_doc: DEFAULT_RETRIEVAL_CONFIG
+        "relevance_grades": {"DOC-A": 2},
+    }
+    queries_by_id = {"T1": query_row}
+
+    return chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id
+
+
+def test_rebuild_sources_from_pipeline_uses_the_real_pipeline_not_a_fixture():
+    regression_suite = _load_regression_suite_module()
+    chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id = (
+        _tiny_pipeline_fixture()
+    )
+
+    sources = regression_suite.rebuild_sources_from_pipeline(
+        queries_by_id["T1"], chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+    )
+
+    # DOC-A wins both BM25 and semantic signals - it must be source #1.
+    assert sources[0]["doc_id"] == "DOC-A"
+
+
+def test_verify_retrieval_pipeline_matches_when_the_expectation_is_correct():
+    regression_suite = _load_regression_suite_module()
+    chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id = (
+        _tiny_pipeline_fixture()
+    )
+    case_spec = {
+        "case_id": "t1",
+        "query_id": "T1",
+        "required_chunk_ids": (),
+        "expected_missing_chunk_ids": [],
+        "expected_missing_primary_doc_ids": [],  # correct: DOC-A really does reach context
+    }
+
+    results = regression_suite.verify_retrieval_pipeline(
+        [case_spec], queries_by_id, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+    )
+
+    assert results[0]["missing_primary_doc_ids"] == []
+    assert results[0]["matches_expectation"] is True
+
+
+def test_verify_retrieval_pipeline_detects_drift_from_a_stale_expectation():
+    # The core proof this lane exists for: a case spec that claims DOC-A is
+    # missing (a stale/wrong expectation - maybe copied from before a
+    # retrieval fix, or ahead of a retrieval regression) must be flagged
+    # against what the pipeline ACTUALLY retrieves right now, not silently
+    # trusted.
+    regression_suite = _load_regression_suite_module()
+    chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id = (
+        _tiny_pipeline_fixture()
+    )
+    case_spec = {
+        "case_id": "t1",
+        "query_id": "T1",
+        "required_chunk_ids": (),
+        "expected_missing_chunk_ids": [],
+        "expected_missing_primary_doc_ids": ["DOC-A"],  # wrong: DOC-A actually reaches context
+    }
+
+    results = regression_suite.verify_retrieval_pipeline(
+        [case_spec], queries_by_id, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+    )
+
+    assert results[0]["missing_primary_doc_ids"] == []  # the real, current pipeline result
+    assert results[0]["matches_expectation"] is False
+
+
+def test_verify_retrieval_pipeline_detects_chunk_level_drift_too():
+    regression_suite = _load_regression_suite_module()
+    chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id = (
+        _tiny_pipeline_fixture()
+    )
+    case_spec = {
+        "case_id": "t1",
+        "query_id": "T1",
+        # A chunk id that does not exist in this tiny corpus at all -
+        # expecting it to be present (expected_missing_chunk_ids=[]) is a
+        # wrong expectation the pipeline can never satisfy.
+        "required_chunk_ids": ("DOC-A::chunk-99",),
+        "expected_missing_chunk_ids": [],
+        "expected_missing_primary_doc_ids": [],
+    }
+
+    results = regression_suite.verify_retrieval_pipeline(
+        [case_spec], queries_by_id, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+    )
+
+    assert results[0]["missing_chunk_ids"] == ["DOC-A::chunk-99"]
+    assert results[0]["matches_expectation"] is False
+
+
+def test_verify_retrieval_pipeline_skips_cases_with_no_real_query_id():
+    # The synthetic refusal case (query_id=None) has no real retrieval to
+    # re-check - it must be skipped, not raise a KeyError on `None`.
+    regression_suite = _load_regression_suite_module()
+    chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model, queries_by_id = (
+        _tiny_pipeline_fixture()
+    )
+    real_case_spec = {
+        "case_id": "t1",
+        "query_id": "T1",
+        "required_chunk_ids": (),
+        "expected_missing_chunk_ids": [],
+        "expected_missing_primary_doc_ids": [],
+    }
+    synthetic_case_spec = {"case_id": "synthetic", "query_id": None}
+
+    results = regression_suite.verify_retrieval_pipeline(
+        [real_case_spec, synthetic_case_spec],
+        queries_by_id,
+        chunk_lexical_index,
+        chunk_semantic_index,
+        embedding_model,
+        cross_encoder_model,
+    )
+
+    assert [r["case_id"] for r in results] == ["t1"]
+
+
+# ---------------------------------------------------------------------------
 # render_table: a readable table, one line per case, header included
 # ---------------------------------------------------------------------------
 

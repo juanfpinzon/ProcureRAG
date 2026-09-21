@@ -2544,6 +2544,18 @@ already runs with a bare `python src/<file>.py` invocation.
 
 ### The regression case contract (Block 2)
 
+> **Historical snapshot, superseded below.** This table (and "The regression
+> suite's real output (Block 3A)" further down) documents the case contract
+> and command output as they stood *before* the Block 3B repair. Three
+> `expected_missing_primary_doc_ids`/`expected_missing_chunk_ids` values
+> shown here are the **pre-repair** state and no longer match what
+> `src/regression_suite.py` currently asserts - see "Day 14 Block 3B: the
+> Q091/Q093/Q016 retrieval repair, verified" below for the current,
+> post-repair contract and real command output. Kept here unedited, not
+> because it is still accurate, but because it is the honest historical
+> record of what Block 3A actually shipped, the same way Day 13's original
+> per-case write-up stays intact below its own "Code-review fixes" section.
+
 Seven cases, one plain dict each (`src/regression_suite.py`'s
 `REGRESSION_CASES` + `CITATION_NEGATIVE_CASE`, plus one case built directly
 in code, `evaluate_refusal_case`, because it has no retrieved context to
@@ -2559,14 +2571,20 @@ evaluate against):
 | `citation-negative-synthetic` | Q001 | `citation_negative` | synthetic_negative | `[]` (citation status expected = **fail**) | **fail** | Synthetic `[99]` citation over Q001's real sources. The only case whose own contract *wants* a check to fail — proving `check_citation_validity` actually catches a hallucinated citation, not just that it stays quiet on already-clean transcripts. |
 | `refusal-negative-synthetic` | — (synthetic) | `refusal_negative` | synthetic_negative | n/a | pass | Empty `sources` list through the real `generation.generate_answer`. Asserts the fixed `INSUFFICIENT_EVIDENCE_ANSWER` is returned and the client is **never called** — the same contract `tests/test_generation.py` checks at the unit level, now inside the regression suite too. |
 
-Each case also carries `expected_missing_primary_doc_ids_after_repair`
-(`[]` for the two `retrieval_miss` cases, `None` for every other case) —
-the Block 3B repair target, recorded now, not executed yet (see "What
-remains weak" below).
+Each `retrieval_miss` case originally also carried a documentation-only
+`expected_missing_primary_doc_ids_after_repair` field (`[]` for both,
+`None` elsewhere) naming the Block 3B repair target ahead of time. That
+field no longer exists in the code: once Block 3B's repair happened,
+`expected_missing_primary_doc_ids` itself was updated to `[]` (the repair
+target became the current expectation, not a separate future one) — see
+Block 3B below for the actual mechanism and evidence.
 
-### The regression suite's real output (Block 3A)
+### The regression suite's real output (Block 3A, pre-repair)
 
-Deterministic lane, captured 2026-09-21:
+> Superseded — see Block 3B's "Verification: real command output" further
+> down for the current table.
+
+Deterministic lane, captured 2026-09-21 (before the repair):
 
 ```
 $ ./.venv/bin/python src/regression_suite.py
@@ -2585,7 +2603,8 @@ All cases match their expected pre-repair state.
 ```
 
 Live lane, one real run captured the same day (`--live`, real
-`OPENROUTER_API_KEY`, DeepEval's CLI-configured judge model):
+`OPENROUTER_API_KEY`, DeepEval's CLI-configured judge model) — also
+superseded below (this run judged the *pre-repair* Q091/Q093/Q016 fixtures):
 
 ```
 $ ./.venv/bin/python src/regression_suite.py --live
@@ -2616,14 +2635,37 @@ command.
 ### Trace / evidence capture decision
 
 **Decision: no separate JSONL trace file.** The regression suite's own row
-dicts (`case_id`, `query_id`, `role`, `missing_primary_doc_ids`,
-`citation_status`, `deterministic_match`, and — with `--live` —
-`live_status` entries carrying `run_timestamp_utc`, `provider`,
-`judge_model`, `status`, `temperature`, `token_budget`) already cover every
-field the route doc's suggested JSONL schema asks for
-(`run_id`/`timestamp`, `mode`, `query_id`/`query_type`/`difficulty`,
-`retrieved_doc_ids`, `deterministic_findings`, `framework_results`,
-`root_cause_label`/`verdict`, `model`/`provider` settings). The two code
+dicts cover the fields that actually matter for today's purpose, not
+literally every field the route doc's suggested JSONL schema names (a code
+review correctly caught the original wording here overclaiming "every
+field" when several — `retrieved_doc_ids`, `mode`, `root_cause_label`,
+`answer_text`/hash — were not actually present at the time). As of Block
+3B's code-review fixes below, the row dict carries:
+
+- `case_id`/`query_id`/`role` — the case identity;
+- `mode` (`"deterministic"` for every row `run_deterministic_suite`
+  produces — there is no `"live"` mode value today because the live lane
+  only ever *adds* a `live_status` entry onto an existing deterministic
+  row, it never replaces it);
+- `retrieval_config`, `query_type`, `difficulty` — retrieval/query context;
+- `retrieved_doc_ids`, `retrieved_chunk_ids` — what was actually in
+  `sources`, not just what was missing;
+- `answer_hash` — a short SHA-256 prefix of `answer_text`, so a row can be
+  checked against a specific captured answer without embedding the full
+  text in every trace line;
+- `missing_primary_doc_ids`/`missing_chunk_ids`/`missing_terms` and their
+  `expected_*` counterparts — the deterministic verdict, at every
+  granularity this suite checks;
+- `findings` — Day 11's full per-check list, unabbreviated;
+- `live_status`, when `--live` was passed — `run_timestamp_utc`,
+  `provider`, `judge_model`, `status`, `temperature`, `token_budget` per
+  metric.
+
+Not present, and not claimed to be: a literal `root_cause_label` field
+(this suite's own `role` — `retrieval_miss`, `chunk_gap`,
+`passing_control` — serves the same purpose as `error_analysis.py`'s
+`ROOT_CAUSE_LABELS` vocabulary, just under a different name) and the full
+`answer_text` itself (only its hash — see above for why). The two code
 blocks above **are** this day's committed trace evidence — one full run's
 snapshot, explicitly labeled as a snapshot of 2026-09-21, not a
 live-updating source of truth.
@@ -2978,10 +3020,11 @@ replacement for it.
 - **Q091's residual chunk-level gap on `POL-001` itself.** The retrieval
   miss is fixed (the document reaches context), but the specific chunk
   needed for the exact "Band 3" phrase is still not the one retrieved -
-  the same failure *shape* as Q016, just not (yet) wired as a
-  `required_chunk_ids` check the way Q016's was. Not fixed today, and not
-  hidden: `generation_eval.Q091_REQUIRED_TERMS` still checks for it and
-  still fails.
+  the same failure *shape* as Q016. Not fixed, but no longer only "not
+  hidden in prose" either — see "Code-review fixes" below for
+  `expected_missing_terms`, the mechanism that now surfaces this in
+  `deterministic_match`/`table_note` directly, the same day this caveat
+  was first written.
 - **The `pool_size=80` cost.** Retrieving and reranking 80 candidates
   (before the diversity cap trims it) instead of 15 is real, if modest,
   extra compute per `multi_doc` query - the cross-encoder is small enough
@@ -2991,6 +3034,105 @@ replacement for it.
 - **Only three queries were repaired and verified**, matching the
   regression suite's own minimum coverage, not a claim that every possible
   multi-document retrieval gap in the 93-query set is now closed.
+
+### Code-review fixes (same day, after the Block 3B pass above)
+
+A review of the Block 3B pass raised five points, addressed in order of
+severity — the same "review, then fix, then re-verify" pattern Day 13 used
+for its own first-pass review:
+
+1. **High — Q091's real deterministic failure was hidden behind
+   `as_expected`.** `evaluate_case` ran `check_expected_terms` (via
+   `evaluate_generated_answer`) for Q091's `("Band 3", "usage data")`
+   required terms, and that finding correctly reported "Band 3" missing -
+   but `deterministic_match` never read it, so the table printed
+   `deterministic_verdict=match` / `overall_verdict=as_expected` for a case
+   with a real, known-failing check. A reader scanning `overall_verdict`
+   for "did anything break" would see nothing. **Fixed** by adding
+   `expected_missing_terms` to every case spec (mirroring
+   `expected_missing_chunk_ids`'s "expected minus actual" pattern) and
+   folding a real `missing_terms` comparison into `deterministic_match` in
+   `evaluate_case`. `retrieval-miss-q091` now declares
+   `expected_missing_terms=["Band 3"]` — an explicit, tracked, currently
+   expected gap, not a silently ignored one — and `render_table`'s notes
+   column now prints `"term-level gap OPEN: missing ['Band 3']"` directly
+   in Q091's row, right next to `match`/`as_expected`. A test proves the
+   fix is a real gate, not decoration: setting `expected_missing_terms=[]`
+   on a copy of Q091's case spec now correctly flips
+   `deterministic_match` to `False`
+   (`test_a_wrongly_optimistic_expected_missing_terms_is_flagged_as_a_mismatch`).
+2. **High — the repair was not wired into the actual generation path.**
+   `reranking.retrieval_config_for_query_type` existed and was used by the
+   Block 3B fixture-capture script, but `generation.py`'s real `main()`
+   still called `two_stage_rerank(..., top_k=5)` unconditionally - a fresh
+   `python src/generation.py` run would have silently used the old,
+   narrower config for Q091 even after the repair "shipped" everywhere
+   else. **Fixed** by replacing the hard-coded `top_k=5` in
+   `generation.py`'s retrieval call with
+   `**retrieval_config_for_query_type(query_row["query_type"])`. Re-run
+   live and confirmed directly: `python src/generation.py`'s real Q091 demo
+   now retrieves **10** sources including `[6] POL-001` and `[10]
+   GUIDE-002`, versus Q001's unchanged 5 - the actual entry point, not just
+   the fixture script, now uses the repaired config.
+3. **Medium — the suite only proved the frozen captures were repaired, not
+   that the current pipeline still retrieves them.** `run_deterministic_suite`
+   evaluates `case_spec["sources"]` - a fixture hard-coded on 2026-09-21.
+   That is a real proof about the captured evidence, but it cannot notice a
+   *later* corpus/embedding/reranker change quietly breaking Q091/Q093/Q016
+   again, unless someone remembers to manually recapture the fixtures.
+   **Fixed** two ways: (a) the default command's own description now says
+   "CI-safe FIXTURE regression suite", naming what it actually checks; (b)
+   a genuinely new third lane, `--verify-retrieval`, was added -
+   `rebuild_sources_from_pipeline`/`verify_retrieval_pipeline` re-run the
+   REAL retrieval pipeline (local models, no `OPENROUTER_API_KEY`, but real
+   wall-clock time) for every real-query case and compare its output
+   against the same expectations the fixture lane checks. Run live and
+   confirmed: `./.venv/bin/python src/regression_suite.py --verify-retrieval`
+   reports `[OK]` for all six real-query cases against the actual current
+   pipeline. Deterministic tests
+   (`test_verify_retrieval_pipeline_matches_when_the_expectation_is_correct`,
+   `test_verify_retrieval_pipeline_detects_drift_from_a_stale_expectation`,
+   `test_verify_retrieval_pipeline_detects_chunk_level_drift_too`) prove the
+   comparison logic itself against a small fake corpus, with no real model
+   download needed for the test suite.
+4. **Medium — earlier Block 3A doc sections were left describing the
+   pre-repair state without saying so.** The Block 2 case-contract table
+   and Block 3A's captured command output still showed Q091/Q093's
+   pre-repair `expected_missing_primary_doc_ids` and Q016's "no automated
+   chunk-level check exists yet" as if current. **Fixed** by adding
+   explicit "historical snapshot, superseded" callouts directly above both
+   sections, pointing at this Block 3B section for the current state,
+   rather than rewriting history to look like it was always accurate (the
+   same choice Day 13 made by adding a fixes section instead of editing its
+   original per-case write-up).
+5. **Low — the trace/schema coverage claim overclaimed.** "Trace / evidence
+   capture decision" said the row dicts covered "every field" the route
+   doc's suggested JSONL schema named; several (`retrieved_doc_ids`,
+   `mode`, `root_cause_label`, `answer_text`/hash) were not actually
+   present. **Fixed** two ways: the wording was weakened to name exactly
+   what is and isn't covered, and the gap was also closed in code -
+   `evaluate_case`/`evaluate_refusal_case` now add `mode`,
+   `retrieved_doc_ids`, `retrieved_chunk_ids`, and `answer_hash` (a short
+   SHA-256 prefix, not the full text) to every row.
+
+```bash
+./.venv/bin/pytest -q
+# 206 passed   (198 at Block 3B + 8 new: 3 for the Q091 term-level fix, 5 for the
+#               retrieval-pipeline verification lane)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 6/6 real-query cases [OK] against the current retrieval pipeline
+
+./.venv/bin/python src/generation.py
+# Q001: 5 sources (unchanged). Q091: 10 sources, including POL-001 and
+# GUIDE-002 - the repair is live in the real entry point, not just a fixture.
+```
 
 ## Known limitations / next steps
 

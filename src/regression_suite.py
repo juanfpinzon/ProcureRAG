@@ -98,10 +98,11 @@ them.
 """
 
 import argparse
+import hashlib
 from datetime import datetime, timezone
 
 from generation import INSUFFICIENT_EVIDENCE_ANSWER, generate_answer
-from generation_eval import CURATED_FIXTURES, _source, evaluate_generated_answer
+from generation_eval import CURATED_FIXTURES, _source, check_context_recall, evaluate_generated_answer
 from error_analysis import Q004_ANSWER_TEXT, Q004_SOURCES
 from framework_eval import build_framework_eval_case, run_deepeval_contextual_recall, run_deepeval_faithfulness
 from hybrid_search import load_example_queries
@@ -558,6 +559,7 @@ REGRESSION_CASES = [
         "expected_citation_status": "pass",
         "required_chunk_ids": (),
         "expected_missing_chunk_ids": [],
+        "expected_missing_terms": [],
         "table_note": None,
         "notes": (
             "Easy single-threshold control (POL-001/FAQ-001 both reach context). "
@@ -580,6 +582,7 @@ REGRESSION_CASES = [
         "expected_citation_status": "pass",
         "required_chunk_ids": (),
         "expected_missing_chunk_ids": [],
+        "expected_missing_terms": [],
         "table_note": None,
         "notes": (
             "Second control, deliberately NOT multi_doc (single primary doc, "
@@ -602,6 +605,17 @@ REGRESSION_CASES = [
         "expected_citation_status": "pass",
         "required_chunk_ids": (),
         "expected_missing_chunk_ids": [],
+        # NOT []: a code review correctly caught that leaving this at the
+        # generic default would let a real, known deterministic failure
+        # (check_expected_terms fails on "Band 3") hide behind a
+        # deterministic_match=True / overall_verdict="as_expected" table row.
+        # ["Band 3"] means "we know this term is missing and that IS the
+        # currently expected state" - so the suite stays "as_expected" for
+        # the right reason (a documented, tracked gap), not by silently
+        # ignoring a failing check. If this ever became [] (the residual
+        # gap actually gets fixed) or ["Band 3", "usage data"] (a real
+        # regression), evaluate_case below now catches either change.
+        "expected_missing_terms": ["Band 3"],
         "table_note": "REPAIRED 2026-09-21: missing docs were ['GUIDE-002','POL-001'], now []",
         "notes": (
             "Day 13's anchor retrieval_miss, REPAIRED in Block 3B: under "
@@ -609,14 +623,15 @@ REGRESSION_CASES = [
             "max_chunks_per_document=2), both POL-001 and GUIDE-002 now reach "
             "context - this row's `sources`/`answer_text` are a real live capture "
             "under that config, not the original Day 13 transcript (still frozen, "
-            "unchanged, in error_analysis.py for history). Honest residual: the "
-            "specific POL-001 chunk retrieved (chunk-3) explains HOW total "
-            "committed value is calculated, not the actual Band 1/2/3 EUR "
-            "thresholds (a different POL-001 chunk, chunk-4, has those) - so "
-            "check_expected_terms below will still FAIL on 'Band 3' even though "
-            "it now passes on 'usage data'. That is a real, narrower, still-open "
-            "chunk-level gap - named here, not hidden, exactly the pattern Q016 "
-            "already established below."
+            "unchanged, in error_analysis.py for history). Honest residual, now "
+            "actually enforced by `expected_missing_terms` below, not just "
+            "described in prose: the specific POL-001 chunk retrieved (chunk-3) "
+            "explains HOW total committed value is calculated, not the actual "
+            "Band 1/2/3 EUR thresholds (a different POL-001 chunk, chunk-4, has "
+            "those) - so check_expected_terms still FAILS on 'Band 3' even though "
+            "it now passes on 'usage data'. A real, narrower, still-open "
+            "chunk-level gap - named here AND wired into deterministic_match, not "
+            "hidden behind an unrelated 'as_expected' row."
         ),
     },
     {
@@ -632,6 +647,7 @@ REGRESSION_CASES = [
         "expected_citation_status": "pass",
         "required_chunk_ids": (),
         "expected_missing_chunk_ids": [],
+        "expected_missing_terms": [],
         "table_note": "REPAIRED 2026-09-21: missing docs were ['CONTRACT-001'], now []",
         "notes": (
             "Day 13's second retrieval_miss, REPAIRED in Block 3B: CONTRACT-001 "
@@ -660,6 +676,7 @@ REGRESSION_CASES = [
         # evaluate_case below for how this turns into `missing_chunk_ids`.
         "required_chunk_ids": ("GUIDE-001::chunk-2",),
         "expected_missing_chunk_ids": [],  # REPAIRED - was ["GUIDE-001::chunk-2"] pre-repair
+        "expected_missing_terms": [],
         "table_note": None,  # computed dynamically in evaluate_case from required_chunk_ids instead
         "notes": (
             "Day 13's chunk_level_retrieval_gap, ADDRESSED in Block 3B (this is "
@@ -698,6 +715,7 @@ CITATION_NEGATIVE_CASE = {
     "expected_citation_status": "fail",  # the point of this case: we WANT a fail here
     "required_chunk_ids": (),
     "expected_missing_chunk_ids": [],
+    "expected_missing_terms": [],
     "table_note": "synthetic [99] citation; expects citation_validity=fail",
     "notes": (
         "Synthetic answer text over Q001's real sources, citing [99] - a source "
@@ -735,6 +753,23 @@ def evaluate_case(case_spec, query_row):
     chunk arrived", something `check_context_recall`'s document-level
     `missing_primary_doc_ids` is structurally unable to see (a document can
     have ten chunks and only one of them matter for a given fact).
+
+    Code-review fix (same day, after Block 3B): `evaluate_generated_answer`
+    already runs `check_expected_terms` when `required_terms` is set (Q091's
+    case does - `("Band 3", "usage data")`) and that finding was sitting
+    unused in `findings`, ignored by `deterministic_match` entirely. That
+    let Q091's real, known "Band 3" term-level failure print as
+    `deterministic_verdict=match` / `overall_verdict=as_expected` - true in
+    the narrow sense that nothing else regressed, but misleading, because a
+    reader scanning `overall_verdict` for "did anything break" would see
+    nothing and miss a real, already-known deterministic failure sitting
+    right there in `findings`. `missing_terms` below closes that gap with
+    the same pattern as `missing_chunk_ids`: compare `check_expected_terms`'s
+    actual missing terms against `case_spec["expected_missing_terms"]`, and
+    fold the comparison into `deterministic_match` - so a term-level failure
+    can only ever be "as_expected" by being explicitly declared as an
+    expected, tracked gap (see `retrieval-miss-q091`'s
+    `expected_missing_terms=["Band 3"]`), never by being silently ignored.
     """
     findings = evaluate_generated_answer(
         query_row,
@@ -757,23 +792,41 @@ def evaluate_case(case_spec, query_row):
     actual_chunk_ids = {source["chunk_id"] for source in case_spec["sources"]}
     missing_chunk_ids = sorted(required_chunk_ids - actual_chunk_ids)
 
+    # `expected_terms` only runs (and only appears in `findings_by_check`)
+    # when `required_terms` was supplied - `.get(...)` rather than a plain
+    # `[...]` lookup, and `missing_terms = []` when it never ran, so a case
+    # with no curated terms (most of them) is never penalized for a check
+    # it was never asked to pass - the same "not applicable is different
+    # from failing" rule `check_expected_terms` itself already follows.
+    expected_terms_finding = findings_by_check.get("expected_terms")
+    if expected_terms_finding is not None:
+        missing_terms = sorted(set(expected_terms_finding["expected"]) - set(expected_terms_finding["actual"]))
+    else:
+        missing_terms = []
+
     deterministic_match = (
         missing_primary_doc_ids == case_spec["expected_missing_primary_doc_ids"]
         and citation_status == case_spec["expected_citation_status"]
         and missing_chunk_ids == case_spec["expected_missing_chunk_ids"]
+        and missing_terms == case_spec["expected_missing_terms"]
     )
 
-    # For a case that actually declares a chunk-level requirement, compute
-    # the table note from the real check result instead of using a static,
-    # hand-written string that could silently go stale the next time
-    # `sources` changes - this is the "chunk/fact-level coverage signal,
-    # not hidden behind document-level pass" the Day 14 route doc asks for.
-    table_note = case_spec["table_note"]
+    # Build the printed note from every real check result that has
+    # something to say, instead of one hand-written string that could
+    # silently go stale - this is the "chunk/fact-level coverage signal,
+    # not hidden behind document-level pass" the Day 14 route doc asks for,
+    # now covering term-level gaps too (see docstring above).
+    note_parts = []
+    if case_spec["table_note"]:
+        note_parts.append(case_spec["table_note"])
     if required_chunk_ids:
         if missing_chunk_ids:
-            table_note = f"chunk-level gap OPEN: missing {missing_chunk_ids}"
+            note_parts.append(f"chunk-level gap OPEN: missing {missing_chunk_ids}")
         else:
-            table_note = f"chunk-level gap ADDRESSED: {sorted(required_chunk_ids)} present"
+            note_parts.append(f"chunk-level gap ADDRESSED: {sorted(required_chunk_ids)} present")
+    if missing_terms:
+        note_parts.append(f"term-level gap OPEN: missing {missing_terms}")
+    table_note = " | ".join(note_parts) if note_parts else None
 
     return {
         "case_id": case_spec["case_id"],
@@ -783,11 +836,18 @@ def evaluate_case(case_spec, query_row):
         "retrieval_config": case_spec["retrieval_config"],
         "query_type": query_row.get("query_type"),
         "difficulty": query_row.get("difficulty"),
+        "mode": "deterministic",
         "missing_primary_doc_ids": missing_primary_doc_ids,
         "expected_missing_primary_doc_ids": case_spec["expected_missing_primary_doc_ids"],
         "citation_status": citation_status,
         "expected_citation_status": case_spec["expected_citation_status"],
         "missing_chunk_ids": missing_chunk_ids,
+        "expected_missing_chunk_ids": case_spec["expected_missing_chunk_ids"],
+        "missing_terms": missing_terms,
+        "expected_missing_terms": case_spec["expected_missing_terms"],
+        "retrieved_doc_ids": sorted({source["doc_id"] for source in case_spec["sources"]}),
+        "retrieved_chunk_ids": sorted({source["chunk_id"] for source in case_spec["sources"]}),
+        "answer_hash": hashlib.sha256(case_spec["answer_text"].encode("utf-8")).hexdigest()[:12],
         "table_note": table_note,
         "notes": case_spec["notes"],
         "deterministic_match": deterministic_match,
@@ -836,11 +896,18 @@ def evaluate_refusal_case():
         "retrieval_config": None,  # no retrieval ran at all - synthetic, empty sources
         "query_type": None,
         "difficulty": None,
+        "mode": "deterministic",
         "missing_primary_doc_ids": None,  # not a meaningful concept with zero sources
         "expected_missing_primary_doc_ids": None,
         "citation_status": citation_status,
         "expected_citation_status": "pass",
         "missing_chunk_ids": None,  # not a meaningful concept with zero sources
+        "expected_missing_chunk_ids": None,
+        "missing_terms": None,  # no required_terms concept here either
+        "expected_missing_terms": None,
+        "retrieved_doc_ids": [],  # sources was empty by construction
+        "retrieved_chunk_ids": [],
+        "answer_hash": hashlib.sha256(result["answer"].encode("utf-8")).hexdigest()[:12],
         "table_note": "empty context must trigger refusal; client never called",
         "notes": (
             "Synthetic query, empty sources. generate_answer must return the fixed "
@@ -941,6 +1008,119 @@ def attach_live_results(rows, queries_by_id):
 
 
 # ---------------------------------------------------------------------------
+# Retrieval-pipeline verification (code-review fix, same day as Block 3B): a
+# THIRD lane, distinct from both the deterministic fixture lane above and
+# the live LLM-judge lane. `run_deterministic_suite`/`attach_live_results`
+# both evaluate `case_spec["sources"]` - a frozen, hard-coded capture from
+# 2026-09-21. That proves the *captured evidence* matches expectations; it
+# does NOT prove the CURRENT retrieval pipeline (a later corpus edit, a
+# changed embedding model, a different reranker) still retrieves the same
+# thing. A code review correctly caught that gap: "before changing
+# retrieval, one command tells me whether Q091/Q093 moved" was the Day 14
+# promise, but the frozen-fixture lane alone cannot notice a retrieval
+# change unless someone manually recaptures the fixtures afterwards.
+#
+# `verify_retrieval_pipeline` below closes that gap by re-running the REAL
+# pipeline (not reading `case_spec["sources"]` at all) and comparing its
+# output against the same `expected_missing_primary_doc_ids`/
+# `expected_missing_chunk_ids` every case already declares. This is
+# deliberately NOT folded into the default command or into `--live`: it
+# needs no `OPENROUTER_API_KEY` and makes no call to any LLM provider (BM25
+# + local sentence-transformer embeddings + a local cross-encoder reranker
+# are fully deterministic given the same corpus and models - the exact
+# point `generation_eval.py`'s own fixture-block comment already makes
+# about Day 10's captures), but it DOES load the full corpus and two real
+# local models, which is real wall-clock time (and, on a machine that has
+# never run this project before, a one-time Hugging Face model download) -
+# too slow to be the default, CI-safe command every reviewer runs first.
+# See `main()`'s `--verify-retrieval` flag below for how a user opts into
+# this third lane.
+# ---------------------------------------------------------------------------
+
+
+def rebuild_sources_from_pipeline(
+    query_row, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+):
+    """Re-run the real retrieval pipeline for one query and return fresh sources.
+
+    Calls `reranking.retrieval_config_for_query_type(query_row["query_type"])`
+    - the exact same call `generation.py`'s real generation entry point now
+    makes (see that module's Block 3B comment) - so this function proves
+    the SAME config decision a live run would use, not a second, drifting
+    copy of it. Pipeline components (`chunk_lexical_index`,
+    `chunk_semantic_index`, `embedding_model`, `cross_encoder_model`) are
+    accepted as arguments rather than loaded here, so this function stays
+    testable against a small fake corpus/fake models
+    (`tests/test_regression_suite.py`) without ever downloading a real
+    embedding or cross-encoder model - the same dependency-injection
+    pattern `reranking.two_stage_rerank` itself already uses.
+    """
+    from generation import build_sources
+    from reranking import retrieval_config_for_query_type, two_stage_rerank
+
+    config = retrieval_config_for_query_type(query_row["query_type"])
+    reranked = two_stage_rerank(
+        query_row["query"],
+        chunk_lexical_index,
+        chunk_semantic_index,
+        embedding_model,
+        cross_encoder_model,
+        **config,
+    )
+    return build_sources(reranked)
+
+
+def verify_retrieval_pipeline(
+    case_specs, queries_by_id, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+):
+    """Compare the CURRENT retrieval pipeline's output to each case's expectation.
+
+    This is what the frozen-fixture lane cannot do on its own: rebuild
+    `sources` from the real pipeline (`rebuild_sources_from_pipeline` above)
+    instead of reading `case_spec["sources"]`, then run the exact same
+    "expected minus actual" comparisons `evaluate_case` runs for docs and
+    chunks. `case_specs` with `query_id=None` (the synthetic refusal case)
+    are skipped - there is no real query or retrieval to re-check for a
+    case that was never built from retrieval in the first place.
+    """
+    results = []
+    for case_spec in case_specs:
+        query_id = case_spec["query_id"]
+        if query_id is None:
+            continue
+
+        query_row = queries_by_id[query_id]
+        sources = rebuild_sources_from_pipeline(
+            query_row, chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model
+        )
+
+        recall_finding = check_context_recall(query_row, sources, cited_doc_ids=[])
+        missing_primary_doc_ids = sorted(set(recall_finding["expected"]) - set(recall_finding["actual"]))
+
+        required_chunk_ids = set(case_spec["required_chunk_ids"])
+        actual_chunk_ids = {source["chunk_id"] for source in sources}
+        missing_chunk_ids = sorted(required_chunk_ids - actual_chunk_ids)
+
+        matches_expectation = (
+            missing_primary_doc_ids == case_spec["expected_missing_primary_doc_ids"]
+            and missing_chunk_ids == case_spec["expected_missing_chunk_ids"]
+        )
+
+        results.append(
+            {
+                "case_id": case_spec["case_id"],
+                "query_id": query_id,
+                "missing_primary_doc_ids": missing_primary_doc_ids,
+                "expected_missing_primary_doc_ids": case_spec["expected_missing_primary_doc_ids"],
+                "missing_chunk_ids": missing_chunk_ids,
+                "expected_missing_chunk_ids": case_spec["expected_missing_chunk_ids"],
+                "matches_expectation": matches_expectation,
+            }
+        )
+    return results
+
+
+# ---------------------------------------------------------------------------
 # The table printer: Block 3A step 3's nine columns, hand-rolled (no table
 # library is a project dependency, and eight short columns don't need one).
 # ---------------------------------------------------------------------------
@@ -1035,18 +1215,32 @@ def render_table(rows):
 
 
 def main() -> None:
-    """Run the deterministic suite (and, with `--live`, the judge lane) and print it.
+    """Run the fixture regression suite (and, optionally, the judge lane and/or
+    a live retrieval-pipeline check) and print it.
 
-    No flags at all: deterministic-only, no network, no `OPENROUTER_API_KEY`
-    required - this is the command a portfolio reviewer with no credentials
-    can run and still see the full seven-case regression table. `--live`
-    additionally runs DeepEval's faithfulness and contextual-recall metrics
-    for the five real fixture cases; with no key present those simply report
-    `status="blocked"` per case rather than failing the whole run.
+    No flags at all: deterministic-only, over FROZEN fixture captures, no
+    network, no `OPENROUTER_API_KEY` required - this is the command a
+    portfolio reviewer with no credentials can run and still see the full
+    seven-case regression table. Naming it a "fixture" regression suite
+    (not just "the" regression suite) is a code-review fix: this default
+    command proves the captured evidence still matches expectations, not
+    that the live retrieval pipeline does - see `--verify-retrieval` below
+    for that second, separate claim.
+
+    `--live` additionally runs DeepEval's faithfulness and contextual-recall
+    metrics for the five real fixture cases; with no key present those
+    simply report `status="blocked"` per case rather than failing the whole
+    run. `--verify-retrieval` additionally re-runs the REAL retrieval
+    pipeline (local models, no API key, but real wall-clock time) and
+    checks whether it still finds what each case expects - see
+    `verify_retrieval_pipeline`'s own module comment for why this is a
+    third, separate lane rather than folded into either of the other two.
     """
     parser = argparse.ArgumentParser(
-        description="Day 14: CI-safe generation-eval regression suite over Q001/Q004/Q091/Q093/Q016 "
-        "plus a citation-negative and a refusal-negative boundary case."
+        description="Day 14: CI-safe FIXTURE regression suite over Q001/Q004/Q091/Q093/Q016 plus a "
+        "citation-negative and a refusal-negative boundary case. Checks frozen, captured evidence "
+        "against expectations by default - pass --verify-retrieval to also check the current "
+        "retrieval pipeline, not just the fixtures."
     )
     parser.add_argument(
         "--live",
@@ -1054,6 +1248,14 @@ def main() -> None:
         help="Also run DeepEval faithfulness + contextual recall for the five real fixture cases "
         "(needs OPENROUTER_API_KEY; degrades to status=blocked without one). Default: "
         "deterministic-only, no network.",
+    )
+    parser.add_argument(
+        "--verify-retrieval",
+        action="store_true",
+        help="Also rebuild sources from the CURRENT retrieval pipeline (real local models, no "
+        "OPENROUTER_API_KEY needed, but real wall-clock time) for every real-query case, and check "
+        "whether it still matches this suite's expectations - catches retrieval/embedding/reranker "
+        "drift the frozen-fixture lane above cannot see on its own.",
     )
     args = parser.parse_args()
 
@@ -1081,7 +1283,49 @@ def main() -> None:
                   f"(citation expected={row['expected_citation_status']!r}, "
                   f"got={row['citation_status']!r})")
     else:
-        print("\nAll cases match their currently expected state.")
+        print("\nAll cases match their currently expected state (frozen fixtures).")
+
+    if args.verify_retrieval:
+        print("\nVerifying against the CURRENT retrieval pipeline (loads the full corpus and two "
+              "local models - this takes a little while)...")
+        from chunked_search import build_chunk_lexical_index, build_chunk_semantic_index
+        from chunking import chunk_corpus
+        from preprocessing import load_data
+        from reranking import load_cross_encoder
+        from semantic_search import load_embedding_model
+
+        data = load_data()
+        chunks = chunk_corpus(data)
+        embedding_model = load_embedding_model()
+        chunk_lexical_index = build_chunk_lexical_index(chunks)
+        chunk_semantic_index = build_chunk_semantic_index(chunks, embedding_model)
+        cross_encoder_model = load_cross_encoder()
+
+        pipeline_results = verify_retrieval_pipeline(
+            REGRESSION_CASES + [CITATION_NEGATIVE_CASE],
+            queries_by_id,
+            chunk_lexical_index,
+            chunk_semantic_index,
+            embedding_model,
+            cross_encoder_model,
+        )
+        for result in pipeline_results:
+            status = "OK" if result["matches_expectation"] else "PIPELINE DRIFT"
+            print(
+                f"  [{status}] {result['case_id']}: missing_docs={result['missing_primary_doc_ids']} "
+                f"(expected {result['expected_missing_primary_doc_ids']}), "
+                f"missing_chunks={result['missing_chunk_ids']} "
+                f"(expected {result['expected_missing_chunk_ids']})"
+            )
+
+        pipeline_drifts = [r for r in pipeline_results if not r["matches_expectation"]]
+        if pipeline_drifts:
+            print(
+                f"\n{len(pipeline_drifts)} case(s) drifted from this suite's expectations under the "
+                "CURRENT retrieval pipeline - the frozen fixtures above may need recapturing."
+            )
+        else:
+            print("\nThe current retrieval pipeline still matches every case's expectation.")
 
 
 if __name__ == "__main__":

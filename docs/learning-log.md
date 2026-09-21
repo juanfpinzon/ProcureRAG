@@ -2881,8 +2881,55 @@ unchanged.
 The regression suite is green (7/7 deterministic, 5/5 live-confirmed) and
 the Q091/Q093/Q016 repair is now implemented and verified by missing-doc
 and missing-chunk signals, not prose — Week 3's gate (HER-268) can close.
-The next reasonable step is the deferred residual: either wire a
-`required_chunk_ids` check for Q091's own "Band 3" gap (mirroring Q016's),
-or re-measure `MULTI_DOC_RETRIEVAL_CONFIG` against the full `multi_doc`
-query slice before treating it as a general win, ahead of moving into
-Chapter 11 Agentic.
+Q091's own "Band 3" residual is now wired (see "Review-feedback fixes"
+below — `expected_missing_terms`, not `required_chunk_ids`, since it's a
+term-in-answer-text gap rather than a missing-chunk-id gap, but the same
+"visible, not hidden" idea). The next reasonable remaining step is to
+re-measure `MULTI_DOC_RETRIEVAL_CONFIG` against the full `multi_doc` query
+slice before treating it as a general win, ahead of moving into Chapter 11
+Agentic.
+
+### Review-feedback fixes (same day)
+
+A review of the Block 3B pass raised five points; all five addressed, most
+severe first (full technical detail in `docs/eval-report.md`'s matching
+"Code-review fixes" section):
+
+1. **High — Q091's real "Band 3" failure printed as `as_expected`.**
+   `deterministic_match` never looked at `check_expected_terms`'s result,
+   so a real, known deterministic failure was invisible in the table.
+   **Fixed** by adding `expected_missing_terms` (the same "expected minus
+   actual" pattern `expected_missing_chunk_ids` already used) and folding
+   it into `deterministic_match` - Q091's row now explicitly prints
+   `"term-level gap OPEN: missing ['Band 3']"`.
+2. **High — the repair never reached the real generation entry point.**
+   `generation.py`'s `main()` still called `two_stage_rerank(...,
+   top_k=5)` directly - `retrieval_config_for_query_type` only ever ran
+   inside the fixture-capture script. **Fixed** by wiring the query-type
+   config into `generation.py` itself; re-running `python src/generation.py`
+   live now shows Q091 retrieving 10 sources (including POL-001,
+   GUIDE-002) versus Q001's unchanged 5.
+3. **Medium — frozen fixtures can't notice a later retrieval-pipeline
+   change.** The suite only ever evaluated `case_spec["sources"]`, a
+   fixture from 2026-09-21. **Fixed** by adding a third lane,
+   `--verify-retrieval`, that rebuilds sources from the CURRENT pipeline
+   (real local models, no API key, but real wall-clock time) and compares
+   against the same expectations - and by naming the default command a
+   "fixture" regression suite so the distinction is explicit.
+4. **Medium — earlier Block 3A doc sections read as current after Block
+   3B changed the expected state.** **Fixed** with explicit
+   "historical/superseded" callouts in `docs/eval-report.md` pointing at
+   the current Block 3B section, rather than editing history to look
+   right in hindsight.
+5. **Low — "covers every field" overclaimed the trace-schema coverage.**
+   **Fixed** by both weakening the wording and closing part of the actual
+   gap - `mode`, `retrieved_doc_ids`, `retrieved_chunk_ids`, and
+   `answer_hash` are now real fields on every row.
+
+```bash
+./.venv/bin/pytest -q                                       # 206 passed (198 + 8 new)
+./.venv/bin/python -m compileall -q src tests                # clean
+./.venv/bin/python -m ruff check src tests                   # All checks passed!
+./.venv/bin/python src/regression_suite.py --verify-retrieval # 6/6 [OK] vs the live pipeline
+./.venv/bin/python src/generation.py                          # Q091 now retrieves 10 sources, live
+```
