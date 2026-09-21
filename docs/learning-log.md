@@ -2578,3 +2578,137 @@ actual stability are all exactly the kind of thing that looks right from
 inside the session that produced them and needs a second, adversarial read
 - ideally one that actually re-runs the commands from a clean shell - to
 catch.
+
+## 2026-09-21 — Day 14: Eval Regression Suite + Trace Evidence
+
+Linear: HER-281 — Day 14 loop: eval regression suite + trace evidence.
+
+Route doc: `docs/day-14-eval-regression-suite-trace-evidence.md`.
+
+Related gate: HER-268 — Week 3 gate: grounded generation + RAG eval harness.
+
+### Course / docs target
+
+- Boot.dev: no new chapter today. Reactivate Chapter 10 — `Augmented
+  Generation`, `LLM Summarization`, `Conflict Resolution in Summaries`,
+  `Adding Citations`, and `Question Answering` as the generation baseline.
+- DeepEval docs: RAG quickstart, `Faithfulness`, `Answer Relevancy`,
+  `Contextual Recall`, and `Contextual Precision`.
+- RAGAS docs: metrics reference, `Context Recall`, and `Faithfulness`.
+- Langfuse docs, optional/stretch only: Evaluation Overview, Core Concepts,
+  Scores, and LLM-as-a-Judge.
+
+_TODO: Fill in exact reading notes and the metric/trace vocabulary that
+actually influenced today's design._
+
+### Objective
+
+Package the Week 3 generation-eval work into a repeatable regression suite
+before changing retrieval or prompts. The suite should make the Day 13
+repair signal operational: Q091/Q093 missing-doc failures should be visible,
+Q016's chunk/fact-level gap should not be hidden behind document-level
+recall, and Q001/Q004 controls should guard against regressions.
+
+### Regression suite command and case list
+
+_TODO: Fill in the actual command Juan builds, for example:_
+
+```bash
+./.venv/bin/python src/generation_eval.py --regression-suite
+```
+
+_TODO: Fill in the final case list._ Expected minimum shape:
+
+| Case | Role | Expected behavior | Why included |
+|---|---|---|---|
+| Q001 | passing control | deterministic checks pass | easy control; approval threshold answer should remain stable |
+| Q004 | passing control | deterministic checks pass | non-`multi_doc` control so repairs do not overfit hard cases |
+| Q091 | retrieval miss | missing `POL-001`, `GUIDE-002` before repair | anchor multi-doc missing-primary-doc failure |
+| Q093 | retrieval miss | missing `CONTRACT-001` before repair | conflicting-scope multi-doc failure; false-universal answer risk |
+| Q016 | chunk/fact-level gap | document-level recall can pass while needed chunk/fact is absent | proves doc-id recall alone is not enough |
+| citation negative | validator negative | orphan citation is flagged | citation checker boundary test |
+| refusal negative | insufficient evidence / empty context | refuses rather than invents | generation safety boundary test |
+
+### Table / result summary
+
+_TODO: Paste the real output table or a compact summary of it._ Capture:
+
+- deterministic verdict per case;
+- missing primary docs / missing chunk-fact signals;
+- citation status;
+- optional live status (`skipped`, `blocked`, `ok`, or `error`);
+- overall verdict and caveat.
+
+### Trace / evidence capture decision
+
+_TODO: State the decision._ Expected options:
+
+- local JSONL traces with documented schema;
+- committed sample evidence under `docs/`;
+- ignored runtime traces only;
+- Langfuse deferred with reason.
+
+If live traces are captured, record timestamp, provider/model, temperature,
+token or output budget, timeout, and key/network status.
+
+### Verification evidence
+
+_TODO: Fill in real command output._ Expected gates:
+
+```bash
+./.venv/bin/pytest -q
+./.venv/bin/python -m compileall -q src tests
+./.venv/bin/python -m ruff check src tests
+./.venv/bin/python src/generation_eval.py --regression-suite
+```
+
+### What became operationally repeatable
+
+_TODO: Fill in._ Hints:
+
+- What can now be run before changing retrieval, prompts, or provider?
+- Which result fields are stable enough for CI?
+- Which fields are live evidence samples only?
+
+### What failed or was confusing
+
+_TODO: Fill in._ Capture environment blockers, live-provider blockers,
+ambiguous case labels, trace-storage decisions, or any command that was not
+reproducible from repo root until fixed.
+
+### What I can now explain in an interview
+
+_TODO: Fill in._ Expected explanation shapes:
+
+- **Regression suite vs demo transcript:** a transcript proves one run; a
+  suite defines cases, checks, expected behavior, and repeatable command
+  output.
+- **Deterministic vs live evals:** deterministic gates are exact and
+  CI-safe; live judges add semantic evidence but are variable and must be
+  bounded/documented.
+- **Q091/Q093 repair signal:** retrieval/context changes must move missing
+  primary-doc signals, not merely make the final answer read better.
+- **Q016 chunk-level gap:** document-level recall passing does not prove the
+  specific needed fact reached the model.
+- **Trace evidence:** local JSONL is enough if the schema captures query,
+  retrieval config, retrieved contexts, answer/citations, verdicts, and
+  model/provider settings for live runs.
+
+### What remains weak
+
+_TODO: Fill in._ Likely candidates:
+
+- Whether Q091/Q093 repair has actually been implemented or only made
+  measurable.
+- Whether chunk/fact-level coverage is implemented generally or only
+  documented for Q016.
+- Whether RAGAS ID-based context recall remains deferred.
+- Whether Langfuse tracing remains deferred behind the local suite.
+
+### Next step
+
+- _TODO: Fill in after Day 14 evidence._ If the regression suite is green
+  but the repair is not implemented yet, the likely next step is the Day 13
+  Q091/Q093 repair experiment: multi-doc generation-context top-k increase,
+  optionally combined with a per-document diversity cap, verified by the new
+  regression suite before moving into Chapter 11 Agentic.
