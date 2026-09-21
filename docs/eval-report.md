@@ -3268,19 +3268,23 @@ applied here and printed, not guessed. Two DIFFERENT reasons, not one:
   low. This is a structurally different failure than Q091/Q093, where the
   fix WAS depth (the target chunk never entered the pool at all under the
   old `pool_size=15`).
-- **POL-002 is NOT found by either first-stage retriever inside a 200-deep
-  search** at any useful rank (best BM25 rank 79, best semantic rank 104 —
-  both past `MULTI_DOC_RETRIEVAL_CONFIG`'s own `pool_size=80`). This part
-  IS the Q091/Q093-style shallow-pool problem, just one that `pool_size=80`
-  still isn't deep enough to solve — POL-002 would need `pool_size` pushed
-  well past 100 to even enter the fused pool, at which point
-  `max_chunks_per_document`'s diversity trade-off (see `reranking.py`'s
-  module comment) would need re-verifying too.
+- **POL-002 is not simply a missing-from-BM25 problem, but it still does
+  not reach generation context.** A targeted re-check found
+  `POL-002::chunk-11` at BM25 rank 79 under `pool_size=80`, but with no
+  semantic hit inside the same top-80 pool; after RRF plus the per-document
+  cap, no POL-002 chunk survives into the repaired shortlist. Pushing the
+  diagnostic to `pool_size=200` does surface POL-002 chunks in the shortlist
+  (`POL-002::chunk-11` / `POL-002::chunk-10`), but the reranker still leaves
+  them far outside generation context (final ranks 31 and 40, beyond
+  `top_k=10`). So this is a combined first-stage/fusion + reranker-ranking
+  failure, not a case where the current `pool_size=80` repair is enough and
+  only the final cutoff is too small.
 
 Because Q092 combines a reranker-judgment miss (CONTRACT-005) with a
-first-stage depth miss deeper than the current config reaches (POL-002),
-simply raising `pool_size` again is not obviously the right next fix — it
-would address POL-002 at best, and would do nothing for CONTRACT-005. See
+first-stage/fusion + reranker-ranking miss (POL-002), simply raising
+`pool_size` again is not obviously the right next fix — it still would not
+address CONTRACT-005, and the `pool_size=200` probe shows POL-002 can enter
+the shortlist yet remain outside the generation cutoff after reranking. See
 "Week 4 handoff" below for why this is exactly the kind of concrete,
 measured failure an agentic/recursive-retrieval loop should be motivated
 by, instead of a generic "add an agent" plan.
@@ -3328,8 +3332,9 @@ POL-002 both stay outside generation context under either retrieval config.
 - **Next repair signal**: two separate signals for two separate causes —
   CONTRACT-005 reaching context would mean the reranker (or a query
   reformulation feeding it) stopped scoring `CONTRACT-005::chunk-3` so low;
-  POL-002 reaching context would mean first-stage retrieval found it at
-  all, which plain `pool_size` tuning has not yet achieved even at 80.
+  POL-002 reaching context would mean the combined first-stage/fusion and
+  reranking path promoted one of its candidate chunks into the top-10
+  generation context, not merely that a deeper diagnostic pool can find it.
 
 ### Week 4 / Chapter 11 handoff
 

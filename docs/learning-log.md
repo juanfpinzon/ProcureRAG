@@ -3059,9 +3059,11 @@ Notes:
   context under both configs. Root-cause diagnostic (see eval-report.md):
   CONTRACT-005 IS found by first-stage retrieval (BM25 rank 1) but the
   cross-encoder reranker itself scores it too low to survive `top_k=10` — a
-  reranker-judgment miss, not a pool-depth miss. POL-002 is not found by
-  either first-stage retriever even at `pool_size=200` — a first-stage
-  depth miss the repaired config's `pool_size=80` still doesn't reach.
+  reranker-judgment miss, not a pool-depth miss. POL-002 is weaker in the
+  repaired first-stage/fusion path: one chunk appears at BM25 rank 79, but
+  no POL-002 chunk survives the `pool_size=80` RRF + diversity-cap shortlist;
+  even a `pool_size=200` diagnostic only gets POL-002 into the shortlist,
+  where the reranker still leaves it outside generation context.
 - **Honest verdict: `MULTI_DOC_RETRIEVAL_CONFIG` is a targeted repair,
   verified on 4 of 5 `multi_doc` queries (Q016 chunk-level, Q091, Q093
   fixed; Q005 unaffected-and-fine) — not a full-slice improvement.** Q092
@@ -3135,11 +3137,13 @@ Notes:
   specific failure signal, not by framework enthusiasm.** Today's Q092
   diagnostic is the concrete argument: CONTRACT-005 is a *reranker*
   judgment miss (found by BM25 at rank 1, then scored too low by the
-  cross-encoder to survive `top_k`), while POL-002 is a *first-stage depth*
-  miss (not found by either retriever within 200 results). These need
-  different fixes — a query reformulation / re-rank retry for one, a
-  deeper or different retrieval strategy for the other. "Add an agent"
-  without this diagnosis would be guessing at which of two different
+  cross-encoder to survive `top_k`), while POL-002 is a combined
+  first-stage/fusion + reranker-ranking miss (weak enough that `pool_size=80`
+  drops it before reranking, and still not promoted into top-10 even when a
+  deeper diagnostic pool surfaces it). These need different fixes — a query
+  reformulation / re-rank retry for one, and a retrieval/fusion/reranking
+  strategy that can surface and promote POL-002 for the other. "Add an
+  agent" without this diagnosis would be guessing at which of two different
   problems it's even trying to solve.
 
 ### What remains weak
@@ -3152,10 +3156,11 @@ Notes:
   `GUIDE-001::chunk-2` — a real `required_chunk_ids` assertion), or a
   deliberate, asserted decision that the band stays unstated.
 - **Q092's missing-doc gap (new today).** Owner: retrieval — a reranker
-  relevance-judgment miss for CONTRACT-005, a first-stage depth miss for
-  POL-002. Impact: any real answer to Q092 today would omit both documents'
-  requirements. Next signal: two separate checks, one per cause (see
-  eval-report.md's Day 15 section for exactly what each would need).
+  relevance-judgment miss for CONTRACT-005, plus a combined
+  first-stage/fusion + reranker-ranking miss for POL-002. Impact: any real
+  answer to Q092 today would omit both documents' requirements. Next signal:
+  two separate checks, one per cause (see eval-report.md's Day 15 section
+  for exactly what each would need).
 
 Neither gap blocks HER-268 — both are retrieval-completeness gaps the eval
 harness already surfaces honestly (via context recall / the new full-slice
