@@ -2598,8 +2598,31 @@ Related gate: HER-268 — Week 3 gate: grounded generation + RAG eval harness.
 - Langfuse docs, optional/stretch only: Evaluation Overview, Core Concepts,
   Scores, and LLM-as-a-Judge.
 
-_TODO: Fill in exact reading notes and the metric/trace vocabulary that
-actually influenced today's design._
+All twelve doc sections above were fetched and read directly this session
+(not recalled from general training knowledge) — the full compact table is
+in `docs/eval-report.md`'s Day 14 section, "Reading notes (Block 1)". The
+three findings that actually shaped today's design:
+
+1. DeepEval's own quickstart splits RAG metrics into **generator**
+   (`Answer Relevancy`, `Faithfulness`) vs **retriever** (`Contextual
+   Relevancy`, `Contextual Precision`, `Contextual Recall`) metrics —
+   confirming Day 12/13's choice to wire faithfulness (generator) and
+   contextual recall (retriever) as the two metrics worth attaching to the
+   suite's optional live lane, rather than adding all five.
+2. RAGAS's Context Recall page documents a real **ID-based** variant
+   (matched ids ÷ total reference ids) — the strongest conceptual match to
+   this project's own `check_context_recall`. It stays a deliberately
+   deferred future path: `check_context_recall` already gives ProcureRAG
+   the deterministic, doc-id-exact version of the same idea, in code this
+   project owns, so adding RAGAS's version today would be a second
+   implementation of a question already answered.
+3. Langfuse's own vocabulary maps cleanly onto what the suite already does
+   without any SaaS setup: `REGRESSION_CASES` is the **dataset**, one suite
+   run is the **experiment**, `evaluate_case` is a **code evaluator**. Its
+   docs also flag that trace-level evaluators are deprecated in Langfuse v4
+   in favor of experiment-level evaluation — reinforcing that an
+   experiment (offline, dataset-based), not live tracing, is the right
+   shape for a project with no production traffic yet.
 
 ### Objective
 
@@ -2611,104 +2634,178 @@ recall, and Q001/Q004 controls should guard against regressions.
 
 ### Regression suite command and case list
 
-_TODO: Fill in the actual command Juan builds, for example:_
+A separate module, not a `generation_eval.py` flag — see
+`docs/eval-report.md`'s Day 14 "Why a separate module" section for the
+reasoning (keeping Day 11's checks and Day 14's suite-runner in different
+files, the same split Day 13 already made for `error_analysis.py`).
 
 ```bash
-./.venv/bin/python src/generation_eval.py --regression-suite
+./.venv/bin/python src/regression_suite.py            # deterministic lane, no network, no PYTHONPATH needed
+./.venv/bin/python src/regression_suite.py --live     # + DeepEval faithfulness/contextual recall
 ```
 
-_TODO: Fill in the final case list._ Expected minimum shape:
+The final case list (seven cases — `src/regression_suite.py`'s
+`REGRESSION_CASES` + `CITATION_NEGATIVE_CASE` + the code-built refusal
+case):
 
 | Case | Role | Expected behavior | Why included |
 |---|---|---|---|
-| Q001 | passing control | deterministic checks pass | easy control; approval threshold answer should remain stable |
-| Q004 | passing control | deterministic checks pass | non-`multi_doc` control so repairs do not overfit hard cases |
-| Q091 | retrieval miss | missing `POL-001`, `GUIDE-002` before repair | anchor multi-doc missing-primary-doc failure |
-| Q093 | retrieval miss | missing `CONTRACT-001` before repair | conflicting-scope multi-doc failure; false-universal answer risk |
-| Q016 | chunk/fact-level gap | document-level recall can pass while needed chunk/fact is absent | proves doc-id recall alone is not enough |
-| citation negative | validator negative | orphan citation is flagged | citation checker boundary test |
-| refusal negative | insufficient evidence / empty context | refuses rather than invents | generation safety boundary test |
+| Q001 | passing control | `missing_primary_doc_ids=[]`, citation pass | easy control; must stay stable after any retrieval-depth/diversity change |
+| Q004 | passing control | `missing_primary_doc_ids=[]`, citation pass | non-`multi_doc` control so a `multi_doc`-specific repair can't be credited with an unrelated win |
+| Q091 | retrieval miss | `missing_primary_doc_ids=["GUIDE-002","POL-001"]` (pre-repair) | anchor multi-doc missing-primary-doc failure; faithfulness alone scores this 1.00, proving only `check_context_recall` catches it |
+| Q093 | retrieval miss | `missing_primary_doc_ids=["CONTRACT-001"]` (pre-repair) | conflicting-scope multi-doc failure; a missing contract silently becomes a false-universal answer |
+| Q016 | chunk/fact-level gap | `missing_primary_doc_ids=[]`, `table_note` names the chunk gap | proves doc-id-level recall passing is not proof the needed *fact* reached the model |
+| citation negative (synthetic) | validator negative | `citation_status="fail"` is the *expected*, correct outcome | the one case whose contract wants a check to fail — proves the validator still catches a hallucinated `[99]` |
+| refusal negative (synthetic) | insufficient evidence / empty context | fixed refusal text returned, client never invoked | proves `generate_answer`'s empty-context short-circuit still holds |
 
 ### Table / result summary
 
-_TODO: Paste the real output table or a compact summary of it._ Capture:
-
-- deterministic verdict per case;
-- missing primary docs / missing chunk-fact signals;
-- citation status;
-- optional live status (`skipped`, `blocked`, `ok`, or `error`);
-- overall verdict and caveat.
+Full real output (deterministic and `--live`) is in `docs/eval-report.md`'s
+Day 14 "The regression suite's real output" section. Summary: all 7 cases
+report `deterministic_match=True` / `overall_verdict="as_expected"` in the
+deterministic lane; with `--live`, all 5 real fixture cases report
+`status="ok"` for both DeepEval metrics and `overall_verdict="as_expected
+(live ok)"`, while the 2 synthetic negative cases are correctly left
+unjudged (`"n/a - synthetic case, not judged for faithfulness/context
+recall"`) rather than given a meaningless score.
 
 ### Trace / evidence capture decision
 
-_TODO: State the decision._ Expected options:
+**No separate JSONL file — the suite's own row dicts, printed as the two
+captured tables in `docs/eval-report.md`, are this day's committed trace
+evidence**, explicitly labeled as one 2026-09-21 snapshot rather than a
+live-updating source of truth. Reasoning (full version in
+`docs/eval-report.md`): Day 13 already had to walk back a single "real
+output" score block into "multiple actual runs" after finding a live
+judge's score is genuinely variable (Q091's contextual recall ranged
+0.50–1.00 across real runs that day). Committing one JSONL file as *the*
+evidence would repeat that exact mistake — treating a variable live-judge
+sample as a stable, checked-in fact. The deterministic lane needs no
+persistence at all: it is fully reproducible from the already-committed
+fixtures in `src/error_analysis.py`/`src/generation_eval.py` every time it
+runs.
 
-- local JSONL traces with documented schema;
-- committed sample evidence under `docs/`;
-- ignored runtime traces only;
-- Langfuse deferred with reason.
-
-If live traces are captured, record timestamp, provider/model, temperature,
-token or output budget, timeout, and key/network status.
+When run with `--live`, every result does carry the fields the route doc
+asks for: `run_timestamp_utc`, `provider="openrouter"`, `judge_model`,
+`status` (`ok`/`blocked`/`error`), and honestly-`None` `temperature`/
+`token_budget` fields — DeepEval's judge client is configured once via the
+`deepeval set-openrouter` CLI command and doesn't expose either knob to
+this project's code, unlike RAGAS's hand-built `ChatOpenAI`. Recording
+`None` is the honest boundary, not a gap.
 
 ### Verification evidence
 
-_TODO: Fill in real command output._ Expected gates:
-
 ```bash
 ./.venv/bin/pytest -q
+# 191 passed in 1.84s   (177 baseline + 14 new in tests/test_regression_suite.py)
+
 ./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
 ./.venv/bin/python -m ruff check src tests
-./.venv/bin/python src/generation_eval.py --regression-suite
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py
+# 7/7 cases "as_expected"
+
+./.venv/bin/python src/regression_suite.py --live
+# 5/5 real fixture cases "as_expected (live ok)"; 2 synthetic cases correctly unjudged
 ```
 
 ### What became operationally repeatable
 
-_TODO: Fill in._ Hints:
-
-- What can now be run before changing retrieval, prompts, or provider?
-- Which result fields are stable enough for CI?
-- Which fields are live evidence samples only?
+- Before touching retrieval, prompts, or the model provider, one command —
+  `./.venv/bin/python src/regression_suite.py` — now shows in one table
+  whether Q001/Q004 are still clean, whether Q091/Q093 still show their
+  known missing docs (or have finally lost them), whether Q016's chunk-gap
+  caveat is still visible, and whether the citation/refusal validator
+  boundaries still behave as designed.
+- `deterministic_match`, `missing_primary_doc_ids`, and `citation_status`
+  are exact, reproducible, no-network comparisons — stable enough to be a
+  hard CI gate.
+- `live_status` (DeepEval faithfulness/contextual recall scores) stays
+  evidence, never a gate — `overall_verdict`'s `(live ok)`/`(live
+  inconclusive)` suffix makes that distinction visible in the same table
+  instead of a second, disconnected report.
 
 ### What failed or was confusing
 
-_TODO: Fill in._ Capture environment blockers, live-provider blockers,
-ambiguous case labels, trace-storage decisions, or any command that was not
-reproducible from repo root until fixed.
+Nothing environment-related failed today — `OPENROUTER_API_KEY` was
+already configured from Day 12/13, so the `--live` run succeeded on the
+first attempt and produced real scores (see the captured table in
+`docs/eval-report.md`). The one real design question worth naming: the
+refusal-negative case has no retrieved context at all, so it could not
+reuse `evaluate_case`/`evaluate_generated_answer` the way every other case
+does — it needed its own small function (`evaluate_refusal_case`) built
+directly around `generation.generate_answer`'s empty-context
+short-circuit. Trying to force it through the same code path as the other
+six cases would have meant inventing a fake `relevance_grades` just to
+make `check_context_recall` behave, which would have tested the fake data,
+not the real refusal contract.
 
 ### What I can now explain in an interview
 
-_TODO: Fill in._ Expected explanation shapes:
-
-- **Regression suite vs demo transcript:** a transcript proves one run; a
-  suite defines cases, checks, expected behavior, and repeatable command
-  output.
-- **Deterministic vs live evals:** deterministic gates are exact and
-  CI-safe; live judges add semantic evidence but are variable and must be
-  bounded/documented.
-- **Q091/Q093 repair signal:** retrieval/context changes must move missing
-  primary-doc signals, not merely make the final answer read better.
-- **Q016 chunk-level gap:** document-level recall passing does not prove the
-  specific needed fact reached the model.
-- **Trace evidence:** local JSONL is enough if the schema captures query,
-  retrieval config, retrieved contexts, answer/citations, verdicts, and
-  model/provider settings for live runs.
+- **Regression suite vs demo transcript:** a transcript proves one run
+  happened; a suite defines cases, each with its own *expected* state
+  (`expected_missing_primary_doc_ids`, `expected_citation_status`), so a
+  future run can be compared against a known baseline instead of read cold.
+- **Deterministic vs live evals:** deterministic checks (`missing docs`,
+  `citation status`) are exact, reproducible, and CI-safe; live judges
+  (DeepEval faithfulness/contextual recall) add semantic evidence but
+  genuinely vary run to run (proven, not assumed, by Day 13's repeated
+  runs) — evidence, never the hard gate.
+- **Q091/Q093 repair signal:** a real retrieval-depth/diversity repair must
+  move `missing_primary_doc_ids` to `[]` for both cases; a prompt-only
+  change that makes the answer read better without moving that list is not
+  a repair, by this suite's own definition.
+- **Q016 chunk-level gap:** document-level `check_context_recall` passing
+  (both `GUIDE-001` and `POL-004` retrieved) does not prove the specific
+  chunk carrying the needed fact reached the model — a different chunk of
+  the same document did instead. No automated check catches this yet; the
+  suite keeps the gap visible via a `table_note` rather than hiding it
+  behind a passing document-level check.
+- **Why citation-negative and refusal-negative are "as_expected" even
+  though a check "fails":** a regression suite's verdict is "does the
+  actual result match what this case declared it should be," not "did
+  every check pass." `citation-negative-synthetic` *wants*
+  `citation_status="fail"` — that's what proves the validator still works.
+- **Trace evidence:** a separate JSONL file wasn't needed — the suite's own
+  row dicts, captured as two tables in `docs/eval-report.md`, already carry
+  every field the route doc's suggested schema asks for, and avoid
+  re-committing a live judge score that Day 13 already proved is variable.
 
 ### What remains weak
 
-_TODO: Fill in._ Likely candidates:
-
-- Whether Q091/Q093 repair has actually been implemented or only made
-  measurable.
-- Whether chunk/fact-level coverage is implemented generally or only
-  documented for Q016.
-- Whether RAGAS ID-based context recall remains deferred.
-- Whether Langfuse tracing remains deferred behind the local suite.
+- The Q091/Q093 repair itself (multi-doc top-k increase, optional
+  per-document diversity cap) has **not** been implemented — only made
+  measurable. `expected_missing_primary_doc_ids_after_repair` (`[]` for
+  both) is recorded on each case spec as the target, but nothing in
+  `src/regression_suite.py` runs the repaired pipeline yet. This is Day
+  14's Block 3B, explicitly deferred per the route doc's "do not rush the
+  repair before the regression harness can measure it" instruction.
+- Chunk/fact-level coverage is **named, not implemented** — `chunk-gap-q016`'s
+  `table_note` is a hand-written string, not a computed check. A real
+  chunk-level check (e.g. asserting a specific `chunk_id` — not just
+  `doc_id` — appears in `sources`) is a real, deferred next step.
+- RAGAS ID-based context recall remains deferred, as a deliberate choice:
+  `check_context_recall` already gives ProcureRAG the deterministic,
+  doc-id-exact version of the same idea, in code this project owns.
+- Langfuse tracing remains deferred behind the local suite, per the route
+  doc's own instruction — the suite's row-dict shape is a straightforward
+  reshaping target for a future Langfuse experiment if that's ever needed,
+  but nothing today depends on it.
 
 ### Next step
 
-- _TODO: Fill in after Day 14 evidence._ If the regression suite is green
-  but the repair is not implemented yet, the likely next step is the Day 13
-  Q091/Q093 repair experiment: multi-doc generation-context top-k increase,
-  optionally combined with a per-document diversity cap, verified by the new
-  regression suite before moving into Chapter 11 Agentic.
+The regression suite is green (7/7 deterministic, 5/5 live-confirmed) and
+the Q091/Q093 repair is not implemented yet — so the next step is exactly
+Day 13's recommended one, now with a harness to verify it: the multi-doc
+generation-context top-k increase (5 → 8–10 for `multi_doc` queries),
+optionally paired with a per-document diversity cap in the pre-rerank
+chunk shortlist. Success is defined entirely in this suite's own
+vocabulary: `retrieval-miss-q091` and `retrieval-miss-q093` must flip their
+`missing_primary_doc_ids` to `[]` (a deliberate re-baseline of
+`expected_missing_primary_doc_ids`, not a silent drift), while
+`control-q001` and `control-q004` must still report `deterministic_match=True`
+unchanged. Only once that is true does Week 3's gate (HER-268) close, ahead
+of moving into Chapter 11 Agentic.
