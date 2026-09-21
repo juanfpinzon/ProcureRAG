@@ -97,68 +97,108 @@ def test_controls_q001_and_q004_match_their_expected_clean_state():
 
 
 # ---------------------------------------------------------------------------
-# The two retrieval-miss anchors (Q091, Q093): must match their known,
-# pre-repair missing-doc state - the exact signal Day 13's recommended
-# repair is supposed to move to [] later.
+# The two retrieval-miss anchors (Q091, Q093): Block 3B repaired both -
+# these now assert the CURRENT, post-repair state (missing docs == []),
+# captured from a real retrieval + real live generation run under
+# reranking.MULTI_DOC_RETRIEVAL_CONFIG. See error_analysis.py's own,
+# untouched Q091/Q093 fixtures for the historical pre-repair evidence these
+# numbers used to be.
 # ---------------------------------------------------------------------------
 
 
-def test_q091_matches_its_known_pre_repair_missing_docs():
+def test_q091_is_repaired_missing_docs_now_empty():
     regression_suite = _load_regression_suite_module()
     queries_by_id = _real_queries_by_id(regression_suite)
     rows_by_id = {row["case_id"]: row for row in regression_suite.run_deterministic_suite(queries_by_id)}
 
     row = rows_by_id["retrieval-miss-q091"]
-    assert row["missing_primary_doc_ids"] == ["GUIDE-002", "POL-001"]
-    assert row["deterministic_match"] is True  # matches the *expected pre-repair* state
+    # The real Block 3B repair signal: both primary documents Day 13 found
+    # missing (GUIDE-002, POL-001) now reach context under the repaired
+    # retrieval config - this is not the same fixture Day 13 captured.
+    assert row["missing_primary_doc_ids"] == []
+    assert row["deterministic_match"] is True
     assert row["citation_status"] == "pass"
+    assert row["retrieval_config"] == regression_suite.MULTI_DOC_RETRIEVAL_CONFIG
 
 
-def test_q093_matches_its_known_pre_repair_missing_docs():
+def test_q093_is_repaired_missing_docs_now_empty():
     regression_suite = _load_regression_suite_module()
     queries_by_id = _real_queries_by_id(regression_suite)
     rows_by_id = {row["case_id"]: row for row in regression_suite.run_deterministic_suite(queries_by_id)}
 
     row = rows_by_id["retrieval-miss-q093"]
-    assert row["missing_primary_doc_ids"] == ["CONTRACT-001"]
+    assert row["missing_primary_doc_ids"] == []
     assert row["deterministic_match"] is True
 
 
-def test_a_case_that_no_longer_matches_its_expectation_is_flagged_as_a_mismatch():
-    # Prove the "regression" concept actually fires: hand-build a case spec
-    # that claims Q091 already has zero missing docs (a false, too-optimistic
-    # expectation) and confirm evaluate_case reports deterministic_match=False
-    # instead of silently agreeing with a wrong expectation.
+def test_a_stale_expectation_against_the_repaired_fixture_is_flagged_as_a_mismatch():
+    # Prove the "regression" concept actually fires in the direction that
+    # matters now: hand-build a case spec that still expects Q091's OLD,
+    # pre-repair missing-doc list against the NEW, already-repaired
+    # fixture - exactly what would happen if a case spec's expectation went
+    # stale (forgot to be updated) after a real pipeline change. This must
+    # be caught as a mismatch, not silently accepted.
     regression_suite = _load_regression_suite_module()
     queries_by_id = _real_queries_by_id(regression_suite)
     query_row = queries_by_id["Q091"]
 
-    optimistic_case_spec = dict(regression_suite.REGRESSION_CASES[2])  # retrieval-miss-q091
-    assert optimistic_case_spec["case_id"] == "retrieval-miss-q091"
-    optimistic_case_spec["expected_missing_primary_doc_ids"] = []
+    stale_case_spec = dict(regression_suite.REGRESSION_CASES[2])  # retrieval-miss-q091
+    assert stale_case_spec["case_id"] == "retrieval-miss-q091"
+    stale_case_spec["expected_missing_primary_doc_ids"] = ["GUIDE-002", "POL-001"]  # the OLD, pre-repair value
 
-    row = regression_suite.evaluate_case(optimistic_case_spec, query_row)
+    row = regression_suite.evaluate_case(stale_case_spec, query_row)
 
-    assert row["missing_primary_doc_ids"] == ["GUIDE-002", "POL-001"]
+    assert row["missing_primary_doc_ids"] == []  # the real, current, repaired result
     assert row["deterministic_match"] is False
 
 
 # ---------------------------------------------------------------------------
-# The chunk-gap contrast case (Q016): document-level recall passes, the
-# fact-level gap is only visible through the table_note, not the checks.
+# The chunk-gap contrast case (Q016): Block 3B addressed it - the specific
+# GUIDE-001::chunk-2 (the "logistics price <=40%" fact) now reaches
+# context, verified by a real chunk-id check (`required_chunk_ids`), not
+# just a hand-written note.
 # ---------------------------------------------------------------------------
 
 
-def test_q016_passes_document_level_recall_but_carries_a_chunk_gap_note():
+def test_q016_document_level_recall_passes_and_the_specific_chunk_is_now_present():
     regression_suite = _load_regression_suite_module()
     queries_by_id = _real_queries_by_id(regression_suite)
     rows_by_id = {row["case_id"]: row for row in regression_suite.run_deterministic_suite(queries_by_id)}
 
     row = rows_by_id["chunk-gap-q016"]
     assert row["missing_primary_doc_ids"] == []
+    # The real, computed chunk-level check: GUIDE-001::chunk-2 must be
+    # present, not just claimed present in a comment.
+    assert row["missing_chunk_ids"] == []
     assert row["deterministic_match"] is True
     assert row["table_note"] is not None
     assert "chunk" in row["table_note"].lower()
+    assert "ADDRESSED" in row["table_note"]
+
+
+def test_q016_chunk_level_check_would_catch_a_regression_if_the_chunk_went_missing_again():
+    # Prove the chunk-level check is a real gate, not decoration: hand-build
+    # a case spec whose `sources` no longer include GUIDE-001::chunk-2 (the
+    # exact pre-repair Q016 shape) and confirm missing_chunk_ids/
+    # deterministic_match correctly flag it, even though document-level
+    # recall would still pass (GUIDE-001 the *document* is still present
+    # via a different chunk).
+    regression_suite = _load_regression_suite_module()
+    queries_by_id = _real_queries_by_id(regression_suite)
+    query_row = queries_by_id["Q016"]
+
+    case_spec = dict(regression_suite.REGRESSION_CASES[4])  # chunk-gap-q016
+    assert case_spec["case_id"] == "chunk-gap-q016"
+    case_spec["sources"] = [
+        source for source in case_spec["sources"] if source["chunk_id"] != "GUIDE-001::chunk-2"
+    ]
+
+    row = regression_suite.evaluate_case(case_spec, query_row)
+
+    assert row["missing_primary_doc_ids"] == []  # GUIDE-001 the document is still present
+    assert row["missing_chunk_ids"] == ["GUIDE-001::chunk-2"]  # but this specific chunk is not
+    assert row["deterministic_match"] is False
+    assert "OPEN" in row["table_note"]
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +319,9 @@ def test_render_table_marks_a_mismatch_case_as_a_regression_in_the_overall_verdi
     queries_by_id = _real_queries_by_id(regression_suite)
     query_row = queries_by_id["Q091"]
 
-    optimistic_case_spec = dict(regression_suite.REGRESSION_CASES[2])
-    optimistic_case_spec["expected_missing_primary_doc_ids"] = []
-    row = regression_suite.evaluate_case(optimistic_case_spec, query_row)
+    stale_case_spec = dict(regression_suite.REGRESSION_CASES[2])
+    stale_case_spec["expected_missing_primary_doc_ids"] = ["GUIDE-002", "POL-001"]  # stale, pre-repair value
+    row = regression_suite.evaluate_case(stale_case_spec, query_row)
 
     table_text = regression_suite.render_table([row])
 

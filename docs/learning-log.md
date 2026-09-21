@@ -2774,7 +2774,7 @@ not the real refusal contract.
   every field the route doc's suggested schema asks for, and avoid
   re-committing a live judge score that Day 13 already proved is variable.
 
-### What remains weak
+### What remains weak (as of Block 3A, before the repair below)
 
 - The Q091/Q093 repair itself (multi-doc top-k increase, optional
   per-document diversity cap) has **not** been implemented — only made
@@ -2795,17 +2795,94 @@ not the real refusal contract.
   reshaping target for a future Langfuse experiment if that's ever needed,
   but nothing today depends on it.
 
+## Block 3B — the repair, attempted and verified the same day
+
+Diagnosis first, code second, capture third — in that order, not a guess.
+Running the real pipeline (no code changes yet) showed the route doc's
+suggested "top-k 5→8-10" alone could not work: `POL-001`'s best chunk for
+Q091 ranked BM25 #52 / semantic #21 — both outside the default
+`pool_size=15` each retriever contributes *before* fusion, so no amount of
+raising the final `top_k` (which only trims an already-fused list) could
+surface it. The real fix needed two parts, both verified with the real
+cross-encoder before being called a fix: a much deeper first-stage pool
+(`pool_size=80`, found by measuring the smallest pool at which each target
+chunk entered the fused list at all — 50 for Q091, 25 for Q093) **and** a
+per-document diversity cap (`max_chunks_per_document=2`), because the
+wider pool alone let a handful of already-well-represented documents
+(`FAQ-001`, `AUDIT-001`, `SOP-001`) crowd `GUIDE-002` back out of the final
+top-10 after reranking (final_rank 8 → 14 with a bigger pool and no cap).
+Combining both put both `POL-001` and `GUIDE-002` inside `top_k=10`
+reliably (final_rank 6 and 10).
+
+Implemented in `src/reranking.py`: `build_chunk_shortlist` gained
+`max_chunks_per_document=None` (default preserves old behavior exactly —
+confirmed by the full test suite passing unchanged before writing a single
+new test), and `retrieval_config_for_query_type(query_type)` picks between
+`DEFAULT_RETRIEVAL_CONFIG` (unchanged Day 7/8 behavior) and
+`MULTI_DOC_RETRIEVAL_CONFIG` (`pool_size=80, top_k=10,
+max_chunks_per_document=2`) — scoped to `query_type == "multi_doc"` only,
+so Q001/Q004 cannot regress by construction, not just by re-testing.
+
+Real retrieval + real live generation was then captured under that config
+for Q091, Q093, and Q016 (2026-09-21). Results, verified by missing-doc
+signals, not prose:
+
+- **Q091**: `missing_primary_doc_ids` `['GUIDE-002', 'POL-001']` → `[]`.
+  Honest residual: the retrieved `POL-001` chunk explains *how* committed
+  value is calculated, not the actual Band 1/2/3 thresholds (a different
+  chunk of the same document has those) — so `Q091_REQUIRED_TERMS`'s
+  "Band 3" check still fails even though "usage data" now passes. Named,
+  not hidden — the same `chunk_level_retrieval_gap` pattern as Q016,
+  recurring on a different document.
+- **Q093**: `missing_primary_doc_ids` `['CONTRACT-001']` → `[]`. The
+  live-captured answer now correctly names both contracts (Batavia ±2%,
+  Acme ±3%) instead of one false-universal figure — a real repair, not
+  better prose, because the missing evidence itself arrived.
+- **Q016**: document-level recall always passed; the real target was the
+  specific `GUIDE-001::chunk-2` chunk (the "≤40%" fact), now present and
+  cited `[5]` in the live answer. This is verified by a real, new,
+  computed check — `required_chunk_ids`/`missing_chunk_ids` in
+  `evaluate_case` — not just a hand-written note, closing the "named, not
+  implemented" gap from Block 3A above.
+
+`src/regression_suite.py`'s three affected case specs now assert this
+*current* state (`expected_missing_primary_doc_ids=[]` for Q091/Q093,
+`expected_missing_chunk_ids=[]` for Q016) using the real post-repair
+sources/answers — a deliberate re-baseline, exactly as anticipated.
+`error_analysis.py`'s own Q091/Q093/Q016 fixtures are untouched, kept as
+Day 13's frozen evidence of the original failure; its own tests still pass
+unchanged.
+
+```bash
+./.venv/bin/pytest -q
+# 198 passed (191 baseline + 6 new in tests/test_reranking.py + net changes in
+#             tests/test_regression_suite.py to assert the post-repair state)
+./.venv/bin/python -m compileall -q src tests   # clean
+./.venv/bin/python -m ruff check src tests      # All checks passed!
+./.venv/bin/python src/regression_suite.py         # 7/7 as_expected
+./.venv/bin/python src/regression_suite.py --live  # 5/5 as_expected (live ok)
+```
+
+### What remains weak (after Block 3B)
+
+- Q091's residual chunk-level gap on `POL-001` (the "Band 3" phrase) is
+  real and not wired as an automated `required_chunk_ids` check the way
+  Q016's was — a natural next small addition, not a hidden problem.
+- The new `MULTI_DOC_RETRIEVAL_CONFIG` (`pool_size=80`, cap=2) has only
+  been verified against Q091/Q093/Q016 specifically, not re-measured
+  against the full `multi_doc` slice of the 93-query set or against Day
+  7-9's aggregate P@1/R@5/MRR@10/nDCG@5 baseline — a targeted fix for three
+  known cases, not yet proven as a general `multi_doc` improvement.
+- RAGAS ID-based context recall and Langfuse tracing remain deferred, same
+  reasoning as Block 3A.
+
 ### Next step
 
 The regression suite is green (7/7 deterministic, 5/5 live-confirmed) and
-the Q091/Q093 repair is not implemented yet — so the next step is exactly
-Day 13's recommended one, now with a harness to verify it: the multi-doc
-generation-context top-k increase (5 → 8–10 for `multi_doc` queries),
-optionally paired with a per-document diversity cap in the pre-rerank
-chunk shortlist. Success is defined entirely in this suite's own
-vocabulary: `retrieval-miss-q091` and `retrieval-miss-q093` must flip their
-`missing_primary_doc_ids` to `[]` (a deliberate re-baseline of
-`expected_missing_primary_doc_ids`, not a silent drift), while
-`control-q001` and `control-q004` must still report `deterministic_match=True`
-unchanged. Only once that is true does Week 3's gate (HER-268) close, ahead
-of moving into Chapter 11 Agentic.
+the Q091/Q093/Q016 repair is now implemented and verified by missing-doc
+and missing-chunk signals, not prose — Week 3's gate (HER-268) can close.
+The next reasonable step is the deferred residual: either wire a
+`required_chunk_ids` check for Q091's own "Band 3" gap (mirroring Q016's),
+or re-measure `MULTI_DOC_RETRIEVAL_CONFIG` against the full `multi_doc`
+query slice before treating it as a general win, ahead of moving into
+Chapter 11 Agentic.

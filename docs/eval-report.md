@@ -2715,6 +2715,283 @@ repeatable local suite" instruction.
   `run_ragas_faithfulness`. Recording `None` is the honest boundary, not a
   gap in this module.
 
+## Day 14 Block 3B: the Q091/Q093/Q016 retrieval repair, verified
+
+Date: 2026-09-21 (same day as Block 3A, after the regression suite existed).
+
+Route doc's Block 3B instruction: only attempt the repair after the
+regression command exists, and verify it by missing-doc signals and
+control-case non-regression - never by subjective answer prose alone. This
+section is that verification, done in that order: diagnose first, change
+code second, capture real evidence third, only then update the suite.
+
+### Diagnosing the real cause, not guessing at a fix
+
+The route doc's suggested repair was "top_k 5 → 8-10, optionally with a
+per-document diversity cap." Before touching any code, the real pipeline
+was run directly (no code changes yet) to check whether that alone would
+work. It would not, for a reason worth stating precisely: **`top_k` only
+trims an already-reranked list; it cannot surface a document that never
+entered the first-stage candidate pool at all.**
+
+For Q091, the real per-method rank of `POL-001`'s best chunk
+(`POL-001::chunk-3`) was **BM25 rank 52, semantic rank 21** - both well
+outside the default `pool_size=15` each retriever contributes before
+fusion. Raising the final `top_k` cannot help a candidate that was never
+fused into the ranking in the first place. The same was true for Q093's
+`CONTRACT-001::chunk-9` (BM25 rank 16, semantic rank 46) - just barely
+outside `pool_size=15`'s BM25 cutoff.
+
+Measuring the smallest `pool_size` at which each target chunk entered the
+fused shortlist at all:
+
+| Query | Target chunk | Enters shortlist at pool_size >= |
+|---|---|---|
+| Q091 | `POL-001::chunk-3` | 50 |
+| Q093 | `CONTRACT-001::chunk-9` | 25 |
+
+Raising `pool_size` to 60 (comfortably above both) got both chunks into
+the shortlist, but reranking the resulting 60-candidate pool showed a
+*second* problem: `GUIDE-002` (Q091's other missing document) dropped from
+final_rank 8 (at the old `pool_size=15`) to final_rank 14 - pushed down by
+duplicate chunks from a handful of already-well-represented documents
+(`FAQ-001` x4, `AUDIT-001` x2, `SOP-001` x2 in the enlarged pool). A bigger
+pool alone can trade one fixed problem for a new one.
+
+Adding a per-document cap (`max_chunks_per_document=2`) on top of a larger
+fetch pool (`pool_size=80`) fixed both problems together - verified with
+the real cross-encoder, not assumed:
+
+| Query | Target chunk(s) | final_rank at pool=15 (no cap) | final_rank at pool=80 (no cap) | final_rank at pool=80, cap=2 |
+|---|---|---|---|---|
+| Q091 | `POL-001::chunk-3` | not present | 9 | **6** |
+| Q091 | `GUIDE-002::chunk-1` | 8 | 14 | **10** |
+| Q093 | `CONTRACT-001::chunk-9` | not present | 8 | **8** |
+
+Both `POL-001` and `GUIDE-002` land inside a `top_k=10` cut only with the
+diversity cap in place - the plain pool-size increase alone would have put
+`GUIDE-002` back out of reach. This is real evidence for the route doc's
+"optionally add a per-document diversity cap" - here it was not optional,
+it was necessary once the pool was widened enough to fix the other query.
+
+A bonus finding while checking Q016 with the same widened config: the
+GUIDE-001 chunk carrying the "logistics price ≤40%" fact
+(`GUIDE-001::chunk-2`) was *already* in Day 13's original pool-15 reranked
+list, at **final_rank 6** - one position past the old `top_k=5` cut. The
+`top_k` half of the repair (5 → 10) fixes Q016 on its own, and the new
+`pool_size=80, cap=2` config keeps it at final_rank 5, comfortably inside
+the cut.
+
+### The code change: `reranking.py`
+
+Two additions, both fully backward-compatible (`max_chunks_per_document=None`
+is the default everywhere, so every existing caller and test is byte-for-byte
+unaffected - confirmed by re-running the full suite after the change before
+writing a single new test):
+
+- **`build_chunk_shortlist(..., max_chunks_per_document=None)`** - walks
+  the fused first-stage list in its existing RRF order and skips a
+  candidate once its document has already contributed `max_chunks_per_document`
+  chunks, freeing that slot for a different, not-yet-represented document.
+  Skipped candidates are dropped, not backfilled - a caller who wants a
+  full, diverse shortlist to survive the cap passes a larger `pool_size`
+  up front (this is why `pool_size=80`, not 15, pairs with the cap).
+  `first_stage_rank` values are preserved from the *original* fused order
+  (not renumbered), so a reader can see exactly which position the cap
+  skipped and why.
+- **`retrieval_config_for_query_type(query_type)`** - a plain
+  `if query_type == "multi_doc": return MULTI_DOC_RETRIEVAL_CONFIG else
+  DEFAULT_RETRIEVAL_CONFIG` over two named, documented dicts:
+
+  ```python
+  DEFAULT_RETRIEVAL_CONFIG = {"pool_size": 15, "top_k": 5, "max_chunks_per_document": None}
+  MULTI_DOC_RETRIEVAL_CONFIG = {"pool_size": 80, "top_k": 10, "max_chunks_per_document": 2}
+  ```
+
+  Scoped deliberately to `query_type == "multi_doc"` only - Q001
+  (`threshold`) and Q004 (`lookup`) keep the exact original Day 7/8
+  retrieval behavior, untouched by construction, rather than risking Day
+  7-9's established P@1/R@5/MRR@10/nDCG@5 baseline by widening retrieval
+  for every query type to fix a problem measured only in `multi_doc`
+  queries.
+
+New tests in `tests/test_reranking.py` (6 added, all deterministic, no
+model download): the diversity cap on a hand-built 4-chunk/3-document
+shortlist (proving it keeps a document's *strongest* chunks and skips only
+the excess, never a different document's chunk), the cap threaded through
+`two_stage_rerank` end to end (proving a capped-out chunk never even
+reaches the cross-encoder - a `FakeCrossEncoder` with no dict entry for it
+would raise `KeyError` if the cap were silently bypassed), and
+`retrieval_config_for_query_type`'s two branches.
+
+### The real capture: retrieval + live generation, under the new config
+
+Command (see `src/regression_suite.py`'s `Q091_REPAIRED_SOURCES` etc.
+comments for the exact script): build `two_stage_rerank(query, ...,
+**reranking.retrieval_config_for_query_type("multi_doc"))`, then
+`generation.build_sources` and a real `generation.generate_answer` call
+through `generation.make_openrouter_client()`. Run for Q091, Q093, Q016 on
+2026-09-21.
+
+**Q091** - `check_context_recall`: `expected=['GUIDE-002', 'POL-001',
+'POL-003']`, `actual` now includes both `GUIDE-002` and `POL-001` -
+`missing_primary_doc_ids` goes from `['GUIDE-002', 'POL-001']` to `[]`. The
+live-captured answer cites both `[6]` (POL-001) and `[10]` (GUIDE-002, the
+"pull actual usage data" evidence) - real citations, not narrated ones.
+
+Honest residual, named rather than hidden: the specific `POL-001` chunk
+retrieved (`chunk-3`) explains *how* total committed value is calculated,
+not the actual Band 1/2/3 EUR thresholds themselves (a *different*
+`POL-001` chunk, `chunk-4`, has those - see `generation_eval.Q001_SOURCES`).
+So the repaired answer correctly says it cannot state the exact band
+("confirm the exact approval level with Procurement Governance") instead
+of inventing one - honest, but `generation_eval.Q091_REQUIRED_TERMS`
+(`"Band 3"`, `"usage data"`) now shows a real, informative split: "usage
+data" passes (the retrieval_miss is fixed), "Band 3" still fails (a
+narrower, still-open *chunk-level* gap on the very same document). This is
+not swept under the rug - `retrieval-miss-q091`'s case spec keeps
+`required_terms` set, so this finding shows up in every future suite run's
+`findings`, not just in this paragraph.
+
+**Q093** - `missing_primary_doc_ids` goes from `['CONTRACT-001']` to `[]`.
+The qualitative fix Day 13 called for actually happened: the live-captured
+answer now names *both* contracts explicitly - "Batavia Packaging B.V. ...
+±2%" and "Acme Logistics S.L. ... ±3%" - rather than stating one figure as
+a false universal. This is a repair, not better prose: the model changed
+its answer because the missing evidence arrived, not because a prompt
+tweak taught it to hedge.
+
+**Q016** - document-level recall already passed before and after
+(`missing_primary_doc_ids` stays `[]`); the real target was the specific
+chunk. `GUIDE-001::chunk-2` (the "logistics price ≤40%" fact) is now
+present in the retrieved sources, and the live-captured answer explicitly
+states "Price should not exceed **40%** of the total score in logistics
+categories ... **30%** for temperature-controlled ... [5]" - `[5]` being
+exactly that chunk. This is the "addressed by a chunk/fact-level coverage
+signal" branch the route doc allows, not "still open."
+
+### A real chunk-level check, not just a note
+
+The route doc's stop condition asks that "Q016 should make chunk/fact-level
+coverage visible instead of hiding behind document-level pass" - Block 3A's
+`table_note` was a hand-written string; Block 3B replaces it with an actual
+computed check. `chunk-gap-q016`'s case spec now carries
+`required_chunk_ids=("GUIDE-001::chunk-2",)` and
+`expected_missing_chunk_ids=[]`; `evaluate_case` computes
+`missing_chunk_ids = required_chunk_ids - {source["chunk_id"] for source in sources}`
+- the same "expected minus actual" arithmetic `missing_primary_doc_ids`
+already uses, just at chunk granularity - and folds it into
+`deterministic_match`. `tests/test_regression_suite.py` proves this is a
+real gate, not decoration: a test rebuilds Q016's sources with
+`GUIDE-001::chunk-2` removed (document-level recall still passes -
+`GUIDE-001` is still present via a different chunk) and confirms
+`missing_chunk_ids == ["GUIDE-001::chunk-2"]` and
+`deterministic_match is False` - proving the chunk-level check catches
+exactly the failure mode document-level recall is structurally blind to.
+
+### Updated regression suite: current state, not frozen history
+
+`src/regression_suite.py`'s `retrieval-miss-q091`/`retrieval-miss-q093`/
+`chunk-gap-q016` case specs now use the real, post-repair
+`sources`/`answer_text` captured above, with `expected_missing_primary_doc_ids`
+(and, for Q016, `expected_missing_chunk_ids`) updated to `[]` - the
+deliberate re-baseline the Day 14 Block 3A caveats anticipated: "a future
+repair run should show `retrieval-miss-q091` flip to
+`deterministic_match=False` against pre-repair expectations - a *good*
+mismatch - the case specs would then need updating ... exactly the kind of
+deliberate, reviewed change a regression suite is supposed to force."
+
+`error_analysis.py`'s own Q091/Q093/Q016 fixtures are **deliberately left
+untouched** - they remain Day 13's frozen evidence of the *original*
+failure, for history, and their own tests (`test_build_cases_q091_is_the_known_retrieval_miss_anchor`
+etc.) still pass unchanged, still asserting the original missing-doc lists.
+Two modules, two purposes: `error_analysis.py` is "what did we find and
+why," `regression_suite.py` is "what do we expect right now."
+
+### Verification: real command output
+
+Deterministic lane, captured 2026-09-21, after the repair:
+
+```
+$ ./.venv/bin/python src/regression_suite.py
+
+case_id                      query_id  role               deterministic_verdict  missing_docs  citation_status  chunk_gap_or_notes                                                      live_status            overall_verdict
+---------------------------  --------  -----------------  ---------------------  ------------  ---------------  ----------------------------------------------------------------------  ---------------------  ---------------
+control-q001                 Q001      passing_control    match                  -             pass             -                                                                       not run (pass --live)  as_expected
+control-q004                 Q004      passing_control    match                  -             pass             -                                                                       not run (pass --live)  as_expected
+retrieval-miss-q091          Q091      retrieval_miss     match                  -             pass             REPAIRED 2026-09-21: missing docs were ['GUIDE-002','POL-001'], now []  not run (pass --live)  as_expected
+retrieval-miss-q093          Q093      retrieval_miss     match                  -             pass             REPAIRED 2026-09-21: missing docs were ['CONTRACT-001'], now []         not run (pass --live)  as_expected
+chunk-gap-q016               Q016      chunk_gap          match                  -             pass             chunk-level gap ADDRESSED: ['GUIDE-001::chunk-2'] present               not run (pass --live)  as_expected
+citation-negative-synthetic  Q001      citation_negative  match                  -             fail             synthetic [99] citation; expects citation_validity=fail                 not run (pass --live)  as_expected
+refusal-negative-synthetic   -         refusal_negative   match                  -             pass             empty context must trigger refusal; client never called                 not run (pass --live)  as_expected
+
+All cases match their currently expected state.
+```
+
+Live lane, same day, real `OPENROUTER_API_KEY`:
+
+```
+$ ./.venv/bin/python src/regression_suite.py --live
+
+case_id                       live_status
+control-q001                  faithfulness=ok(0.80), contextual_recall=ok(1.00)
+control-q004                  faithfulness=ok(0.86), contextual_recall=ok(1.00)
+retrieval-miss-q091           faithfulness=ok(0.88), contextual_recall=ok(1.00)
+retrieval-miss-q093           faithfulness=ok(0.85), contextual_recall=ok(1.00)
+chunk-gap-q016                faithfulness=ok(0.83), contextual_recall=ok(1.00)
+citation-negative-synthetic   n/a - synthetic case, not judged for faithfulness/context recall
+refusal-negative-synthetic    n/a - synthetic case, not judged for faithfulness/context recall
+
+overall_verdict for every real fixture case: as_expected (live ok)
+```
+
+(deterministic columns identical to the run above, omitted here for
+brevity.) Note Q091's live contextual recall now scores **1.00**, up from
+Day 13's live-observed 0.50-0.80 range on the *unrepaired* fixture - a
+live judge score moving in the expected direction after a real retrieval
+change, consistent evidence alongside the deterministic gate, not a
+replacement for it.
+
+```bash
+./.venv/bin/pytest -q
+# 198 passed in 1.15s   (191 baseline at Block 3A + 6 new in tests/test_reranking.py + 1 net new in
+#                         tests/test_regression_suite.py after replacing 4 pre-repair-specific tests)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+```
+
+### Caveats
+
+- **Scope is deliberately narrow.** `retrieval_config_for_query_type`
+  branches only on `query_type == "multi_doc"` - this is a
+  generation-context-construction decision for the ~handful of `multi_doc`
+  queries this project's Day 10-14 work has focused on, not a re-run of
+  Day 7-9's 93-query aggregate retrieval benchmark under the new pool
+  size/cap. Whether `MULTI_DOC_RETRIEVAL_CONFIG` helps or hurts
+  `multi_doc` queries *other than* Q091/Q093/Q016 has not been measured -
+  a reasonable next step before declaring this config a general
+  `multi_doc` win rather than a targeted fix for three known cases.
+- **Q091's residual chunk-level gap on `POL-001` itself.** The retrieval
+  miss is fixed (the document reaches context), but the specific chunk
+  needed for the exact "Band 3" phrase is still not the one retrieved -
+  the same failure *shape* as Q016, just not (yet) wired as a
+  `required_chunk_ids` check the way Q016's was. Not fixed today, and not
+  hidden: `generation_eval.Q091_REQUIRED_TERMS` still checks for it and
+  still fails.
+- **The `pool_size=80` cost.** Retrieving and reranking 80 candidates
+  (before the diversity cap trims it) instead of 15 is real, if modest,
+  extra compute per `multi_doc` query - the cross-encoder is small enough
+  (~4M parameters, CPU) that this was not a practical concern in testing,
+  but it is a real tradeoff, not a free lunch, worth remembering if
+  `multi_doc` query volume grows.
+- **Only three queries were repaired and verified**, matching the
+  regression suite's own minimum coverage, not a claim that every possible
+  multi-document retrieval gap in the 93-query set is now closed.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

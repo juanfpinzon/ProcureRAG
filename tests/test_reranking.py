@@ -353,6 +353,169 @@ def test_build_chunk_shortlist_handles_a_query_with_no_lexical_matches():
 
 
 # ---------------------------------------------------------------------------
+# build_chunk_shortlist's max_chunks_per_document (Day 14 Block 3B): the
+# per-document diversity cap on the fused, pre-rerank shortlist.
+# ---------------------------------------------------------------------------
+
+
+def _diverse_chunks():
+    """Four chunks across three documents, deliberately unrelated in
+    vocabulary to the query - the same "no lexical matches" trick
+    `test_build_chunk_shortlist_handles_a_query_with_no_lexical_matches`
+    already uses, so BM25 contributes nothing and the fused order is driven
+    entirely by the hand-picked semantic vectors below, making the expected
+    order fully predictable rather than dependent on real BM25 tokenization.
+    """
+    return [
+        {"chunk_id": "DOC-A::chunk-0", "document_id": "DOC-A", "chunk_index": 0, "text": "zzzzz-a0", "title": "A"},
+        {"chunk_id": "DOC-A::chunk-1", "document_id": "DOC-A", "chunk_index": 1, "text": "zzzzz-a1", "title": "A"},
+        {"chunk_id": "DOC-B::chunk-0", "document_id": "DOC-B", "chunk_index": 0, "text": "zzzzz-b0", "title": "B"},
+        {"chunk_id": "DOC-C::chunk-0", "document_id": "DOC-C", "chunk_index": 0, "text": "zzzzz-c0", "title": "C"},
+    ]
+
+
+def _diverse_embedding_model(query):
+    # All vectors are unit-length, so cosine similarity equals their dot
+    # product with the query vector [1.0, 0.0] - strictly decreasing here
+    # (1.0, 0.8, 0.6, 0.4), giving a fully deterministic semantic rank
+    # order: DOC-A::chunk-0, DOC-A::chunk-1, DOC-B::chunk-0, DOC-C::chunk-0.
+    # DOC-A deliberately takes the top TWO fused positions, so the test
+    # below can prove the cap skips DOC-A's *second* chunk specifically
+    # (not just "some" chunk), while leaving DOC-B/DOC-C untouched.
+    return FakeEmbeddingModel(
+        {
+            "A zzzzz-a0": [1.0, 0.0],
+            "A zzzzz-a1": [0.8, 0.6],
+            "B zzzzz-b0": [0.6, 0.8],
+            "C zzzzz-c0": [0.4, 0.9165],
+            query: [1.0, 0.0],
+        }
+    )
+
+
+def test_build_chunk_shortlist_with_no_cap_lets_one_document_take_two_slots():
+    # The baseline this test's capped counterpart below is contrasted
+    # against: with no cap (the default), DOC-A legitimately occupies both
+    # of the top two fused positions.
+    reranking = _load_reranking_module()
+    chunked_search = _load_module("chunked_search")
+
+    chunks = _diverse_chunks()
+    chunk_lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+    query = "no-shared-vocabulary-query"
+    embedding_model = _diverse_embedding_model(query)
+    chunk_semantic_index = chunked_search.build_chunk_semantic_index(chunks, embedding_model)
+
+    shortlist = reranking.build_chunk_shortlist(
+        query, chunk_lexical_index, chunk_semantic_index, embedding_model, pool_size=4
+    )
+
+    assert [result["chunk_id"] for result in shortlist] == [
+        "DOC-A::chunk-0",
+        "DOC-A::chunk-1",
+        "DOC-B::chunk-0",
+        "DOC-C::chunk-0",
+    ]
+
+
+def test_build_chunk_shortlist_diversity_cap_skips_a_documents_extra_chunks():
+    # Day 14's actual repair mechanism: with max_chunks_per_document=1,
+    # DOC-A's weaker second chunk (fused rank 2) is skipped so the
+    # shortlist stays diverse, while DOC-A's stronger first chunk, DOC-B,
+    # and DOC-C are all kept - proving the cap keeps a document's *best*
+    # chunk(s), not an arbitrary one, and never removes a different
+    # document's chunk to enforce the cap.
+    reranking = _load_reranking_module()
+    chunked_search = _load_module("chunked_search")
+
+    chunks = _diverse_chunks()
+    chunk_lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+    query = "no-shared-vocabulary-query"
+    embedding_model = _diverse_embedding_model(query)
+    chunk_semantic_index = chunked_search.build_chunk_semantic_index(chunks, embedding_model)
+
+    shortlist = reranking.build_chunk_shortlist(
+        query,
+        chunk_lexical_index,
+        chunk_semantic_index,
+        embedding_model,
+        pool_size=4,
+        max_chunks_per_document=1,
+    )
+
+    assert [result["chunk_id"] for result in shortlist] == [
+        "DOC-A::chunk-0",
+        "DOC-B::chunk-0",
+        "DOC-C::chunk-0",
+    ]
+    # Skipped candidates are dropped, not backfilled - the capped shortlist
+    # is genuinely shorter than pool_size, not re-padded to 4 with a
+    # candidate that was never fetched.
+    assert len(shortlist) == 3
+    # first_stage_rank values are preserved from the ORIGINAL fused order,
+    # not renumbered after the skip - DOC-B::chunk-0 keeps its true rank 3
+    # (not compacted down to rank 2), so a reader can still see exactly
+    # which original position the cap skipped over (rank 2, DOC-A's second
+    # chunk).
+    assert [result["first_stage_rank"] for result in shortlist] == [1, 3, 4]
+
+
+def test_build_chunk_shortlist_cap_of_two_keeps_both_of_a_documents_top_chunks():
+    # A cap higher than how many chunks any one document actually has in
+    # the pool is a no-op - proving the cap only ever removes what's
+    # actually in excess of the limit, never truncates below it.
+    reranking = _load_reranking_module()
+    chunked_search = _load_module("chunked_search")
+
+    chunks = _diverse_chunks()
+    chunk_lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+    query = "no-shared-vocabulary-query"
+    embedding_model = _diverse_embedding_model(query)
+    chunk_semantic_index = chunked_search.build_chunk_semantic_index(chunks, embedding_model)
+
+    shortlist = reranking.build_chunk_shortlist(
+        query,
+        chunk_lexical_index,
+        chunk_semantic_index,
+        embedding_model,
+        pool_size=4,
+        max_chunks_per_document=2,
+    )
+
+    assert [result["chunk_id"] for result in shortlist] == [
+        "DOC-A::chunk-0",
+        "DOC-A::chunk-1",
+        "DOC-B::chunk-0",
+        "DOC-C::chunk-0",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# retrieval_config_for_query_type (Day 14 Block 3B): the multi_doc vs
+# default retrieval-config decision, as plain data.
+# ---------------------------------------------------------------------------
+
+
+def test_retrieval_config_for_multi_doc_uses_the_deeper_diversity_capped_config():
+    reranking = _load_reranking_module()
+
+    config = reranking.retrieval_config_for_query_type("multi_doc")
+
+    assert config == reranking.MULTI_DOC_RETRIEVAL_CONFIG
+    # Returns a copy, not the module's own dict - a caller mutating its
+    # result must not corrupt the shared constant for the next query.
+    config["top_k"] = 999
+    assert reranking.MULTI_DOC_RETRIEVAL_CONFIG["top_k"] != 999
+
+
+def test_retrieval_config_for_non_multi_doc_query_types_uses_the_default_config():
+    reranking = _load_reranking_module()
+
+    for query_type in ("threshold", "lookup", "comparison", None):
+        assert reranking.retrieval_config_for_query_type(query_type) == reranking.DEFAULT_RETRIEVAL_CONFIG
+
+
+# ---------------------------------------------------------------------------
 # two_stage_rerank - the full pipeline, first stage + rerank in one call
 # ---------------------------------------------------------------------------
 
@@ -410,6 +573,47 @@ def test_two_stage_rerank_runs_first_stage_then_reranks_with_the_given_model():
     # first_stage_rank is still present and unchanged - reranking replaced
     # the *order*, not the record of where the candidate started.
     assert "first_stage_rank" in results[0]
+
+
+def test_two_stage_rerank_passes_max_chunks_per_document_through_to_the_shortlist():
+    # Proves the parameter is actually threaded end to end, not just
+    # accepted and ignored: DOC-A::chunk-1 must never reach the reranker at
+    # all once capped out of the shortlist. Using a FakeCrossEncoder whose
+    # score dict has NO entry for DOC-A::chunk-1's pair means that if the
+    # cap were silently skipped, `score_with_cross_encoder` would raise
+    # KeyError instead of this test just checking the final order - the
+    # same "fail loudly on an unexpected pair" property
+    # `test_score_with_cross_encoder_builds_query_title_text_pairs` relies
+    # on above.
+    reranking = _load_reranking_module()
+    chunked_search = _load_module("chunked_search")
+
+    chunks = _diverse_chunks()
+    chunk_lexical_index = chunked_search.build_chunk_lexical_index(chunks)
+    query = "no-shared-vocabulary-query"
+    embedding_model = _diverse_embedding_model(query)
+    chunk_semantic_index = chunked_search.build_chunk_semantic_index(chunks, embedding_model)
+
+    cross_encoder_model = FakeCrossEncoder(
+        {
+            (query, "A zzzzz-a0"): 3.0,
+            (query, "B zzzzz-b0"): 2.0,
+            (query, "C zzzzz-c0"): 1.0,
+            # deliberately no entry for ("A zzzzz-a1") - it must never be scored
+        }
+    )
+
+    results = reranking.two_stage_rerank(
+        query,
+        chunk_lexical_index,
+        chunk_semantic_index,
+        embedding_model,
+        cross_encoder_model,
+        pool_size=4,
+        max_chunks_per_document=1,
+    )
+
+    assert [r["chunk_id"] for r in results] == ["DOC-A::chunk-0", "DOC-B::chunk-0", "DOC-C::chunk-0"]
 
 
 # ---------------------------------------------------------------------------

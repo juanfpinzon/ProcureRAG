@@ -193,6 +193,7 @@ def build_chunk_shortlist(
     chunk_semantic_index,
     embedding_model,
     pool_size=CANDIDATE_POOL_SIZE,
+    max_chunks_per_document=None,
 ):
     """Produce a chunk-level Hybrid RRF shortlist for one query.
 
@@ -224,6 +225,37 @@ def build_chunk_shortlist(
     per-method scores (see `hybrid_search.py`'s module docstring) - without
     this lookup, nothing downstream (chunk->document rollup, the demo, the
     eval row) would know which document a reranked chunk came from.
+
+    **`max_chunks_per_document` (Day 14's repair): a per-document diversity
+    cap on the fused list, applied before reranking.** Default `None` keeps
+    the exact original behavior (every existing caller and test is
+    unaffected). This exists because of a concrete, measured failure: for
+    query Q091 ("...EUR 120,000 SaaS renewal..."), a real live diagnostic
+    run found the fused shortlist at `pool_size=15` was
+    `['POL-003', 'FAQ-001', 'FAQ-001', 'SOP-001', 'FAQ-001', 'POL-003',
+    'POL-002', ...]` - a handful of documents occupying most of the 15
+    slots - while the one chunk that actually carries the answer's real
+    approval-band evidence (`POL-001::chunk-3`) doesn't even rank inside the
+    top 15 of *either* individual retriever (BM25 rank 52, semantic rank
+    21), so it never gets a chance to compete at all. Simply raising
+    `pool_size` (e.g. to 60) does surface it, but the *rest* of the larger
+    pool still fills up with more chunks from the same few
+    already-well-represented documents, which can push a genuinely relevant
+    but rarer document (`GUIDE-002` here) back out of the eventual top-10
+    cut after reranking. Capping how many chunks one `document_id` may
+    contribute - applied while walking the fused list in its existing RRF
+    order, so a document's *strongest* chunks are kept and only its
+    lower-ranked, redundant ones are skipped - frees exactly those slots for
+    a different document to compete instead, without discarding any
+    fused-ranking information the cap doesn't need to touch.
+
+    Because skipped candidates are dropped, not backfilled from beyond the
+    fetched `pool_size`, the returned shortlist can be *shorter* than
+    `pool_size` once a cap is applied. A caller that wants a full, diverse
+    shortlist to survive the cap should pass a larger `pool_size` up front
+    (see `MULTI_DOC_RETRIEVAL_CONFIG` below for the values this project
+    verified empirically against Q091/Q093/Q016) rather than expecting this
+    function to fetch more candidates on its own to compensate.
     """
     bm25_results = search_bm25_chunks(chunk_lexical_index, query, top_k=pool_size)
     semantic_results = search_semantic_chunks(
@@ -234,14 +266,30 @@ def build_chunk_shortlist(
     fused = hybrid.rrf(top_k=pool_size)
 
     chunks_by_id = chunk_lexical_index["chunks"]
+    chunks_seen_per_document = {}
     shortlist = []
     for first_stage_rank, result in enumerate(fused, start=1):
         chunk_id = result["chunk_id"]
         chunk = chunks_by_id[chunk_id]
+        document_id = chunk["document_id"]
+
+        if max_chunks_per_document is not None:
+            seen_so_far = chunks_seen_per_document.get(document_id, 0)
+            if seen_so_far >= max_chunks_per_document:
+                # This document already contributed its cap's worth of
+                # (higher fused-ranked) chunks - skip this one so a
+                # different, not-yet-represented document gets the slot
+                # instead. `first_stage_rank` above still counts every fused
+                # candidate, capped or not, so a reader comparing this
+                # shortlist against an uncapped one can see exactly which
+                # original positions were skipped and why.
+                continue
+            chunks_seen_per_document[document_id] = seen_so_far + 1
+
         shortlist.append(
             {
                 "chunk_id": chunk_id,
-                "document_id": chunk["document_id"],
+                "document_id": document_id,
                 "title": chunk["title"],
                 "text": chunk["text"],
                 "first_stage_rank": first_stage_rank,
@@ -261,12 +309,16 @@ def two_stage_rerank(
     cross_encoder_model,
     pool_size=CANDIDATE_POOL_SIZE,
     top_k=None,
+    max_chunks_per_document=None,
 ):
     """Run the full Day 8 pipeline for one query: first-stage shortlist, then rerank.
 
     The one function `eval_metrics.py`'s reranked row and `main()`'s demo
     below both call - everything above this function is a building block;
     this is the assembled two-stage pipeline the design doc describes.
+    `max_chunks_per_document` is passed straight through to
+    `build_chunk_shortlist` unchanged - see that function's docstring for
+    what it does and why Day 14 added it.
     """
     shortlist = build_chunk_shortlist(
         query,
@@ -274,8 +326,64 @@ def two_stage_rerank(
         chunk_semantic_index,
         embedding_model,
         pool_size=pool_size,
+        max_chunks_per_document=max_chunks_per_document,
     )
     return rerank_with_cross_encoder(query, shortlist, cross_encoder_model, top_k=top_k)
+
+
+# ---------------------------------------------------------------------------
+# Day 14 Block 3B: the multi_doc retrieval-repair config, as plain data
+#
+# Day 13 found three `multi_doc` failures generation's default
+# `two_stage_rerank(..., top_k=5)` (using the default `pool_size=15`) could
+# not fix: Q091 (missing POL-001/GUIDE-002), Q093 (missing CONTRACT-001),
+# Q016 (document-level recall passes, but the specific 40%-figure chunk of
+# GUIDE-001 was cut by top_k=5). The values below were not guessed - they
+# were found by directly measuring, for each query, the smallest `pool_size`
+# at which each missing document's best chunk enters the fused shortlist at
+# all, then confirming with a real reranker run that a diversity cap large
+# enough to avoid a handful of documents crowding out the rest lets every
+# target chunk land within the top 10 after reranking (see
+# `docs/eval-report.md`'s Day 14 Block 3B section for the full, real
+# diagnostic trail - individual per-method ranks, fused ranks at several
+# pool sizes, and the before/after reranked order for all three queries).
+#
+# This is deliberately scoped to `query_type == "multi_doc"` only, not
+# applied globally: Q001 (threshold) and Q004 (lookup) already retrieve
+# their one primary document reliably at `pool_size=15`, and widening
+# retrieval for every query would risk diluting an already-good easy-query
+# baseline (Day 7-9's P@1/R@5/MRR@10/nDCG@5 numbers) to fix a problem that,
+# measured, is specific to multi-document queries.
+DEFAULT_RETRIEVAL_CONFIG = {
+    "pool_size": CANDIDATE_POOL_SIZE,  # 15 - unchanged from Day 7/8
+    "top_k": 5,  # unchanged from generation.py's original demo
+    "max_chunks_per_document": None,  # no cap - unchanged first-stage behavior
+}
+
+MULTI_DOC_RETRIEVAL_CONFIG = {
+    "pool_size": 80,  # large enough that POL-001's best chunk (needs >=50) and
+    # CONTRACT-001's best chunk (needs >=25) both reliably enter the fused pool
+    "top_k": 10,  # generation-context depth: Day 13's suggested 5 -> 8-10
+    "max_chunks_per_document": 2,  # frees slots crowded by a handful of
+    # heavily-retrieved documents (see build_chunk_shortlist's docstring)
+}
+
+
+def retrieval_config_for_query_type(query_type):
+    """Pick the retrieval config for one query, by its `query_type`.
+
+    Returns a plain dict of keyword arguments for `two_stage_rerank`
+    (`pool_size`, `top_k`, `max_chunks_per_document`) - `multi_doc` queries
+    get the deeper, diversity-capped config verified above; every other
+    query type keeps the exact original Day 7/8 behavior. A plain
+    if/else over two named, documented dicts (rather than a general
+    per-query-type config table) is deliberately as small as this decision
+    needs to be today - there is real, measured evidence behind exactly two
+    configs, not eleven.
+    """
+    if query_type == "multi_doc":
+        return dict(MULTI_DOC_RETRIEVAL_CONFIG)
+    return dict(DEFAULT_RETRIEVAL_CONFIG)
 
 
 # Three v1 queries chosen from Day 7's own edge-case set
