@@ -2955,114 +2955,225 @@ Related gate: HER-268 — Week 3 gate: grounded generation + RAG eval harness.
 
 ### Objective
 
-_TODO: Fill in._
-
-Expected shape:
-
-- State whether Week 3 is gate-ready, not just whether tests pass.
-- Explain the retrieval → generation → eval → error-analysis → regression
-  suite story in one paragraph.
-- Name why Day 15 exists after Day 14's repair: full `multi_doc` slice
-  remeasurement plus HER-268 closure readiness.
+Week 3 is gate-ready, with one real, newly-found gap named instead of
+hidden. The Week 3 story, in one paragraph: retrieval foundations
+(Days 1-7) produced a measured baseline; reranking (Day 8) improved
+top-rank precision but exposed a `multi_doc` weakness the aggregate numbers
+couldn't hide once sliced by query type; generation (Day 10) made answers
+user-facing and source-cited but can't invent evidence retrieval never
+found; deterministic and framework evals (Days 11-12) caught the difference
+between "the answer sounds complete" and "the primary document actually
+arrived"; error analysis (Day 13) turned three observed failures into a
+concrete repair plan; the regression suite (Day 14) made that repair
+measurable and caught it holding on Q091/Q093/Q016. Day 15 exists because
+Day 14's own repair was only checked against 3 of the corpus's 5 `multi_doc`
+queries — this entry is the missing full-slice measurement, and it found
+that the repair does NOT generalize to Q092. That is not a failed gate; it
+is the gate doing its job — see "Full multi_doc slice remeasurement" below.
 
 ### Artifact inventory / gate verdict
 
-_TODO: Fill in._
-
-Expected shape:
-
 | Gate criterion | Evidence artifact | Command / file | Verdict | Caveat |
 |---|---|---|---|---|
-| Grounded generation path exists | TODO | TODO | TODO | TODO |
-| 2+ code-based evals | TODO | TODO | TODO | TODO |
-| 1 LLM-as-judge eval exists or is scoped | TODO | TODO | TODO | TODO |
-| Error analysis captures real failures | TODO | TODO | TODO | TODO |
-| Regression/failure-mode checks exist | TODO | TODO | TODO | TODO |
-| Interview explanation is ready | TODO | TODO | TODO | TODO |
+| Grounded generation path exists | `src/generation.py` (citation validation, empty-context refusal, real entry point reads `retrieval_config_for_query_type`) | `pytest`; `src/generation.py` optional live smoke | Pass | Live smoke not re-run today (no prompt/path change since Day 14) — Day 14's transcript stands |
+| 2+ code-based evals | `src/generation_eval.py` (citation validity, context recall, expected terms), `src/regression_suite.py` (deterministic lane, `--verify-retrieval` lane) | `pytest`; `src/regression_suite.py --verify-retrieval` | Pass | None |
+| 1 LLM-as-judge eval exists or is scoped | `src/framework_eval.py` (DeepEval faithfulness + RAGAS contextual recall bridge), wired into `regression_suite.py --live` | `src/regression_suite.py --live` (not run today) | Scoped, not re-run | Live variability + cost — Day 12/14's captured live results remain current evidence; contract (skip/blocked/ok/error) is tested unconditionally in `tests/test_framework_eval.py` |
+| Error analysis captures real failures | `src/error_analysis.py` (5-case taxonomy: Q001, Q091, Q093, Q016, Q004; frozen PRE-repair evidence kept separate from `regression_suite.py`'s current, repaired state) | docs + `tests/test_error_analysis.py` | Pass | Frozen vs. current state must stay visibly distinct — confirmed still true (Block 3B's own commentary is explicit about which fixtures are pre- vs post-repair) |
+| Regression/failure-mode checks exist | `src/regression_suite.py` (7 deterministic cases) + `src/multi_doc_slice_eval.py` (new: full 5-query `multi_doc` slice, both configs) | `src/regression_suite.py --verify-retrieval`; `src/multi_doc_slice_eval.py` | Pass, with one open finding | Q091's `Band 3` term gap stays open by design; Q092's missing-doc gap is NEW, found by today's full-slice run, not previously known |
+| Interview explanation is ready | This entry's "What I can now explain" section below | self-quiz | Pass | None |
+
+**Gate verdict for HER-268: ready for closure review.** Every row above is
+either a clean pass or a pass with an explicitly named, non-blocking
+caveat — no row is hand-wavy, and no caveat is hidden inside a green
+summary. The Q092 finding does not block the gate; it is exactly the kind
+of evidence a gate review is supposed to surface before Week 4 starts.
 
 ### Verification outputs
 
-_TODO: Fill in real command output._
-
-Expected commands:
+Real output, this run (2026-09-21):
 
 ```bash
 ./.venv/bin/pytest -q
+# 206 passed in 1.80s (before adding src/multi_doc_slice_eval.py — it has no
+# tests of its own, and re-running after adding it still shows 206 passed)
+
 ./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
 ./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
 ./.venv/bin/python src/regression_suite.py
+# All 7 cases match their currently expected state (frozen fixtures) —
+# same table as Day 14, re-confirmed, including retrieval-miss-q091's
+# printed "term-level gap OPEN: missing ['Band 3']" note.
+
 ./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 7/7 frozen cases as_expected; 6/6 real-query cases [OK] against the
+# CURRENT retrieval pipeline (re-run live against the real corpus/models,
+# not read from a cached fixture).
+
 ./.venv/bin/python src/eval_metrics.py
-# optional live if run:
-./.venv/bin/python src/regression_suite.py --live
-./.venv/bin/python src/generation.py
+# Largest weak slice (Cross-encoder reranked Hybrid RRF chunk->document, by
+# query_type): 'multi_doc' — P@1 0.600 over 5 queries, vs. 0.978 overall.
+# (This number is unchanged from Day 7-9 by design — this table always used
+# the DEFAULT_RETRIEVAL_CONFIG pool_size=15; see the new script below for
+# the REPAIRED-config comparison this table was never meant to show.)
+
+./.venv/bin/python src/multi_doc_slice_eval.py
+# New Day 15 script — see "Full multi_doc slice remeasurement" below for
+# the real per-query table it produced. Its own printed sanity check:
+# "default-config P@1 across the 5-query multi_doc slice: 0.600" — matches
+# eval_metrics.py's number above exactly, confirming the new script
+# measures the same thing the same way.
 ```
+
+Not re-run today (no cost/behavior justification since Day 14):
+`src/regression_suite.py --live`, `src/generation.py`'s live smoke. Day
+14's captured live transcripts remain the current live evidence.
 
 ### Full multi_doc slice remeasurement
 
-_TODO: Fill in._
-
-Minimum cases: Q005, Q016, Q091, Q092, Q093.
-
-Expected shape:
+New script: `src/multi_doc_slice_eval.py` (full method + design rationale in
+its module docstring; full per-query diagnostic detail and the "answering
+the route doc's four questions" writeup lives in `docs/eval-report.md`'s Day
+15 section — this is the summary table only, not a duplicate of that
+writeup).
 
 | Query | Default config evidence | Repaired config evidence | Verdict |
 |---|---|---|---|
-| Q005 | TODO | TODO | TODO |
-| Q016 | TODO | TODO | TODO |
-| Q091 | TODO | TODO | TODO |
-| Q092 | TODO | TODO | TODO |
-| Q093 | TODO | TODO | TODO |
+| Q005 | All 3 primary docs reach context. P@1 1.000 R@5 1.000 MRR@10 1.000 nDCG@5 1.000 | Same — unaffected. Same P@1/R@5/MRR@10/nDCG@5 | Unchanged (already fine) |
+| Q016 | Both primary docs reach context, but the specific fact chunk (`GUIDE-001::chunk-2`) does not | Same doc-level recall; `GUIDE-001::chunk-2` now also reaches context | chunk gap remains addressed, reconfirmed |
+| Q091 | Missing: GUIDE-002, POL-001. R@5 0.200 | All primary docs reach context. R@5 0.600 | Missing docs fixed; `Band 3` term gap still visible (separate, tracked signal) |
+| Q092 | Missing: CONTRACT-005, POL-002. R@5 0.200 | **Still missing** CONTRACT-005, POL-002. R@5 0.200 (unchanged) | **Not fixed** — new finding, see below |
+| Q093 | Missing: CONTRACT-001. R@5 0.750 | All primary docs reach context. R@5 1.000 | Fixed, matches `regression_suite.py` |
 
-Notes to include:
+Notes:
 
-- Whether Q016/Q091/Q093 remain fixed under the current pipeline.
-- Whether Q005/Q092 improve, regress, or stay effectively unchanged.
-- Whether `MULTI_DOC_RETRIEVAL_CONFIG` is safe to describe as a full-slice
-  improvement or only a targeted repair.
+- Q016/Q091/Q093 remain fixed under the current pipeline — reconfirmed by a
+  second, independently-written measurement path (this script), not just by
+  re-reading `regression_suite.py`'s own frozen fixtures.
+- Q005 was already fine before the repair and stays fine; it neither
+  benefits nor regresses.
+- **Q092 does not improve.** Same two primary docs missing from generation
+  context under both configs. Root-cause diagnostic (see eval-report.md):
+  CONTRACT-005 IS found by first-stage retrieval (BM25 rank 1) but the
+  cross-encoder reranker itself scores it too low to survive `top_k=10` — a
+  reranker-judgment miss, not a pool-depth miss. POL-002 is not found by
+  either first-stage retriever even at `pool_size=200` — a first-stage
+  depth miss the repaired config's `pool_size=80` still doesn't reach.
+- **Honest verdict: `MULTI_DOC_RETRIEVAL_CONFIG` is a targeted repair,
+  verified on 4 of 5 `multi_doc` queries (Q016 chunk-level, Q091, Q093
+  fixed; Q005 unaffected-and-fine) — not a full-slice improvement.** Q092
+  is real, un-fixed evidence against the broader "multi_doc repair" framing,
+  and should be described that way going forward, not glossed over.
 
 ### Error-analysis highlights and remaining weaknesses
 
-_TODO: Fill in._
-
-Expected shape:
-
-- Q091: distinguish fixed missing-primary-doc gap from still-visible `Band
-  3` term/chunk gap.
-- Q093: state whether the missing `CONTRACT-001` problem remains fixed.
-- Q016: state whether `GUIDE-001::chunk-2` remains present.
-- Any Q005/Q092 finding from the full-slice check.
+- **Q091**: two genuinely different gaps, now measured separately. The
+  missing-*document* gap (GUIDE-002, POL-001 never reaching context) is
+  fixed — confirmed today by a second measurement path, not just Day 14's
+  fixture. What remains is a missing-*chunk* gap one level deeper: the
+  POL-001 chunk that DOES reach context (`chunk-3`) explains how total
+  committed value is calculated, not the actual Band 1/2/3 EUR thresholds
+  (`chunk-4`, never retrieved). `expected_missing_terms=["Band 3"]` in
+  `regression_suite.py` keeps this a tracked, asserted gap, not a silently
+  passing green row.
+- **Q093**: the missing `CONTRACT-001` problem remains fixed — reconfirmed
+  today (R@5 0.750 → 1.000, all primary docs reach context under the
+  repaired config).
+- **Q016**: `GUIDE-001::chunk-2` remains present under the repaired config
+  — reconfirmed today by directly inspecting the reranked chunk list
+  (`chunk_ids reaching context` includes `GUIDE-001::chunk-2` under
+  `repaired`, does not under `default`), independent of
+  `regression_suite.py`'s own hard-coded fixture.
+- **Q005**: no finding — already fine before and after the repair.
+- **Q092**: new finding from today's full-slice check (was never measured
+  before Day 15). CONTRACT-005 and POL-002 both stay outside generation
+  context under either config, for two structurally different reasons (see
+  "Full multi_doc slice remeasurement" above). This is the one real gap
+  Day 15 surfaced that Day 14 did not know about.
 
 ### What I can now explain in an interview
 
-_TODO: Fill in._
-
-Expected bullets:
-
-- Retrieval quality vs answer quality.
-- Faithfulness vs contextual recall vs answer relevance.
-- Why LLM-as-judge scores are evidence samples, not hard gates.
-- Why Q091 drove the eval design.
-- Why an agentic/recursive retrieval loop should be motivated by a specific
-  failure signal, not by framework enthusiasm.
+- **Retrieval quality vs. answer quality.** A retriever can be measured
+  (P@1/R@5/MRR@10/nDCG@5) completely independently of whether the generator
+  writes a good answer — Q091's default-config retrieval scored R@5=0.200
+  (two primary docs missing) while its generated answer was still honest
+  and well-formatted; a fluent answer says nothing about whether the right
+  evidence arrived.
+- **Faithfulness vs. context recall vs. answer completeness vs. chunk/fact
+  coverage — four different axes, each catching something the others
+  can't.** Faithfulness (DeepEval/RAGAS, Day 12) asks "is the answer
+  supported by what it was given" — it can score high on an *incomplete*
+  context, because it never asks whether the context itself was complete.
+  Context recall (`check_context_recall`, Day 11) asks "did the primary
+  *document* arrive" — it caught Q091/Q093's original missing-doc failures,
+  but is document-grained: it can't see that only the wrong *chunk* of a
+  present document arrived (Q016), or that a present document is missing
+  one specific *fact* (Q091's Band 3, even after the document itself
+  arrived). Expected-term checks (`check_expected_terms`) catch the answer
+  actually stating a needed fact. None of these four subsumes the others —
+  Week 3's whole point is that ProcureRAG now measures all four separately
+  instead of trusting one green metric to mean "the answer is good."
+- **Why LLM-as-judge scores are evidence samples, not hard gates.**
+  `framework_eval.py`'s DeepEval/RAGAS lane is opt-in, costs a live API
+  call, and has real result-variance run to run — it is treated as a
+  second, corroborating signal alongside the deterministic checks, never as
+  the sole pass/fail gate. The deterministic lane (`generation_eval.py`,
+  `regression_suite.py`) is what CI/regression actually depends on, exactly
+  because it is free, fast, and reproducible.
+- **Why Q091 drove the eval design.** It is the one query where every
+  layer shows something different: retrieval missed two primary docs
+  (context recall), the answer stayed honest about the gap instead of
+  guessing (faithfulness could still pass), the missing docs got fixed by a
+  measured retrieval-config repair (Day 14), and even after that repair a
+  narrower, real gap remained — a term the answer still can't state because
+  the exact chunk with the number never arrived (`Band 3`). One query,
+  five distinct lessons.
+- **Why an agentic/recursive retrieval loop should be motivated by a
+  specific failure signal, not by framework enthusiasm.** Today's Q092
+  diagnostic is the concrete argument: CONTRACT-005 is a *reranker*
+  judgment miss (found by BM25 at rank 1, then scored too low by the
+  cross-encoder to survive `top_k`), while POL-002 is a *first-stage depth*
+  miss (not found by either retriever within 200 results). These need
+  different fixes — a query reformulation / re-rank retry for one, a
+  deeper or different retrieval strategy for the other. "Add an agent"
+  without this diagnosis would be guessing at which of two different
+  problems it's even trying to solve.
 
 ### What remains weak
 
-_TODO: Fill in._
+- **Q091's `Band 3` term/chunk gap.** Owner: retrieval targeting for
+  POL-001 (two different chunks answer two different relevant questions).
+  Impact: the answer correctly declines to state the exact approval band
+  rather than guessing. Next signal: `POL-001::chunk-4` reaching context
+  (checkable the same way `chunk-gap-q016` already checks
+  `GUIDE-001::chunk-2` — a real `required_chunk_ids` assertion), or a
+  deliberate, asserted decision that the band stays unstated.
+- **Q092's missing-doc gap (new today).** Owner: retrieval — a reranker
+  relevance-judgment miss for CONTRACT-005, a first-stage depth miss for
+  POL-002. Impact: any real answer to Q092 today would omit both documents'
+  requirements. Next signal: two separate checks, one per cause (see
+  eval-report.md's Day 15 section for exactly what each would need).
 
-Expected shape:
-
-- Name any open gap with owner, impact, and next verification signal.
-- If HER-268 cannot close yet, list the exact remaining task(s).
-- If HER-268 can close, name the first Week 4 / Chapter 11 target.
+Neither gap blocks HER-268 — both are retrieval-completeness gaps the eval
+harness already surfaces honestly (via context recall / the new full-slice
+script), not faithfulness failures generation is hiding.
 
 ### Next step
 
-_TODO: Fill in after the gate review._
+**HER-268 is ready for closure review.** Every gate command is green, the
+full `multi_doc` slice has been measured under both configs (not assumed
+safe), Q091's residual gap stays visible and asserted, and Q092's new gap is
+named with an owner and a concrete next signal rather than glossed over.
+Hand this to Hermes using the route doc's review protocol message.
 
-Expected shape:
-
-- If clean: close HER-268 / HER-282 after Hermes review and start Week 4 with
-  a Chapter 11 route grounded in the strongest remaining failure signal.
-- If not clean: execute the shortest remaining evidence task before any
-  agentic implementation.
+Week 4 / Chapter 11 first target, grounded in today's evidence (not
+framework enthusiasm): a **Recursive RAG** pass motivated specifically by
+Q091's `Band 3` gap (reformulate toward "approval band EUR thresholds"
+after a first pass returns POL-001 without the right chunk) and/or Q092's
+reranker miss (retry retrieval when the reranker's own top scores are low
+enough to suggest low confidence, rather than accepting a low-confidence
+shortlist as final). Both are real, measured failures — the agentic work
+starts from them, not from "agents" as a generic next feature.

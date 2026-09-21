@@ -3134,6 +3134,229 @@ for its own first-pass review:
 # GUIDE-002 - the repair is live in the real entry point, not just a fixture.
 ```
 
+## Day 15: Week 3 gate review — full multi_doc slice remeasurement
+
+Date: 2026-09-21
+Linear: HER-282 — Day 15 loop: Week 3 gate review + next-week readiness.
+Related gate: HER-268 — Week 3 gate: grounded generation + RAG eval harness.
+Route doc: `docs/day-15-week3-gate-review-next-week-readiness.md`.
+
+Day 14's own "Next step" named one responsible check before treating the
+Block 3B repair as generally safe: `MULTI_DOC_RETRIEVAL_CONFIG` was verified
+on exactly three of the corpus's five `multi_doc` queries (Q091, Q093,
+Q016). Q005 and Q092 were never checked. This section is that check, run
+for real, not assumed.
+
+### Gate verdict
+
+**Pass, with one open item now visible instead of hidden.** Every
+deterministic/regression/retrieval-pipeline gate is green (see "Verification
+outputs" below), and the full 5-query `multi_doc` slice has now actually
+been measured under both configs — three queries confirm the Day 14 repair
+holds, one was already fine and stays fine, and one (Q005 also already fine
+— see the table below) — but the fifth, **Q092, is NOT fixed by
+`MULTI_DOC_RETRIEVAL_CONFIG`**, and that fact is recorded here rather than
+folded into a "the repair works" summary that would have been only 80% true.
+
+### Verification outputs
+
+Full commands, exact output (a fresh run at Day 15 kickoff, not paraphrased
+from Day 14):
+
+```bash
+./.venv/bin/pytest -q
+# 206 passed in 1.80s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 7/7 frozen cases "as_expected" (see the printed table — includes
+# retrieval-miss-q091's still-open "term-level gap OPEN: missing ['Band 3']"
+# note, printed, not hidden, inside an otherwise-passing row)
+# 6/6 real-query cases [OK] against the CURRENT retrieval pipeline (re-run
+# live, not read from a cached fixture)
+
+./.venv/bin/python src/eval_metrics.py
+# Largest weak slice (Cross-encoder reranked Hybrid RRF chunk->document, by
+# query_type): 'multi_doc' — P@1 0.600 over 5 queries, vs. 0.978 overall.
+# (unchanged from Day 7-9's baseline — this table always used
+# DEFAULT_RETRIEVAL_CONFIG's pool_size=15, so it correctly still shows the
+# PRE-repair number; it is not supposed to move just because
+# MULTI_DOC_RETRIEVAL_CONFIG exists, since retrieval_config_for_query_type
+# is applied at generation time, not inside this baseline table.)
+```
+
+`src/regression_suite.py --live` and `src/generation.py`'s live smoke were
+not re-run today (no new prompt/generation-path change since Day 14 to
+justify spending a live call on them); Day 14's captured live transcripts
+in `regression_suite.py` remain the current live evidence.
+
+### Full `multi_doc` slice: default vs. repaired config
+
+**New, Juan-owned measurement script**: `src/multi_doc_slice_eval.py`. Not a
+duplicate of `eval_metrics.py` or `regression_suite.py` — it reuses both
+(`eval_metrics.py`'s `precision_at_1`/`recall_at_k`/`reciprocal_rank`/
+`ndcg_at_k`/`rollup_chunks_to_documents`, `reranking.py`'s
+`two_stage_rerank`/`DEFAULT_RETRIEVAL_CONFIG`/`MULTI_DOC_RETRIEVAL_CONFIG`
+unchanged) and only adds the one thing that did not exist yet: running BOTH
+configs, for ALL FIVE `multi_doc` queries, in one place, printing both a
+retrieval-quality view (P@1/R@5/MRR@10/nDCG@5, at the same
+`RETRIEVAL_DEPTH=10` cutoff `eval_metrics.py`'s own baseline table already
+uses) and a "does the primary document actually reach generation context"
+view (at each config's own `top_k`, matching exactly what
+`generation.py`'s real entry point does with `build_sources`).
+
+**Self-check, printed by the script itself**: the default-config P@1 it
+computes, averaged over these same 5 queries, is 0.600 — exactly the
+"Largest weak slice ... 'multi_doc' — P@1 0.600 over 5 queries" line
+`eval_metrics.py` already prints (same convention: full pool rerank,
+rolled up to documents, truncated to `RETRIEVAL_DEPTH=10`). Two
+independently-written pieces of code, computing the same thing the same
+way, agree — that is what "measured, not guessed" means in practice here.
+
+```bash
+./.venv/bin/python src/multi_doc_slice_eval.py
+```
+
+| Query | Default config (`pool_size=15, top_k=5`) | Repaired config (`pool_size=80, top_k=10, max_chunks_per_document=2`) | Verdict |
+|---|---|---|---|
+| Q005 | All 3 primary docs (FAQ-001, POL-001, SOP-008) reach context. P@1 1.000 R@5 1.000 MRR@10 1.000 nDCG@5 1.000 | Same — all primary docs still reach context. P@1 1.000 R@5 1.000 MRR@10 1.000 nDCG@5 1.000 | **Unchanged.** Already easy under the default config; the repaired config neither helps nor hurts it. |
+| Q016 | Both primary docs (GUIDE-001, POL-004) reach context, but GUIDE-001's context chunk is `chunk-1` (title/definitions), not `chunk-2` (the actual "logistics price ≤40%" figure). P@1 1.000 R@5 1.000 MRR@10 1.000 nDCG@5 1.000 | Same doc-level recall; `GUIDE-001::chunk-2` now ALSO reaches context (confirms `chunk-gap-q016`'s fix independently of `regression_suite.py`'s own frozen fixture). Same P@1/R@5/MRR@10/nDCG@5 — chunk-level gain doesn't move document-level metrics, which is exactly why the chunk-level check exists as its own signal. | **Chunk-level repair reconfirmed**, from a second, independent measurement path. |
+| Q091 | Missing primary docs: GUIDE-002, POL-001. P@1 0.000 R@5 0.200 MRR@10 0.333 nDCG@5 0.197 | All primary docs reach context. P@1 0.000 R@5 0.600 MRR@10 0.500 nDCG@5 0.446 | **Fixed** — matches `regression_suite.py`'s `retrieval-miss-q091` case. `Band 3` remains a separate, term-level gap (see below) — this table only measures whether the *document* reaches context, not whether the generated answer states every fact inside it. |
+| Q092 | Missing primary docs: CONTRACT-005, POL-002. P@1 0.000 R@5 0.200 MRR@10 0.200 nDCG@5 0.152 | **Still missing** CONTRACT-005, POL-002 — identical missing-doc set as the default config, even at `pool_size=80`. P@1 0.000 R@5 0.200 MRR@10 0.333 nDCG@5 0.197 (the MRR/nDCG uptick is POL-006 landing one rank higher, not the missing docs arriving). | **NOT fixed.** See the root-cause diagnostic below — this is a real, previously-unmeasured gap the Day 14 repair does not close. |
+| Q093 | Missing primary doc: CONTRACT-001. P@1 1.000 R@5 0.750 MRR@10 1.000 nDCG@5 0.832 | All primary docs reach context. P@1 1.000 R@5 1.000 MRR@10 1.000 nDCG@5 0.983 | **Fixed** — matches `regression_suite.py`'s `retrieval-miss-q093` case. |
+
+**Answering the route doc's four full-slice questions directly:**
+
+1. *Did the repair keep the known wins for Q016/Q091/Q093?* Yes — all
+   three reconfirmed by this independent measurement, not just by
+   re-reading `regression_suite.py`'s own frozen fixtures.
+2. *Did it help, hurt, or leave Q005/Q092 unchanged?* Q005: unchanged
+   (already fine). Q092: **unchanged in outcome** (still broken) — R@5 and
+   P@1 identical to the default config; MRR@10/nDCG@5 move slightly because
+   one already-present secondary doc (POL-006) re-ranks higher, not because
+   any missing primary doc arrives.
+3. *Did P@1/R@5/MRR@10/nDCG@5 or missing-doc signals change in a way worth
+   documenting?* Yes, in both directions — R@5 0.200→0.600 for Q091 is a
+   real, meaningful jump; Q092's R@5 staying flat at 0.200 despite a 5x
+   larger pool is the other half of the same honest story.
+4. *Is the config still scoped to `query_type == "multi_doc"`?* Yes —
+   unchanged from Day 14: `retrieval_config_for_query_type`'s `if
+   query_type == "multi_doc"` branch (`reranking.py`) is the only place
+   `MULTI_DOC_RETRIEVAL_CONFIG` is selected, and `regression_suite.py
+   --verify-retrieval`'s `control-q001`/`control-q004` rows (query types
+   `threshold`/`lookup`) both still show `[OK]` under
+   `DEFAULT_RETRIEVAL_CONFIG`, re-confirmed today, not just carried forward
+   from Day 14's run.
+
+**Root-cause diagnostic for Q092 (why the repair doesn't reach it)** — the
+same "diagnose before claiming a fix" method Day 13 used for Q091/POL-001,
+applied here and printed, not guessed. Two DIFFERENT reasons, not one:
+
+- **CONTRACT-005 IS found by first-stage retrieval** (BM25 rank 1 for
+  `CONTRACT-005::chunk-0`, out of 200 searched) — the problem is downstream.
+  Under `MULTI_DOC_RETRIEVAL_CONFIG`, `CONTRACT-005::chunk-3` enters the
+  fused pool at `first_stage_rank=3`, but the cross-encoder reranker itself
+  scores it `-10.41` (its final rank is 16th of 43 post-cap candidates —
+  past the `top_k=10` cutoff that reaches generation). This is a
+  **reranker relevance-judgment miss**, not a pool-depth miss: a bigger
+  `pool_size` cannot fix a chunk the reranker itself already saw and scored
+  low. This is a structurally different failure than Q091/Q093, where the
+  fix WAS depth (the target chunk never entered the pool at all under the
+  old `pool_size=15`).
+- **POL-002 is NOT found by either first-stage retriever inside a 200-deep
+  search** at any useful rank (best BM25 rank 79, best semantic rank 104 —
+  both past `MULTI_DOC_RETRIEVAL_CONFIG`'s own `pool_size=80`). This part
+  IS the Q091/Q093-style shallow-pool problem, just one that `pool_size=80`
+  still isn't deep enough to solve — POL-002 would need `pool_size` pushed
+  well past 100 to even enter the fused pool, at which point
+  `max_chunks_per_document`'s diversity trade-off (see `reranking.py`'s
+  module comment) would need re-verifying too.
+
+Because Q092 combines a reranker-judgment miss (CONTRACT-005) with a
+first-stage depth miss deeper than the current config reaches (POL-002),
+simply raising `pool_size` again is not obviously the right next fix — it
+would address POL-002 at best, and would do nothing for CONTRACT-005. See
+"Week 4 handoff" below for why this is exactly the kind of concrete,
+measured failure an agentic/recursive-retrieval loop should be motivated
+by, instead of a generic "add an agent" plan.
+
+### Remaining weakness: Q091's `Band 3` gap, and the new Q092 gap
+
+**Q091 — `Band 3` (carried forward from Day 14, unchanged today).** The
+missing-*document* problem is fixed (POL-001 and GUIDE-002 both reach
+context). What remains is a missing-*chunk* problem one level deeper:
+POL-001's retrieved chunk (`POL-001::chunk-3`) explains HOW total committed
+value is calculated, not the actual Band 1/2/3 EUR thresholds (those live
+in `POL-001::chunk-4`, a different chunk of the same document — see
+`generation_eval.Q001_SOURCES`). `regression_suite.py`'s
+`retrieval-miss-q091` case enforces this as a tracked, expected gap
+(`expected_missing_terms=["Band 3"]`), not a silent failure — its
+`overall_verdict` stays `as_expected` for the right reason: the gap is
+named and checked, not hidden.
+
+- **Owner**: retrieval depth/targeting for POL-001 specifically (a document
+  where two different chunks answer two different, both-relevant
+  questions).
+- **Impact**: an answer to "what approval band applies" cannot state the
+  Band 3 threshold; the current answer correctly says so rather than
+  guessing (see `Q091_REPAIRED_ANSWER_TEXT` in `regression_suite.py`).
+- **Next repair signal**: either `POL-001::chunk-4` starts reaching context
+  (verifiable the same way `chunk-gap-q016` already verifies
+  `GUIDE-001::chunk-2` — a `required_chunk_ids` check, not prose), or a
+  deliberate policy decision states the band stays unstated when the exact
+  threshold chunk is absent, verified by the missing-term signal *staying*
+  `["Band 3"]` on purpose rather than by accident.
+
+**Q092 — new, previously unmeasured (found today).** CONTRACT-005 and
+POL-002 both stay outside generation context under either retrieval config.
+
+- **Owner**: retrieval, not generation — this is a document-level miss
+  before any answer is even drafted, the same class of problem Q091/Q093
+  originally were.
+- **Impact**: any answer to "what do we need before a new cleaning
+  contractor starts" would currently omit whatever `CONTRACT-005` (a
+  framework agreement) and `POL-002` (a policy) specifically require. This
+  was never a "fixed" claim `MULTI_DOC_RETRIEVAL_CONFIG` made — Day 13
+  built the config against only Q091/Q093/Q016 — but until today it was
+  also never *checked* against Q092, so the config's real scope was
+  narrower than its "multi_doc repair" name suggested.
+- **Next repair signal**: two separate signals for two separate causes —
+  CONTRACT-005 reaching context would mean the reranker (or a query
+  reformulation feeding it) stopped scoring `CONTRACT-005::chunk-3` so low;
+  POL-002 reaching context would mean first-stage retrieval found it at
+  all, which plain `pool_size` tuning has not yet achieved even at 80.
+
+### Week 4 / Chapter 11 handoff
+
+Q091's `Band 3` gap and Q092's still-open miss are two different shapes of
+the same underlying lesson: **retrieval depth alone has a ceiling.** Chapter
+11's `Recursive RAG` / `Agentic Search` lessons are naturally suited to
+exactly the two failure modes measured above, not to "agents" as a generic
+next feature:
+
+- A **second retrieval pass, reformulated toward the missing evidence**
+  (e.g., re-query specifically for "approval band thresholds EUR" after a
+  first pass surfaces POL-001 without the Band-3-bearing chunk) is a
+  concrete Recursive RAG candidate motivated by Q091, not by framework
+  enthusiasm.
+- Q092's CONTRACT-005 miss is a *reranker* judgment problem, not a
+  retrieval-depth problem — a future agentic loop that notices "the
+  reranker's top candidates all score negative/low-confidence" and tries a
+  reformulated query or a different retrieval strategy before accepting the
+  current shortlist is a second, distinct, evidence-backed target.
+
+What this handoff must NOT obscure: neither gap is generation's fault.
+Both are retrieval-stage gaps that generation already handles honestly
+(Q091's answer states the limitation instead of guessing; a future Q092
+answer, run today, would likely do the same for whatever it's missing) —
+an agentic loop here is solving a retrieval-completeness problem, not a
+faithfulness problem the eval harness already catches.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still
