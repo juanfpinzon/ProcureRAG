@@ -3182,3 +3182,181 @@ reranker miss (retry retrieval when the reranker's own top scores are low
 enough to suggest low confidence, rather than accepting a low-confidence
 shortlist as final). Both are real, measured failures — the agentic work
 starts from them, not from "agents" as a generic next feature.
+
+## 2026-09-25 — Day 16: Recursive RAG Pass for Q091/Q092 Gaps
+
+Linear: HER-283 — Day 16 loop: Recursive RAG pass for Q091/Q092 gaps.
+
+Route doc: `docs/day-16-recursive-rag-q091-q092-agentic-search.md`.
+
+Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrails.
+
+### Course / docs target
+
+- Boot.dev Chapter 11 — `Agentic`:
+  - `Recursive RAG` - Completed
+  - `Agentic Search` - Completed
+- Companion vocabulary only: LangChain Academy — Introduction to LangGraph,
+  Module 1 `Introduction`: `Lesson 1: Motivation`, `Lesson 2: Simple Graph`,
+  `Lesson 5: Router`, and `Lesson 6: Agent`.
+- Project baseline: Day 15 full `multi_doc` slice evidence in
+  `docs/eval-report.md` and this learning log.
+
+### Objective
+
+_TODO: Fill in after building._
+
+Expected shape:
+
+- Explain how the Day 16 recursive-retrieval work starts from Week 3's
+  measured failures, not from generic agent enthusiasm.
+- Name the exact trigger signal chosen for Q091 and Q092.
+- State whether today's artifact is a working recursive retrieval loop or the
+  fallback decision/evidence contract.
+
+### Baseline verification at kickoff
+
+```bash
+./.venv/bin/pytest -q
+# 206 passed in 4.88s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 7/7 frozen fixture cases as_expected; 6/6 current retrieval-pipeline checks [OK]
+# Q091 remains visible as: term-level gap OPEN: missing ['Band 3']
+
+./.venv/bin/python src/multi_doc_slice_eval.py
+# Q005 fine; Q016 chunk gap addressed; Q091 missing docs fixed but Band 3 term gap remains;
+# Q092 still missing CONTRACT-005 and POL-002; Q093 fixed
+```
+
+### Chapter 11 notes
+
+_TODO: Fill in._
+
+Expected shape:
+
+- `Recursive RAG`: what second-pass retrieval means, when it triggers, and how
+  it stops.
+- `Agentic Search`: what makes the loop agentic/bounded rather than just a
+  bigger `top_k`.
+- LangGraph vocabulary used, if any: state, node, conditional edge, router,
+  agent.
+
+### Recursive retrieval trigger contract
+
+_TODO: Fill in._
+
+Expected table shape:
+
+| Query | First-pass signal | Follow-up query/action | Stop condition | Evidence owner |
+|---|---|---|---|---|
+| Q091 | TODO | TODO | TODO | TODO |
+| Q092 | TODO | TODO | TODO | TODO |
+| Control | TODO | TODO | TODO | TODO |
+
+Hints:
+
+- Q091 should separate `POL-001` document presence from the exact
+  `POL-001::chunk-4` / `Band 3` gap.
+- Q092 should separate `CONTRACT-005`'s reranker miss from `POL-002`'s
+  weaker first-stage/fusion + reranker miss.
+
+### Q091 before/after evidence
+
+_TODO: Fill in._
+
+Record:
+
+- First-pass retrieved doc ids and chunk ids.
+- Whether `POL-001::chunk-4` reached context.
+- Whether `Band 3` remains in `missing_terms`.
+- Follow-up query used.
+- Second-pass retrieved doc ids and chunk ids.
+- Final verdict: fixed, still open, or sharper diagnosis.
+
+### Q092 before/after evidence
+
+_TODO: Fill in._
+
+Record separately:
+
+- `CONTRACT-005`: first-stage / reranker behavior and whether it reaches
+  generation context after the second pass.
+- `POL-002`: first-stage / fusion / reranker behavior and whether it reaches
+  generation context after the second pass.
+- Whether the result proves a fix, proves a different repair owner, or remains
+  blocked.
+
+### Control / no-second-pass evidence
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Name the control query (`Q001`, `Q005`, or another justified case).
+- Show why first-pass evidence is already complete.
+- Show the recursive loop does not trigger, or stops immediately with a clear
+  no-op reason.
+
+### Verification evidence after Juan's build
+
+_TODO: Fill in with exact command output._
+
+Minimum expected commands:
+
+```bash
+./.venv/bin/pytest -q
+./.venv/bin/python -m compileall -q src tests
+./.venv/bin/python -m ruff check src tests
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+./.venv/bin/python src/multi_doc_slice_eval.py
+# plus the new Day 16 recursive retrieval command, if implemented
+```
+
+### What improved
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Which missing docs/chunks/terms moved from missing to present.
+- Which explanation became more interview-defensible.
+- Which checks or tests now make the behavior repeatable.
+
+### What remains weak
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Any Q091 residual gap (especially `Band 3` / `POL-001::chunk-4`).
+- Any Q092 residual gap, split by `CONTRACT-005` vs `POL-002`.
+- Cost/noise tradeoffs from running a second pass.
+- Whether LangGraph/framework integration is still deferred.
+
+### What I can now explain in an interview
+
+_TODO: Fill in._
+
+Expected bullets:
+
+- Recursive RAG as a conditional, bounded second retrieval pass driven by a
+  measured evidence gap.
+- Difference between static top-k/pool-size tuning and dynamic agentic search.
+- Why Q091 and Q092 require different trigger/repair logic.
+- How to prevent recursive retrieval from amplifying noise or running forever.
+
+### Next step
+
+_TODO: Fill in after review._
+
+Likely route if Day 16 is clean: move from the local recursive-retrieval
+contract into a small LangGraph-shaped state/edge representation, or into the
+next Week 4 focus from HER-269 (observability/trace evidence) if the agentic
+loop needs inspection before guardrails.
