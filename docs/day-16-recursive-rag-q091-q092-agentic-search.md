@@ -18,13 +18,26 @@ Boot.dev RAG course target:
 
 Companion sources for vocabulary only, not a framework mandate:
 
-- **LangChain Academy — Introduction to LangGraph, Module 1: Introduction**
-  - **Lesson 1: Motivation**
-  - **Lesson 2: Simple Graph**
-  - **Lesson 5: Router**
-  - **Lesson 6: Agent**
-  - Optional stretch: **Lesson 7: Agent with Memory** only if today's loop already works without it.
-- **LangGraph docs overview**: use the concepts of explicit state, nodes, conditional edges, and deterministic control flow. Do not let framework setup replace the core ProcureRAG experiment.
+- **LangChain Academy landing page:** <https://academy.langchain.com/> — use this if the course UI changes or if you need to search all current Academy courses.
+- **Primary companion course: Foundation: Introduction to LangGraph - Python:** <https://academy.langchain.com/courses/intro-to-langgraph>
+  - **Module 1: Introduction** — navigate inside the course page after enrolling.
+    - **Lesson 1: Motivation**
+    - **Lesson 2: Simple Graph**
+    - **Lesson 5: Router**
+    - **Lesson 6: Agent**
+    - Optional stretch: **Lesson 7: Agent with Memory** only if today's loop already works without it.
+  - **Why this course:** the Academy page describes it as the basics of LangGraph for agentic and multi-agent applications, with more precision/control than black-box agent frameworks. That vocabulary maps directly to Day 16's bounded recursive-retrieval loop.
+- **Fallback / faster navigation course: Quickstart: LangGraph Essentials - Python:** <https://academy.langchain.com/courses/langgraph-essentials-python>
+  - **Module 1: Course Overview**
+    - **Lesson 1: Nodes**
+    - **Lesson 2: Edges**
+    - **Lesson 3: Conditional Edges**
+    - **Lesson 4: Memory**
+    - Optional: **Lesson 6: Application** if you want a small applied workflow example.
+  - **When to use this instead:** if the Foundation course is hard to find in the Academy UI, use this Quickstart course to learn the exact state/node/edge/conditional-edge vocabulary needed for the Day 16 contract. It is shorter and more navigation-friendly.
+- **LangGraph docs overview:** <https://docs.langchain.com/oss/python/langgraph/overview> — use this for concepts of explicit state, nodes, conditional edges, and deterministic control flow. Do not let framework setup replace the core ProcureRAG experiment.
+
+Navigation note: LangChain Academy exposes stable public URLs for courses, but not always for individual lessons/modules before enrollment. The links above intentionally point to the course pages; once inside, use the listed module and lesson names.
 
 Exact source-note: Boot.dev's public course page confirms Chapter 11 is **Agentic** and describes it as agents that iteratively refine queries and navigate retrieval workflows. HER-283 and Day 15's route name the two Chapter 11 lesson titles above; use those exact titles in the learning log.
 
@@ -103,7 +116,9 @@ The fallback route is not failure. If Juan builds a decision/evidence contract t
 - [ ] Boot.dev Chapter 11 lessons completed or explicitly reviewed with notes:
   - [ ] `Recursive RAG`
   - [ ] `Agentic Search`
-- [ ] Companion vocabulary notes from LangChain Academy Module 1 lessons above, limited to what helps explain the experiment.
+- [ ] Companion vocabulary notes from LangChain Academy course links above, limited to what helps explain the experiment:
+  - [ ] Primary: Foundation: Introduction to LangGraph - Python, Module 1 `Introduction` lessons `Motivation`, `Simple Graph`, `Router`, and `Agent`; or
+  - [ ] Fallback: Quickstart: LangGraph Essentials - Python, Module 1 lessons `Nodes`, `Edges`, `Conditional Edges`, and `Memory`.
 - [ ] A Juan-owned recursive retrieval artifact exists, likely `src/agentic_retrieval.py` or equivalent, reusing existing ProcureRAG retrieval/eval functions rather than bypassing them.
 - [ ] The artifact has an explicit decision contract:
   - [ ] trigger reason (`missing_doc`, `missing_chunk`, `missing_term`, `low_reranker_confidence`, or a similarly precise signal);
@@ -163,7 +178,12 @@ Write brief notes in scratch form before implementation:
 - What evidence proves the second pass helped?
 - What evidence proves it did not help?
 
-Then skim the LangChain Academy Module 1 lessons listed above. Extract vocabulary only: state, graph, node, edge, router, agent. Do not spend the day wiring LangGraph unless the plain contract is already clear.
+Then skim one of the LangChain Academy paths linked above:
+
+- Preferred path: <https://academy.langchain.com/courses/intro-to-langgraph> → Module 1 `Introduction` → lessons `Motivation`, `Simple Graph`, `Router`, and `Agent`.
+- Short fallback path: <https://academy.langchain.com/courses/langgraph-essentials-python> → Module 1 `Course Overview` → lessons `Nodes`, `Edges`, `Conditional Edges`, and `Memory`.
+
+Extract vocabulary only: state, graph, node, edge, conditional edge, router, agent. Do not spend the day wiring LangGraph unless the plain recursive-retrieval contract is already clear.
 
 ### Block 2 — Design the recursive retrieval contract, 45–60m
 

@@ -3196,9 +3196,11 @@ Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrai
 - Boot.dev Chapter 11 — `Agentic`:
   - `Recursive RAG` - Completed
   - `Agentic Search` - Completed
-- Companion vocabulary only: LangChain Academy — Introduction to LangGraph,
-  Module 1 `Introduction`: `Lesson 1: Motivation`, `Lesson 2: Simple Graph`,
-  `Lesson 5: Router`, and `Lesson 6: Agent`.
+- Companion vocabulary only:
+  - LangChain Academy landing page: <https://academy.langchain.com/>
+  - Primary course: Foundation: Introduction to LangGraph - Python — <https://academy.langchain.com/courses/intro-to-langgraph>, Module 1 `Introduction`: `Lesson 1: Motivation`, `Lesson 2: Simple Graph`, `Lesson 5: Router`, and `Lesson 6: Agent`.
+  - Fallback course if the Foundation course is hard to locate: Quickstart: LangGraph Essentials - Python — <https://academy.langchain.com/courses/langgraph-essentials-python>, Module 1 `Course Overview`: `Lesson 1: Nodes`, `Lesson 2: Edges`, `Lesson 3: Conditional Edges`, and `Lesson 4: Memory`.
+  - Note: Academy exposes stable public URLs for courses, but not always per-lesson public URLs before enrollment; navigate by module/lesson title inside the course.
 - Project baseline: Day 15 full `multi_doc` slice evidence in
   `docs/eval-report.md` and this learning log.
 
