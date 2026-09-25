@@ -106,17 +106,37 @@ def test_evaluate_missing_evidence_finds_missing_primary_doc():
 def test_evaluate_missing_evidence_finds_missing_required_chunk_even_if_doc_present():
     module = _load_agentic_retrieval_module()
     query_row = _query_row("QX", "multi_doc", {"POL-001": 2})
-    # POL-001 IS in context, but via a different chunk than the one required
-    # - this is exactly Q091's real shape (POL-001::chunk-3 present,
-    # POL-001::chunk-4 required and absent).
+    # POL-001 IS in context, but via a different chunk than either of the
+    # acceptable ones - this is exactly Q091's real shape (POL-001::chunk-3
+    # present, POL-001::chunk-5/chunk-6 - the two chunks that both carry the
+    # "Band 3" sentence, per the corpus's overlapping chunker - absent).
     sources = [_source("POL-001", "POL-001::chunk-3")]
 
     missing = module.evaluate_missing_evidence(
-        query_row, sources, required_chunk_ids=("POL-001::chunk-4",)
+        query_row, sources, acceptable_chunk_ids=("POL-001::chunk-5", "POL-001::chunk-6")
     )
 
     assert missing["missing_doc_ids"] == []
-    assert missing["missing_chunk_ids"] == ["POL-001::chunk-4"]
+    assert missing["missing_chunk_ids"] == ["POL-001::chunk-5", "POL-001::chunk-6"]
+
+
+def test_evaluate_missing_evidence_chunk_requirement_is_satisfied_by_any_one_acceptable_chunk():
+    """OR semantics, not AND: Q091's "Band 3" sentence is duplicated across
+    two overlapping chunks (POL-001::chunk-5 and POL-001::chunk-6). Only one
+    of them needs to reach context for the chunk-level requirement to count
+    as satisfied - requiring both would be a stricter standard than the fact
+    itself demands.
+    """
+    module = _load_agentic_retrieval_module()
+    query_row = _query_row("QX", "multi_doc", {"POL-001": 2})
+    # Only chunk-6 is present, chunk-5 is not - still satisfied.
+    sources = [_source("POL-001", "POL-001::chunk-6")]
+
+    missing = module.evaluate_missing_evidence(
+        query_row, sources, acceptable_chunk_ids=("POL-001::chunk-5", "POL-001::chunk-6")
+    )
+
+    assert missing["missing_chunk_ids"] == []
 
 
 def test_decide_trigger_prefers_missing_doc_over_missing_chunk():
@@ -184,7 +204,7 @@ def test_triggered_second_pass_fixes_a_missing_document():
             followup_text: [_source("POL-002", "POL-002::chunk-11")],  # now found
         }
     )
-    case_overrides = {"QX": {"followup_query": followup_text, "required_chunk_ids": ()}}
+    case_overrides = {"QX": {"followup_query": followup_text, "acceptable_chunk_ids": ()}}
 
     state = module.run_recursive_retrieval(query_row, retrieve_fn, case_overrides=case_overrides)
 
@@ -213,7 +233,7 @@ def test_triggered_second_pass_still_missing_is_reported_honestly():
             followup_text: [_source("FAQ-001", "FAQ-001::chunk-2")],  # still no CONTRACT-005
         }
     )
-    case_overrides = {"QY": {"followup_query": followup_text, "required_chunk_ids": ()}}
+    case_overrides = {"QY": {"followup_query": followup_text, "acceptable_chunk_ids": ()}}
 
     state = module.run_recursive_retrieval(query_row, retrieve_fn, case_overrides=case_overrides)
 
@@ -240,7 +260,7 @@ def test_two_missing_documents_are_reported_separately_not_blended():
             followup_text: [_source("CONTRACT-005", "CONTRACT-005::chunk-3")],
         }
     )
-    case_overrides = {"Q092": {"followup_query": followup_text, "required_chunk_ids": ()}}
+    case_overrides = {"Q092": {"followup_query": followup_text, "acceptable_chunk_ids": ()}}
 
     state = module.run_recursive_retrieval(query_row, retrieve_fn, case_overrides=case_overrides)
 
@@ -254,9 +274,11 @@ def test_two_missing_documents_are_reported_separately_not_blended():
 
 
 def test_missing_chunk_trigger_fixed_after_second_pass():
-    """Q091's real shape: the primary document is already present, but a
-    specific required chunk is not - the trigger must fire on the
-    chunk-level signal even though `missing_doc_ids` is empty.
+    """Q091's real shape: the primary document is already present, but
+    neither acceptable chunk is - the trigger must fire on the chunk-level
+    signal even though `missing_doc_ids` is empty. The second pass recovers
+    only ONE of the two acceptable chunks (chunk-6, not chunk-5) - that is
+    still enough under the OR semantics `evaluate_missing_evidence` uses.
     """
     module = _load_agentic_retrieval_module()
     query_row = _query_row("Q091", "multi_doc", {"POL-001": 2})
@@ -265,11 +287,14 @@ def test_missing_chunk_trigger_fixed_after_second_pass():
     retrieve_fn = _CountingRetrieveFn(
         {
             first_pass_text: [_source("POL-001", "POL-001::chunk-3")],
-            followup_text: [_source("POL-001", "POL-001::chunk-4")],
+            followup_text: [_source("POL-001", "POL-001::chunk-6")],
         }
     )
     case_overrides = {
-        "Q091": {"followup_query": followup_text, "required_chunk_ids": ("POL-001::chunk-4",)}
+        "Q091": {
+            "followup_query": followup_text,
+            "acceptable_chunk_ids": ("POL-001::chunk-5", "POL-001::chunk-6"),
+        }
     }
 
     state = module.run_recursive_retrieval(query_row, retrieve_fn, case_overrides=case_overrides)
@@ -300,7 +325,7 @@ def test_trigger_without_known_followup_query_stops_honestly_without_second_pass
 # One test grounded in the real corpus rows (Q001, Q091, Q092 from
 # `data/corpus_v1/example_queries.jsonl`), with a faked retrieve_fn so it
 # stays fast and deterministic - proves the module's own
-# `AGENTIC_CASE_OVERRIDES` wiring (the real follow-up queries and required
+# `AGENTIC_CASE_OVERRIDES` wiring (the real follow-up queries and acceptable
 # chunk ids this project actually ships) behaves as designed against the
 # real `relevance_grades` for these queries, not just synthetic ones.
 # ---------------------------------------------------------------------------
@@ -319,7 +344,11 @@ def test_real_q091_and_q092_rows_with_faked_retrieval():
                 _source("POL-003", "POL-003::chunk-1"),
                 _source("GUIDE-002", "GUIDE-002::chunk-1"),
             ],
-            q091_followup: [_source("POL-001", "POL-001::chunk-4")],
+            # only chunk-6 comes back (not chunk-5) - the real live run
+            # confirmed either one alone satisfies the OR-semantics
+            # acceptable_chunk_ids check, so this is an honest fake, not a
+            # convenient one.
+            q091_followup: [_source("POL-001", "POL-001::chunk-6")],
         }
     )
     state_q091 = module.run_recursive_retrieval(q091, retrieve_fn_q091)

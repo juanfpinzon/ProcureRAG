@@ -3368,9 +3368,11 @@ Linear: HER-283. Route doc:
 `docs/day-16-recursive-rag-q091-q092-agentic-search.md`.
 
 Day 15 measured two ceilings a single retrieval pass could not clear: Q091's
-`POL-001::chunk-4` (the actual Band 1/2/3 EUR thresholds) never reaching
-context even though `POL-001` itself does, and Q092's `CONTRACT-005`/
-`POL-002` never reaching context at all, for two different root causes (a
+"Band 3" approval-band chunk (the actual EUR 50,000-250,000 threshold text,
+duplicated by the overlapping chunker across `POL-001::chunk-5` and
+`POL-001::chunk-6`) never reaching context even though `POL-001` itself
+does, and Q092's `CONTRACT-005`/`POL-002` never reaching context at all, for
+two different root causes (a
 reranker-judgment miss vs. a combined first-stage/fusion + reranker miss —
 see "Root-cause diagnostic for Q092" above). Day 16 builds a small, bounded
 recursive-retrieval loop — `src/agentic_retrieval.py` — directly against
@@ -3391,27 +3393,60 @@ generated prose.
 
 | Query | First-pass signal | Follow-up query | Stop reason |
 |---|---|---|---|
-| Q091 | `POL-001` present, but required chunk `POL-001::chunk-4` absent (`missing_chunk`) | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` |
+| Q091 | `POL-001` present, but neither acceptable chunk (`POL-001::chunk-5` or `POL-001::chunk-6` — both carry the "Band 3" sentence) is present (`missing_chunk`) | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` |
 | Q092 | `CONTRACT-005` and `POL-002` both absent (`missing_doc`) | `"cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance"` | `fixed_after_second_pass` |
 | Q001 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once |
 | Q005 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once |
 
-### Q091 before/after (real, live pipeline run, 2026-09-25)
+> **Correction (code review, 2026-09-25):** the first version of this
+> section (and of `src/agentic_retrieval.py`'s `AGENTIC_CASE_OVERRIDES`)
+> required `POL-001::chunk-4` for Q091. Reading the actual chunk text
+> directly from `chunking.chunk_corpus` shows that was wrong: chunk-4 only
+> contains the approval-bands intro and Band 1 ("Band 1 (below €5,000):
+> approval by the Budget Owner..."); it never says "Band 3". The real "Band
+> 3 (above €50,000 up to and including €250,000): approval by the VP
+> Procurement..." sentence lives in `POL-001::chunk-5` **and**
+> `POL-001::chunk-6` (the fixed-size overlapping chunker duplicated it
+> across both, since it falls in their overlap window). The live second
+> pass was already retrieving `POL-001::chunk-6` all along — so the
+> experiment's *conclusion* ("a reformulated query recovers Q091's missing
+> evidence") was correct, but the code was checking the wrong chunk id to
+> prove it. Fixed by changing `required_chunk_ids=("POL-001::chunk-4",)` to
+> `acceptable_chunk_ids=("POL-001::chunk-5", "POL-001::chunk-6")`, with
+> `evaluate_missing_evidence` updated to OR semantics ("chunk-level
+> requirement satisfied if ANY ONE of these is present," not "if ALL are
+> present") — see `src/agentic_retrieval.py`'s module comments and
+> `tests/test_agentic_retrieval.py::test_evaluate_missing_evidence_chunk_requirement_is_satisfied_by_any_one_acceptable_chunk`
+> for the corrected contract.
+
+### Q091 before/after (real, live pipeline run, 2026-09-25, re-verified after the chunk-id correction)
 
 - First-pass context docs: `CONTRACT-004, FAQ-001, GUIDE-002, POL-001,
   POL-003, POL-008, SOP-001, SOP-006`. First-pass chunk ids include
   `POL-001::chunk-3` (HOW total committed value is calculated) but NOT
-  `POL-001::chunk-4` (the actual Band 1/2/3 EUR thresholds) — the exact
-  Day 14/15 residual gap, confirmed still present at Day 16 kickoff.
+  `POL-001::chunk-5` or `POL-001::chunk-6` (the actual "Band 3" EUR
+  threshold sentence) — the exact Day 14/15 residual gap, confirmed still
+  present at Day 16 kickoff.
 - Second pass (`"approval bands EUR 50,000 250,000 Band 3 VP Procurement"`)
-  surfaced `POL-001::chunk-4` directly.
-- Merged context: `POL-001::chunk-4` present → `final_missing_chunk_ids = []`.
-- **Verdict: fixed.** The chunk-level gap this project has tracked since Day
-  14 (`regression_suite.py`'s `retrieval-miss-q091` case,
-  `expected_missing_terms=["Band 3"]`) closes under a targeted
-  reformulation, not a deeper pool — `pool_size`/`top_k` were left at the
-  existing `MULTI_DOC_RETRIEVAL_CONFIG` values for both passes; only the
-  query text changed.
+  surfaced `POL-001::chunk-6` (not `chunk-5` — only one of the two
+  acceptable chunks came back, which is exactly what the OR semantics are
+  for).
+- Merged context: `POL-001::chunk-6` present → `final_missing_chunk_ids = []`.
+- **Verdict: the retrieval-context gap is fixed** — `POL-001::chunk-6`
+  (containing the real "Band 3 (above €50,000 up to and including
+  €250,000): approval by the VP Procurement" sentence) reaches the merged
+  retrieval context. To be precise about what "fixed" means here (see
+  `src/agentic_retrieval.py`'s `STOP_FIXED_AFTER_SECOND_PASS` note): this is
+  a **retrieval-context** claim, not an **answer-quality** claim —
+  `agentic_retrieval.py` never calls `generation.generate_answer`, so this
+  says the fact-bearing chunk is now retrievable, not that a generated
+  answer today would use it. Production generation is not wired to this
+  recursive loop (see "What this does not change" below). The chunk-level
+  gap this project has tracked since Day 14 (`regression_suite.py`'s
+  `retrieval-miss-q091` case, `expected_missing_terms=["Band 3"]`) closes
+  under a targeted reformulation, not a deeper pool — `pool_size`/`top_k`
+  were left at the existing `MULTI_DOC_RETRIEVAL_CONFIG` values for both
+  passes; only the query text changed.
 
 ### Q092 before/after (real, live pipeline run, 2026-09-25)
 
@@ -3437,7 +3472,10 @@ Reported per-document, not blended, per the Day 16 contract:
   Enhanced Due Diligence before activation and formal approval from
   Legal").
 - Merged context: `final_missing_doc_ids = []`.
-- **Verdict: fully fixed** — better than Day 15's diagnosis anticipated.
+- **Verdict: retrieval-context gap fully fixed for both documents**
+  (production generation not yet wired to use this recursive context — see
+  the same caveat in Q091's verdict above) — better than Day 15's diagnosis
+  anticipated.
   Day 15 explicitly flagged `CONTRACT-005` as a reranker-judgment miss that
   "a bigger `pool_size` cannot fix" (confirmed correct here — `pool_size`
   was not the lever used) and `POL-002` as a combined first-stage/fusion +
@@ -3489,7 +3527,8 @@ than applied globally.
 
 ./.venv/bin/python src/agentic_retrieval.py
 # Q001, Q005: no_missing_evidence (controls hold)
-# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-4 recovered)
+# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-6 recovered;
+#       chunk-5 not retrieved, which is fine under the OR-semantics check)
 # Q092: missing_doc -> fixed_after_second_pass (CONTRACT-005 AND POL-002 both recovered)
 ```
 

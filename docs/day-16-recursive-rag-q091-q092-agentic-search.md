@@ -47,7 +47,7 @@ Turn Day 15's measured Week 3 gaps into the first small Week 4 agentic retrieval
 
 Two cases anchor the day:
 
-1. **Q091** — first-pass and repaired `multi_doc` retrieval now bring `POL-001` into context, but not the exact `POL-001::chunk-4` approval-band threshold chunk needed for the answer to state `Band 3`. The current suite keeps this visible as `term-level gap OPEN: missing ['Band 3']`.
+1. **Q091** — first-pass and repaired `multi_doc` retrieval now bring `POL-001` into context, but not the approval-band threshold chunk needed for the answer to state `Band 3`. The current suite keeps this visible as `term-level gap OPEN: missing ['Band 3']`. **Correction (code review, 2026-09-25):** this doc originally named `POL-001::chunk-4` as that chunk. It does not contain "Band 3" — reading the actual chunk text shows the real threshold sentence is duplicated across `POL-001::chunk-5` and `POL-001::chunk-6`. See `docs/eval-report.md`'s Day 16 section for the full correction; the mentions of `chunk-4` further down in this route doc are left as-is as the historical record of what was planned at kickoff.
 2. **Q092** — both default and repaired configs still miss `CONTRACT-005` and `POL-002`. Day 15 diagnosed two causes: `CONTRACT-005` is found by first-stage retrieval but demoted by the reranker; `POL-002` is weaker in first-stage/fusion and still not promoted into generation context even under a deeper diagnostic pool.
 
 By the end of the day, Juan should have a minimal recursive-retrieval contract that says: when do we trigger a second pass, what reformulation do we run, what changed in the evidence, and when do we stop?

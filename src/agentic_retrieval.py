@@ -9,11 +9,13 @@ ceiling, in two genuinely different ways:
 
 - **Q091** ("...EUR 120,000 SaaS renewal...") - the missing *document*
   (`POL-001`) was already repaired in Day 14, but the answer still can't
-  state the exact "Band 3" approval threshold, because the one *chunk* that
-  carries it (`POL-001::chunk-4`) is not the chunk retrieval happened to
-  surface (`POL-001::chunk-3`, which explains HOW total committed value is
-  calculated, not the bands themselves). This is a **chunk-level** gap
-  inside an already-present document.
+  state the exact "Band 3" approval threshold, because the chunk(s) that
+  carry it (`POL-001::chunk-5`/`POL-001::chunk-6` - the fixed-size
+  overlapping chunker duplicated the "Band 3" sentence across both) are not
+  the chunk retrieval happened to surface (`POL-001::chunk-3`, which
+  explains HOW total committed value is calculated, not the bands
+  themselves). This is a **chunk-level** gap inside an already-present
+  document.
 - **Q092** ("...new cleaning contractor starts on site?") - two *documents*
   (`CONTRACT-005`, `POL-002`) never reach the generation context at all, for
   two DIFFERENT root causes measured in `docs/eval-report.md`'s Day 15
@@ -83,6 +85,12 @@ TRIGGER_MISSING_CHUNK = "missing_chunk"
 
 STOP_NO_MISSING_EVIDENCE = "no_missing_evidence"
 STOP_NO_FOLLOWUP_QUERY_DEFINED = "trigger_detected_no_followup_query_defined"
+# NOTE on what "fixed" means here: STOP_FIXED_AFTER_SECOND_PASS means the
+# previously-missing doc_id/chunk_id reached the MERGED RETRIEVAL CONTEXT -
+# nothing more. This module never calls generation.generate_answer, so it
+# makes no claim about what a generated answer would say with that context.
+# "Fixed" is a retrieval-context claim, not an answer-quality claim - keep
+# that distinction explicit in anything printed or written from this state.
 STOP_FIXED_AFTER_SECOND_PASS = "fixed_after_second_pass"
 STOP_STILL_MISSING_AFTER_MAX_PASSES = "still_missing_after_max_passes"
 
@@ -100,18 +108,30 @@ MERGE_POLICY_DESCRIPTION = (
 # ---------------------------------------------------------------------------
 # Day 16's own per-query decision table: for each query this experiment
 # targets, the ONE reformulated follow-up query to try, plus (for Q091 only)
-# the specific chunk that has to reach context for the gap to count as
-# fixed. This is the "deterministic mapping from known failure signal to
-# known follow-up query" the route doc explicitly allows for Day 16 ("Keep
-# the first version boring and inspectable" - Block 2). Q001 and Q005 have
-# no entry here on purpose: they are the no-second-pass controls, and their
+# the chunk(s) that have to reach context for the gap to count as fixed.
+# This is the "deterministic mapping from known failure signal to known
+# follow-up query" the route doc explicitly allows for Day 16 ("Keep the
+# first version boring and inspectable" - Block 2). Q001 and Q005 have no
+# entry here on purpose: they are the no-second-pass controls, and their
 # absence is not a special case in the code below - see `decide_trigger`,
 # which simply never finds anything missing for them in the first place.
 #
 # Q091's follow-up query is copied verbatim from the route doc's own worked
 # example (see docs/day-16-recursive-rag-q091-q092-agentic-search.md,
 # "Recursive RAG is a measured retry" section): it targets the exact EUR
-# figures and the "Band 3" vocabulary that only live in POL-001::chunk-4.
+# figures and the "Band 3" vocabulary.
+#
+# CORRECTION (found in code review, 2026-09-25): the original version of
+# this override pointed `required_chunk_ids` at `POL-001::chunk-4`. Reading
+# the actual chunk text directly from `chunking.chunk_corpus` shows that is
+# wrong - chunk-4 only covers the approval-bands intro and Band 1; the "Band
+# 3 (above 50,000 up to and including 250,000): approval by the VP
+# Procurement" sentence Q091 actually needs lives in `POL-001::chunk-5` AND
+# `POL-001::chunk-6` (the fixed-size overlapping chunker duplicated that one
+# sentence across both, because it falls in their overlap window). Since
+# either chunk carries the same fact, the correct requirement is "at least
+# one of these two is present," not "chunk-4 is present" - see
+# `evaluate_missing_evidence` below for the OR-semantics this implies.
 #
 # Q092's follow-up query is built directly from the Day 15 root-cause
 # diagnostic (docs/eval-report.md's "Root-cause diagnostic for Q092"
@@ -123,18 +143,21 @@ MERGE_POLICY_DESCRIPTION = (
 # 16 contract caps every query at exactly one extra pass, so Q092's two
 # different failure owners have to share that one shot, and are reported
 # separately afterward regardless of whether it worked for both, one, or
-# neither (see `run_recursive_retrieval`'s `missing_doc_status` field).
+# neither (see `run_recursive_retrieval`'s `missing_doc_status` field). Q092
+# has no chunk-level requirement at all - its gap is document-level (the
+# documents never reach context, full stop), so `acceptable_chunk_ids` is
+# empty and only the doc-level check in `evaluate_missing_evidence` applies.
 AGENTIC_CASE_OVERRIDES = {
     "Q091": {
         "followup_query": "approval bands EUR 50,000 250,000 Band 3 VP Procurement",
-        "required_chunk_ids": ("POL-001::chunk-4",),
+        "acceptable_chunk_ids": ("POL-001::chunk-5", "POL-001::chunk-6"),
     },
     "Q092": {
         "followup_query": (
             "cleaning contractor high-risk supplier Enhanced Due Diligence "
             "Legal approval recruitment fees subcontracting insurance"
         ),
-        "required_chunk_ids": (),
+        "acceptable_chunk_ids": (),
     },
 }
 
@@ -147,7 +170,7 @@ AGENTIC_CASE_OVERRIDES = {
 # ---------------------------------------------------------------------------
 
 
-def evaluate_missing_evidence(query_row, sources, required_chunk_ids=()):
+def evaluate_missing_evidence(query_row, sources, acceptable_chunk_ids=()):
     """Compare `sources` against what this query needs, at two granularities.
 
     Document-level: reuses `generation_eval.primary_expected_doc_ids` (the
@@ -157,20 +180,34 @@ def evaluate_missing_evidence(query_row, sources, required_chunk_ids=()):
     already runs per generated answer, applied here directly to a retrieval
     result. This is what catches Q092's CONTRACT-005/POL-002 gap.
 
-    Chunk-level: `required_chunk_ids` is empty for every query except Q091
+    Chunk-level: `acceptable_chunk_ids` is empty for every query except Q091
     (see `AGENTIC_CASE_OVERRIDES`) - a document can be "present" in context
     while the one chunk that actually carries the needed fact is not (Day
     14's `chunk-gap-q016` case proved this pattern first). This is what
-    catches Q091's "POL-001 is there, but not chunk-4" gap - deterministically,
-    from chunk ids alone, with no LLM call needed to know the fact is
-    probably missing (see the module docstring's "Recursive RAG, defined"
-    section for why this chunk-level check is the trigger signal instead of
-    checking the generated answer's prose for the word "Band 3").
+    catches Q091's "POL-001 is there, but not the Band 3 chunk" gap -
+    deterministically, from chunk ids alone, with no LLM call needed to know
+    the fact is probably missing (see the module docstring's "Recursive RAG,
+    defined" section for why this chunk-level check is the trigger signal
+    instead of checking the generated answer's prose for the word "Band 3").
+
+    `acceptable_chunk_ids` is evaluated with OR semantics, not AND: the
+    chunk-level requirement is satisfied if ANY ONE of them is present, not
+    only if all of them are. This matters concretely for Q091 - the corpus's
+    fixed-size overlapping chunker happens to duplicate the "Band 3" approval
+    sentence across two adjacent chunks (`POL-001::chunk-5` and
+    `POL-001::chunk-6`), and either one is equally sufficient evidence that
+    the fact reached context. Requiring both would be a stricter (and
+    factually wrong) standard than what the underlying fact actually needs.
     """
     missing_doc_ids = sorted(primary_expected_doc_ids(query_row) - context_doc_ids(sources))
 
     actual_chunk_ids = {source["chunk_id"] for source in sources}
-    missing_chunk_ids = sorted(set(required_chunk_ids) - actual_chunk_ids)
+    if acceptable_chunk_ids and not (set(acceptable_chunk_ids) & actual_chunk_ids):
+        # None of the acceptable chunks reached context: report the whole
+        # acceptable set as "missing" (any one of these would have counted).
+        missing_chunk_ids = sorted(acceptable_chunk_ids)
+    else:
+        missing_chunk_ids = []
 
     return {"missing_doc_ids": missing_doc_ids, "missing_chunk_ids": missing_chunk_ids}
 
@@ -283,7 +320,7 @@ def run_recursive_retrieval(query_row, retrieve_fn, case_overrides=None):
 
     query_id = query_row["query_id"]
     case_override = case_overrides.get(query_id, {})
-    required_chunk_ids = case_override.get("required_chunk_ids", ())
+    acceptable_chunk_ids = case_override.get("acceptable_chunk_ids", ())
 
     # Step 1: first pass, under this query's normal production config.
     config = retrieval_config_for_query_type(query_row["query_type"])
@@ -291,7 +328,7 @@ def run_recursive_retrieval(query_row, retrieve_fn, case_overrides=None):
     first_pass_sources = retrieve_fn(first_pass_query, config)
 
     # Step 2: evaluate.
-    first_pass_missing = evaluate_missing_evidence(query_row, first_pass_sources, required_chunk_ids)
+    first_pass_missing = evaluate_missing_evidence(query_row, first_pass_sources, acceptable_chunk_ids)
 
     state = {
         "query_id": query_id,
@@ -300,6 +337,7 @@ def run_recursive_retrieval(query_row, retrieve_fn, case_overrides=None):
         "first_pass_chunk_ids": sorted(source["chunk_id"] for source in first_pass_sources),
         "first_pass_missing_doc_ids": first_pass_missing["missing_doc_ids"],
         "first_pass_missing_chunk_ids": first_pass_missing["missing_chunk_ids"],
+        "acceptable_chunk_ids": sorted(acceptable_chunk_ids),
         "trigger_reason": None,
         "followup_query": None,
         "second_pass_doc_ids": None,
@@ -336,7 +374,7 @@ def run_recursive_retrieval(query_row, retrieve_fn, case_overrides=None):
     merged_sources = merge_sources(first_pass_sources, second_pass_sources)
     state["merge_policy"] = MERGE_POLICY_DESCRIPTION
 
-    final_missing = evaluate_missing_evidence(query_row, merged_sources, required_chunk_ids)
+    final_missing = evaluate_missing_evidence(query_row, merged_sources, acceptable_chunk_ids)
     state["final_missing_doc_ids"] = final_missing["missing_doc_ids"]
     state["final_missing_chunk_ids"] = final_missing["missing_chunk_ids"]
 
@@ -396,21 +434,38 @@ DEMO_QUERY_IDS = ["Q001", "Q005", "Q091", "Q092"]
 
 
 def _print_case_trace(state):
+    # Chunk ids are printed alongside doc ids (not just doc ids) because
+    # Day 16's core evidence for Q091 is chunk-level: "POL-001 is in
+    # context" is not the claim being tested, "the Band 3 chunk is in
+    # context" is. Printing only doc ids here would hide exactly the signal
+    # this experiment exists to show, and would force a reader to go run a
+    # separate ad-hoc probe (as the code-review that caught the original
+    # chunk-4/chunk-5/chunk-6 mixup had to) to see it.
     print(f"\n{state['query_id']}: {state['first_pass_query']}")
-    print(f"  first-pass docs in context:   {state['first_pass_doc_ids']}")
-    print(f"  first-pass missing doc(s):    {state['first_pass_missing_doc_ids'] or '(none)'}")
-    print(f"  first-pass missing chunk(s):  {state['first_pass_missing_chunk_ids'] or '(none)'}")
-    print(f"  trigger reason:               {state['trigger_reason'] or '(no trigger - control case)'}")
+    print(f"  first-pass docs in context:    {state['first_pass_doc_ids']}")
+    print(f"  first-pass chunks in context:  {state['first_pass_chunk_ids']}")
+    print(f"  first-pass missing doc(s):     {state['first_pass_missing_doc_ids'] or '(none)'}")
+    print(f"  first-pass missing chunk(s):   {state['first_pass_missing_chunk_ids'] or '(none)'}")
+    print(f"  trigger reason:                {state['trigger_reason'] or '(no trigger - control case)'}")
 
     if state["followup_query"] is None:
-        print(f"  stop reason:                  {state['stop_reason']}")
+        print(f"  stop reason:                   {state['stop_reason']}")
         return
 
-    print(f"  follow-up query:              {state['followup_query']!r}")
-    print(f"  second-pass docs in context:  {state['second_pass_doc_ids']}")
-    print(f"  merge policy:                 {state['merge_policy']}")
-    print(f"  final missing doc(s):         {state['final_missing_doc_ids'] or '(none)'}")
-    print(f"  final missing chunk(s):       {state['final_missing_chunk_ids'] or '(none)'}")
+    print(f"  follow-up query:               {state['followup_query']!r}")
+    print(f"  second-pass docs in context:   {state['second_pass_doc_ids']}")
+    print(f"  second-pass chunks in context: {state['second_pass_chunk_ids']}")
+    print(f"  merge policy:                  {state['merge_policy']}")
+    print(f"  final missing doc(s):          {state['final_missing_doc_ids'] or '(none)'}")
+    print(f"  final missing chunk(s):        {state['final_missing_chunk_ids'] or '(none)'}")
+
+    if state["acceptable_chunk_ids"]:
+        # Required evidence, spelled out explicitly: which chunk(s) would
+        # have satisfied the chunk-level requirement, and whether any of
+        # them actually reached the merged context (only one needs to -
+        # see evaluate_missing_evidence's OR-semantics docstring).
+        verdict = "REACHED merged context" if not state["final_missing_chunk_ids"] else "still MISSING"
+        print(f"  chunk-level requirement (any one of {state['acceptable_chunk_ids']} suffices): {verdict}")
 
     if state["missing_doc_status"]:
         print("  per-document outcome (reported separately, not blended):")
@@ -418,7 +473,7 @@ def _print_case_trace(state):
             verdict = "RECOVERED" if status["found_after_merge"] else "still missing"
             print(f"    {doc_id}: {verdict}")
 
-    print(f"  stop reason:                  {state['stop_reason']}")
+    print(f"  stop reason:                   {state['stop_reason']}")
 
 
 def _print_summary_table(states):

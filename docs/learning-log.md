@@ -3077,10 +3077,13 @@ Notes:
   fixed — confirmed today by a second measurement path, not just Day 14's
   fixture. What remains is a missing-*chunk* gap one level deeper: the
   POL-001 chunk that DOES reach context (`chunk-3`) explains how total
-  committed value is calculated, not the actual Band 1/2/3 EUR thresholds
-  (`chunk-4`, never retrieved). `expected_missing_terms=["Band 3"]` in
-  `regression_suite.py` keeps this a tracked, asserted gap, not a silently
-  passing green row.
+  committed value is calculated, not the actual Band 3 EUR threshold, which
+  lives in `chunk-5`/`chunk-6` (never retrieved) — [Day 16 correction,
+  2026-09-25: an earlier draft of this note said `chunk-4`; that chunk only
+  covers the approval-bands intro and Band 1, not Band 3 — see the Day 16
+  entry below for the corrected chunk ids, confirmed by reading the actual
+  chunk text]. `expected_missing_terms=["Band 3"]` in `regression_suite.py`
+  keeps this a tracked, asserted gap, not a silently passing green row.
 - **Q093**: the missing `CONTRACT-001` problem remains fixed — reconfirmed
   today (R@5 0.750 → 1.000, all primary docs reach context under the
   repaired config).
@@ -3151,10 +3154,13 @@ Notes:
 - **Q091's `Band 3` term/chunk gap.** Owner: retrieval targeting for
   POL-001 (two different chunks answer two different relevant questions).
   Impact: the answer correctly declines to state the exact approval band
-  rather than guessing. Next signal: `POL-001::chunk-4` reaching context
+  rather than guessing. Next signal: the Band 3 chunk reaching context
   (checkable the same way `chunk-gap-q016` already checks
-  `GUIDE-001::chunk-2` — a real `required_chunk_ids` assertion), or a
-  deliberate, asserted decision that the band stays unstated.
+  `GUIDE-001::chunk-2` — a real chunk-id assertion), or a deliberate,
+  asserted decision that the band stays unstated. [Day 16 correction,
+  2026-09-25: this was written as `POL-001::chunk-4` reaching context;
+  Day 16 found chunk-4 does not contain Band 3 at all — the real target is
+  `POL-001::chunk-5`/`chunk-6`, either one.]
 - **Q092's missing-doc gap (new today).** Owner: retrieval — a reranker
   relevance-judgment miss for CONTRACT-005, plus a combined
   first-stage/fusion + reranker-ranking miss for POL-002. Impact: any real
@@ -3308,39 +3314,62 @@ differ, and only reading the source catches that._
 
 | Query | First-pass signal | Follow-up query/action | Stop condition | Evidence owner |
 |---|---|---|---|---|
-| Q091 | `POL-001` present, but required chunk `POL-001::chunk-4` (the Band 1/2/3 EUR thresholds) absent — `missing_chunk` | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` | `POL-001::chunk-4` |
+| Q091 | `POL-001` present, but neither acceptable chunk (`POL-001::chunk-5` or `POL-001::chunk-6`, both carrying the Band 3 EUR threshold sentence) absent — `missing_chunk` | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` | `POL-001::chunk-5` / `POL-001::chunk-6` (either satisfies it) |
 | Q092 | `CONTRACT-005` and `POL-002` both absent — `missing_doc` | one combined query: `"cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance"` | `fixed_after_second_pass` | `CONTRACT-005` + `POL-002`, reported separately (see below) |
 | Q001 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once | n/a |
 | Q005 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once | n/a |
 
+> **Correction (code review, 2026-09-25):** the row above originally named
+> `POL-001::chunk-4` as the required chunk, and the code
+> (`AGENTIC_CASE_OVERRIDES["Q091"]["required_chunk_ids"]`) checked for it
+> too. That was wrong — a direct read of `chunking.chunk_corpus`'s output
+> shows `chunk-4` only has the approval-bands intro and Band 1, never "Band
+> 3". The real Band 3 sentence is duplicated (by the overlapping chunker)
+> across `POL-001::chunk-5` and `POL-001::chunk-6`. Fixed in
+> `src/agentic_retrieval.py` by renaming the field to
+> `acceptable_chunk_ids=("POL-001::chunk-5", "POL-001::chunk-6")` and
+> changing `evaluate_missing_evidence` to OR semantics (any ONE of them
+> reaching context satisfies the requirement — they are two overlapping
+> copies of the same fact, not two separate required facts). The live
+> second pass had already been retrieving `POL-001::chunk-6` all along, so
+> the experiment's conclusion did not change — only the code's own
+> self-check was corrected to actually verify the right thing. See
+> `tests/test_agentic_retrieval.py`'s new
+> `test_evaluate_missing_evidence_chunk_requirement_is_satisfied_by_any_one_acceptable_chunk`.
+
 Q091 and Q092 are handled by two structurally different trigger checks in
 `evaluate_missing_evidence` (`src/agentic_retrieval.py`): Q091's document
 (`POL-001`) is already present, so the document-level check passes and only
-the chunk-level check (`required_chunk_ids=("POL-001::chunk-4",)`) fires.
-Q092's two documents are absent entirely, so the document-level check fires
-directly — no chunk-level check was needed to detect this gap, matching Day
-15's diagnosis that Q092's failure is a document-level, not chunk-level,
-problem.
+the chunk-level check (`acceptable_chunk_ids=("POL-001::chunk-5",
+"POL-001::chunk-6")`) fires. Q092's two documents are absent entirely, so
+the document-level check fires directly — no chunk-level check was needed
+to detect this gap, matching Day 15's diagnosis that Q092's failure is a
+document-level, not chunk-level, problem.
 
 ### Q091 before/after evidence
 
 - First-pass context docs: `CONTRACT-004, FAQ-001, GUIDE-002, POL-001,
   POL-003, POL-008, SOP-001, SOP-006`.
 - First-pass chunk ids for `POL-001`: only `POL-001::chunk-3` (explains HOW
-  total committed value is calculated) — `POL-001::chunk-4` (the actual
-  Band 1/2/3 EUR thresholds) did NOT reach context. Confirmed via a direct
-  chunk-id list printed from `run_recursive_retrieval`'s state, not
-  inferred.
+  total committed value is calculated) — neither `POL-001::chunk-5` nor
+  `POL-001::chunk-6` (the two chunks that both carry the actual Band 3 EUR
+  threshold sentence) reached context. Confirmed via a direct chunk-id list
+  printed from `run_recursive_retrieval`'s state, not inferred.
 - Follow-up query used: `"approval bands EUR 50,000 250,000 Band 3 VP
   Procurement"` (copied from the route doc's own worked example).
-- Second-pass chunk ids included `POL-001::chunk-4` directly.
+- Second-pass chunk ids included `POL-001::chunk-6` (not `chunk-5` — only
+  one of the two acceptable chunks came back, which the OR-semantics check
+  correctly treats as sufficient).
 - Merged context: `final_missing_chunk_ids = []`.
-- **Final verdict: fixed.** Note this is a chunk-level check (does the
-  fact-bearing chunk reach context), not a live check of the generated
-  answer text for the literal string "Band 3" — no LLM call was made in
-  this experiment; the chunk-id signal is the deterministic proxy the route
-  doc's own "chunk-gap-q016" precedent (Day 14) already established as
-  valid.
+- **Final verdict: the retrieval-context gap is fixed.** To be precise about
+  what "fixed" means: this is a chunk-level retrieval-context check (does a
+  fact-bearing chunk reach context), not a live check of a generated
+  answer's text for the literal string "Band 3" — no LLM call was made in
+  this experiment, and `agentic_retrieval.py` never calls
+  `generation.generate_answer`. The chunk-id signal is the deterministic
+  proxy the route doc's own "chunk-gap-q016" precedent (Day 14) already
+  established as valid; production generation is not wired to use this
+  recursive context (see "What remains weak" below).
 
 ### Q092 before/after evidence
 
@@ -3406,14 +3435,16 @@ observation from one live run — it is a checked contract.
 
 ./.venv/bin/python src/agentic_retrieval.py
 # Q001, Q005: no_missing_evidence (controls hold)
-# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-4 recovered)
+# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-6 recovered;
+#       chunk-5 not retrieved, which the OR-semantics check treats as fine)
 # Q092: missing_doc -> fixed_after_second_pass (CONTRACT-005 AND POL-002 both recovered)
 ```
 
 ### What improved
 
-- Q091's tracked chunk-level gap (`POL-001::chunk-4` / "Band 3", open since
-  Day 14) is fixed by the recursive loop's second pass.
+- Q091's tracked chunk-level gap (the "Band 3" EUR threshold sentence,
+  `POL-001::chunk-5`/`chunk-6`, open since Day 14) has its retrieval-context
+  gap fixed by the recursive loop's second pass.
 - Q092's document-level gap (`CONTRACT-005`, `POL-002`, diagnosed but NOT
   fixed by Day 14's repair, per Day 15) is fixed too — for both documents,
   from a single combined second pass.
@@ -3476,10 +3507,10 @@ open._
 gate?** Because Week 3 (Days 7-15) produced deterministic, measured
 evidence of specific retrieval gaps - not because agents seemed like an
 interesting thing to add. Recursive retrieval is justified by two concrete,
-tracked failures: Q091's `POL-001::chunk-4` / "Band 3" gap and Q092's
-`CONTRACT-005`/`POL-002` gap, both pinned down to exact doc/chunk ids in
-the regression suite and Day 15's full slice remeasurement, before any
-agentic code was written.
+tracked failures: Q091's "Band 3" chunk-level gap (`POL-001::chunk-5`/
+`chunk-6`) and Q092's `CONTRACT-005`/`POL-002` gap, both pinned down to
+exact doc/chunk ids in the regression suite and Day 15's full slice
+remeasurement, before any agentic code was written.
 
 **2. What is the difference between recursive RAG and just increasing
 `top_k`?** `top_k`/`pool_size` is a static, blind widening of how much
@@ -3497,12 +3528,13 @@ on its own.
 
 **3. Why is Q091 a good first recursive-RAG case?** The document-level miss
 was already repaired in Day 14 - what remained was one narrow, precisely
-defined gap: `POL-001` is in context, but not the one chunk
-(`POL-001::chunk-4`) with the actual approval-band EUR thresholds. That
+defined gap: `POL-001` is in context, but not the chunk(s)
+(`POL-001::chunk-5`/`chunk-6` - the overlapping chunker duplicated the same
+sentence across both) with the actual Band 3 approval EUR threshold. That
 precision is what makes a targeted follow-up query possible: retrieve
 specifically for "approval bands EUR thresholds," then check
-deterministically for `POL-001::chunk-4`. Exactly one missing fact, one
-obvious way to phrase a query toward it.
+deterministically for whether either acceptable chunk reached context.
+Exactly one missing fact, one obvious way to phrase a query toward it.
 
 **4. Why is Q092 harder than Q091?** It has two missing primary documents
 with two different failure mechanisms, per Day 15's diagnosis:
