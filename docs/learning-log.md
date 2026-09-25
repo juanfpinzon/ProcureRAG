@@ -3206,15 +3206,18 @@ Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrai
 
 ### Objective
 
-_TODO: Fill in after building._
-
-Expected shape:
-
-- Explain how the Day 16 recursive-retrieval work starts from Week 3's
-  measured failures, not from generic agent enthusiasm.
-- Name the exact trigger signal chosen for Q091 and Q092.
-- State whether today's artifact is a working recursive retrieval loop or the
-  fallback decision/evidence contract.
+Day 16 turns Day 15's two measured Week 3 gaps into the first Week 4
+agentic-retrieval experiment: Q091's chunk-level `Band 3` gap (`POL-001` is
+retrieved, but not the one chunk with the actual EUR thresholds) and
+Q092's document-level gap (`CONTRACT-005`/`POL-002` never reach context,
+for two different root causes). Both trigger signals are deterministic and
+id-based, not a vague "ask again": Q091 triggers on a missing *required
+chunk* inside an already-present document; Q092 triggers on missing
+*primary documents*. Today's artifact is a **working recursive-retrieval
+loop** (`src/agentic_retrieval.py`, Block 3A — the primary route, not the
+Block 3B fallback contract), implemented and verified against the real,
+live retrieval pipeline, not just designed on paper. See
+`docs/eval-report.md`'s new "Day 16" section for the full evidence.
 
 ### Baseline verification at kickoff
 
@@ -3239,126 +3242,316 @@ Expected shape:
 
 ### Chapter 11 notes
 
-_TODO: Fill in._
+_Drafted by Claude at Juan's request, for review — not a transcript of
+Boot.dev's or LangChain Academy's actual lesson wording. This is general
+recursive-RAG / agentic-search vocabulary mapped directly onto what
+`agentic_retrieval.py` actually does. Cross-check against the real Chapter
+11 lessons and Academy modules before treating this as "my notes" — the
+concepts should line up, but the exact terms Boot.dev/LangChain use may
+differ, and only reading the source catches that._
 
-Expected shape:
+**Recursive RAG**
 
-- `Recursive RAG`: what second-pass retrieval means, when it triggers, and how
-  it stops.
-- `Agentic Search`: what makes the loop agentic/bounded rather than just a
-  bigger `top_k`.
-- LangGraph vocabulary used, if any: state, node, conditional edge, router,
-  agent.
+- Core idea: a single retrieval pass has a ceiling. Sometimes the first
+  retrieved context is incomplete or misses a critical fact, so instead of
+  accepting weak context (or blindly widening `top_k`), the system should
+  detect the gap and run a second, *targeted* retrieval pass.
+- Trigger: not "always retrieve twice." First-pass evidence is evaluated
+  against a concrete signal (here: a missing primary `doc_id`, or a missing
+  required `chunk_id`) — a second pass only fires when that check actually
+  finds something missing.
+- Who decides the next query: this can be a fixed deterministic rule, an
+  LLM that reformulates based on what's missing, or (what Day 16 built) a
+  hand-picked per-query mapping (`AGENTIC_CASE_OVERRIDES`). The route doc
+  explicitly allowed the deterministic-mapping version for one day's
+  experiment — "boring and inspectable" beats a clever reformulator with no
+  evidence behind it yet.
+- Stop condition: a hard cap, not a loop. Here: exactly one extra pass,
+  full stop, regardless of outcome. Recursive RAG is a small number of
+  bounded, evidence-driven retries — not recursion in the general
+  programming sense.
+- Evidence of success/failure: a concrete, previously-missing document or
+  chunk either appears in the merged context or it doesn't. Both outcomes
+  are reported as a named `stop_reason` (`fixed_after_second_pass` /
+  `still_missing_after_max_passes`) — a failed second pass is not hidden,
+  it's data.
+
+**Agentic Search**
+
+- Core idea: a bounded decision loop that chooses whether to reformulate,
+  retrieve again, or stop — using explicit state and a clear stop
+  condition. Much closer to a small state machine than to an open-ended
+  "agent" that can do anything.
+- What makes this "agentic" is NOT that an LLM freely decides everything —
+  no LLM is involved in the retrieve-again decision at all. It's that the
+  system carries explicit state (first-pass evidence, trigger reason,
+  follow-up query, second-pass evidence, merge policy, final evidence, stop
+  reason) through a control-flow function that reads that state and picks
+  the next action deterministically.
+- Contrast with a generic agent framework: no open-ended tool selection, no
+  unbounded iteration, no hidden LLM call deciding "what to do next." A
+  plain Python function is the whole agent — which is exactly the "no large
+  framework required" point the route doc made for Day 16's scope.
+
+**LangGraph vocabulary, mapped onto `agentic_retrieval.py`:**
+
+| LangGraph term | What it maps to here |
+|---|---|
+| state | the dict `run_recursive_retrieval` builds/returns: query, first-pass evidence, trigger reason, follow-up query, second-pass evidence, merge policy, final evidence, stop reason |
+| node | each of the six steps: run first pass → evaluate → decide → run second pass → merge → re-evaluate |
+| edge | the sequential call from one step to the next inside `run_recursive_retrieval` |
+| conditional edge | `decide_trigger`'s branch (missing_doc / missing_chunk / none) and the "is a follow-up query known?" check — these decide whether the loop proceeds to a second pass or stops |
+| router | `decide_trigger` itself, choosing which trigger reason (if any) applies |
+| agent | `run_recursive_retrieval` as a whole, viewed as one bounded, evidence-driven decision-maker |
 
 ### Recursive retrieval trigger contract
 
-_TODO: Fill in._
-
-Expected table shape:
-
 | Query | First-pass signal | Follow-up query/action | Stop condition | Evidence owner |
 |---|---|---|---|---|
-| Q091 | TODO | TODO | TODO | TODO |
-| Q092 | TODO | TODO | TODO | TODO |
-| Control | TODO | TODO | TODO | TODO |
+| Q091 | `POL-001` present, but required chunk `POL-001::chunk-4` (the Band 1/2/3 EUR thresholds) absent — `missing_chunk` | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` | `POL-001::chunk-4` |
+| Q092 | `CONTRACT-005` and `POL-002` both absent — `missing_doc` | one combined query: `"cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance"` | `fixed_after_second_pass` | `CONTRACT-005` + `POL-002`, reported separately (see below) |
+| Q001 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once | n/a |
+| Q005 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once | n/a |
 
-Hints:
-
-- Q091 should separate `POL-001` document presence from the exact
-  `POL-001::chunk-4` / `Band 3` gap.
-- Q092 should separate `CONTRACT-005`'s reranker miss from `POL-002`'s
-  weaker first-stage/fusion + reranker miss.
+Q091 and Q092 are handled by two structurally different trigger checks in
+`evaluate_missing_evidence` (`src/agentic_retrieval.py`): Q091's document
+(`POL-001`) is already present, so the document-level check passes and only
+the chunk-level check (`required_chunk_ids=("POL-001::chunk-4",)`) fires.
+Q092's two documents are absent entirely, so the document-level check fires
+directly — no chunk-level check was needed to detect this gap, matching Day
+15's diagnosis that Q092's failure is a document-level, not chunk-level,
+problem.
 
 ### Q091 before/after evidence
 
-_TODO: Fill in._
-
-Record:
-
-- First-pass retrieved doc ids and chunk ids.
-- Whether `POL-001::chunk-4` reached context.
-- Whether `Band 3` remains in `missing_terms`.
-- Follow-up query used.
-- Second-pass retrieved doc ids and chunk ids.
-- Final verdict: fixed, still open, or sharper diagnosis.
+- First-pass context docs: `CONTRACT-004, FAQ-001, GUIDE-002, POL-001,
+  POL-003, POL-008, SOP-001, SOP-006`.
+- First-pass chunk ids for `POL-001`: only `POL-001::chunk-3` (explains HOW
+  total committed value is calculated) — `POL-001::chunk-4` (the actual
+  Band 1/2/3 EUR thresholds) did NOT reach context. Confirmed via a direct
+  chunk-id list printed from `run_recursive_retrieval`'s state, not
+  inferred.
+- Follow-up query used: `"approval bands EUR 50,000 250,000 Band 3 VP
+  Procurement"` (copied from the route doc's own worked example).
+- Second-pass chunk ids included `POL-001::chunk-4` directly.
+- Merged context: `final_missing_chunk_ids = []`.
+- **Final verdict: fixed.** Note this is a chunk-level check (does the
+  fact-bearing chunk reach context), not a live check of the generated
+  answer text for the literal string "Band 3" — no LLM call was made in
+  this experiment; the chunk-id signal is the deterministic proxy the route
+  doc's own "chunk-gap-q016" precedent (Day 14) already established as
+  valid.
 
 ### Q092 before/after evidence
 
-_TODO: Fill in._
+Recorded per-document, per the route doc's requirement not to blend them:
 
-Record separately:
-
-- `CONTRACT-005`: first-stage / reranker behavior and whether it reaches
-  generation context after the second pass.
-- `POL-002`: first-stage / fusion / reranker behavior and whether it reaches
-  generation context after the second pass.
-- Whether the result proves a fix, proves a different repair owner, or remains
-  blocked.
+- First-pass context docs: `CONTRACT-006, FAQ-001, GUIDE-005, POL-001,
+  POL-004, POL-005, POL-006, POL-008, SOP-006` — `CONTRACT-005` and
+  `POL-002` both absent, matching Day 15 exactly.
+- ONE combined second pass (both documents share the single allowed extra
+  pass — the Day 16 contract caps every query at one extra pass, not one
+  per missing document).
+- `CONTRACT-005`: **RECOVERED.** Second pass surfaced
+  `CONTRACT-005::chunk-3` — verified by reading the actual chunk text
+  (`"Labour Standards and Living Wage... Because facilities services is a
+  high-risk category... Spanish sectoral collective agreement... living
+  wage"`) directly from `chunking.chunk_corpus`, not assumed from the doc
+  id alone.
+- `POL-002`: **RECOVERED.** Second pass surfaced `POL-002::chunk-8` and
+  `POL-002::chunk-9` — `chunk-8`'s text is the exact clause Q092's own
+  ground-truth evidence quotes verbatim ("High-risk suppliers require
+  Enhanced Due Diligence before activation and formal approval from
+  Legal").
+- Final verdict: **both recovered, fully fixed** — see "What improved"
+  below for why this is a more interesting result than a plain pass/fail.
 
 ### Control / no-second-pass evidence
 
-_TODO: Fill in._
+Both `Q001` and `Q005` stop with `no_missing_evidence` after exactly one
+`retrieve_fn` call:
 
-Expected shape:
+- `Q001`: `FAQ-001` and `POL-001` both already in first-pass context (single
+  primary doc, `POL-001`).
+- `Q005`: `FAQ-001`, `POL-001`, `SOP-008` all already in first-pass context
+  — the multi_doc query Day 15 already found "fine", now re-confirmed as a
+  control that the loop correctly leaves alone.
 
-- Name the control query (`Q001`, `Q005`, or another justified case).
-- Show why first-pass evidence is already complete.
-- Show the recursive loop does not trigger, or stops immediately with a clear
-  no-op reason.
+`tests/test_agentic_retrieval.py::test_no_trigger_control_only_calls_retrieve_fn_once`
+asserts the call-count-of-one behavior directly, so this is not just an
+observation from one live run — it is a checked contract.
 
 ### Verification evidence after Juan's build
 
-_TODO: Fill in with exact command output._
-
-Minimum expected commands:
-
 ```bash
 ./.venv/bin/pytest -q
+# 217 passed (206 baseline + 11 new tests in tests/test_agentic_retrieval.py)
+
 ./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
 ./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
 ./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 7/7 frozen fixture cases as_expected; 6/6 current retrieval-pipeline checks [OK]
+# unchanged from kickoff - agentic_retrieval.py is read-only, not wired into
+# generation.py or regression_suite.py
+
 ./.venv/bin/python src/multi_doc_slice_eval.py
-# plus the new Day 16 recursive retrieval command, if implemented
+# unchanged from kickoff: Q005 fine, Q016 addressed, Q091 doc-level fixed
+# (Band 3 chunk gap out of this script's scope), Q092 STILL missing
+# CONTRACT-005/POL-002 under both configs - confirms the single-pass
+# production pipeline is untouched by today's work
+
+./.venv/bin/python src/agentic_retrieval.py
+# Q001, Q005: no_missing_evidence (controls hold)
+# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-4 recovered)
+# Q092: missing_doc -> fixed_after_second_pass (CONTRACT-005 AND POL-002 both recovered)
 ```
 
 ### What improved
 
-_TODO: Fill in._
-
-Expected shape:
-
-- Which missing docs/chunks/terms moved from missing to present.
-- Which explanation became more interview-defensible.
-- Which checks or tests now make the behavior repeatable.
+- Q091's tracked chunk-level gap (`POL-001::chunk-4` / "Band 3", open since
+  Day 14) is fixed by the recursive loop's second pass.
+- Q092's document-level gap (`CONTRACT-005`, `POL-002`, diagnosed but NOT
+  fixed by Day 14's repair, per Day 15) is fixed too — for both documents,
+  from a single combined second pass.
+- The interview-relevant insight is not "a second pass helped" (expected)
+  but *why* it helped for Q092 specifically: Day 15 showed a bigger
+  `pool_size` (up to 200) could NOT rescue `CONTRACT-005`/`POL-002` past the
+  reranker cutoff. What worked instead was changing the query TEXT — a
+  cross-encoder reranker scores `(query, candidate)` jointly, so the same
+  chunk can score very differently against two different query phrasings
+  even with retrieval depth held constant. This is the concrete difference
+  between "increase `top_k`/`pool_size`" and "recursive retrieval" the
+  interview drill asks about (see `docs/eval-report.md`'s Day 16 section,
+  "Q092 before/after" for the full explanation).
+- 11 new deterministic tests (`tests/test_agentic_retrieval.py`) make the
+  trigger/merge/stop behavior repeatable and checked, not just
+  demonstrated once in a live run.
 
 ### What remains weak
 
-_TODO: Fill in._
-
-Expected shape:
-
-- Any Q091 residual gap (especially `Band 3` / `POL-001::chunk-4`).
-- Any Q092 residual gap, split by `CONTRACT-005` vs `POL-002`.
-- Cost/noise tradeoffs from running a second pass.
-- Whether LangGraph/framework integration is still deferred.
+- The recursive loop is a **standalone, read-only experiment**: it is not
+  wired into `generation.py`'s production retrieval path, so a real user
+  query today still only gets the original single-pass result.
+  `regression_suite.py`'s `retrieval-miss-q091` case still asserts
+  `expected_missing_terms=["Band 3"]` as an open gap — that assertion is
+  now stale relative to what this experiment shows is fixable, but closing
+  it for real requires wiring the merged context into an actual generation
+  + citation check, not just a chunk-id check.
+- The follow-up queries for Q091/Q092 are a **hand-picked, per-query-id
+  mapping** (`AGENTIC_CASE_OVERRIDES`), not a general reformulation
+  strategy — a query this module has not been taught a follow-up for stops
+  honestly (`trigger_detected_no_followup_query_defined`) rather than
+  guessing one. Generalizing this (e.g., building the follow-up query from
+  the missing document's own known clause vocabulary automatically) is
+  future work, not done today.
+- Q092's full recovery was a genuinely good outcome, but it is evidence
+  from ONE combined reformulated query on this specific corpus - it has not
+  been stress-tested against, say, a differently-worded but semantically
+  similar buyer question to see how sensitive the fix is to exact query
+  phrasing.
+- No cost/noise measurement was captured (e.g., total chunks retrieved
+  across both passes vs. one pass, or reranker call count) - the route
+  doc's "recursive retrieval can amplify noise and cost" concept is
+  demonstrated qualitatively (exactly one extra pass, controls prove
+  selectivity) but not quantified.
+- LangGraph/framework integration is still fully deferred, as scoped -
+  today's loop is plain Python functions with an injectable `retrieve_fn`,
+  not a LangGraph state graph.
 
 ### What I can now explain in an interview
 
-_TODO: Fill in._
+_Drafted by Claude at Juan's request, for review. The route doc's own
+instructions say to answer this drill "without notes" - reading this
+draft is not that exercise. Treat this as an answer key to check
+understanding against, or a starting point to rewrite in your own words,
+not as something to recite - the whole value of the drill is being able to
+produce this from memory, under a follow-up question, without the page
+open._
 
-Expected bullets:
+**1. Why did ProcureRAG move to recursive retrieval only after Week 3's
+gate?** Because Week 3 (Days 7-15) produced deterministic, measured
+evidence of specific retrieval gaps - not because agents seemed like an
+interesting thing to add. Recursive retrieval is justified by two concrete,
+tracked failures: Q091's `POL-001::chunk-4` / "Band 3" gap and Q092's
+`CONTRACT-005`/`POL-002` gap, both pinned down to exact doc/chunk ids in
+the regression suite and Day 15's full slice remeasurement, before any
+agentic code was written.
 
-- Recursive RAG as a conditional, bounded second retrieval pass driven by a
-  measured evidence gap.
-- Difference between static top-k/pool-size tuning and dynamic agentic search.
-- Why Q091 and Q092 require different trigger/repair logic.
-- How to prevent recursive retrieval from amplifying noise or running forever.
+**2. What is the difference between recursive RAG and just increasing
+`top_k`?** `top_k`/`pool_size` is a static, blind widening of how much
+context gets pulled - it has no idea whether the extra depth actually
+contains the missing fact. Day 15's own diagnostic proved this directly:
+pushing `pool_size` to 200 for Q092 still left `CONTRACT-005` and
+`POL-002` outside the reranker's top-10 cutoff. Recursive RAG is
+*conditional control flow*: inspect first-pass evidence, decide via a
+concrete trigger signal whether a targeted second query is needed, run it,
+and re-evaluate against real evidence. It can use `top_k`/`pool_size` as
+part of that second pass, but the lever that actually fixed Q092 was
+reformulating the query TEXT, which changes what a cross-encoder reranker
+scores each candidate against - something no `pool_size` increase can do
+on its own.
+
+**3. Why is Q091 a good first recursive-RAG case?** The document-level miss
+was already repaired in Day 14 - what remained was one narrow, precisely
+defined gap: `POL-001` is in context, but not the one chunk
+(`POL-001::chunk-4`) with the actual approval-band EUR thresholds. That
+precision is what makes a targeted follow-up query possible: retrieve
+specifically for "approval bands EUR thresholds," then check
+deterministically for `POL-001::chunk-4`. Exactly one missing fact, one
+obvious way to phrase a query toward it.
+
+**4. Why is Q092 harder than Q091?** It has two missing primary documents
+with two different failure mechanisms, per Day 15's diagnosis:
+`CONTRACT-005` is found by first-stage BM25 but the cross-encoder reranker
+demotes it (a reranker-judgment problem); `POL-002` has a weak
+first-stage/fusion signal to begin with and stays buried even under much
+deeper diagnostic pools (a first-stage-plus-reranker problem). One generic
+retry wasn't guaranteed to fix both. In this run, one combined reformulated
+query recovered both documents - but that was a measured outcome to
+verify, not something the diagnosis promised; the two failure owners still
+had to be checked and reported separately (`missing_doc_status`) rather
+than assumed fixed together just because the doc-level number went to
+zero.
+
+**5. What makes an agentic retrieval loop safe enough for a learning
+repo?** Bounded passes (exactly one extra pass, enforced in code, not just
+policy); explicit trigger signals computed from real doc/chunk ids, never
+from vibes or free-form LLM judgment; deterministic tests that never call
+an LLM or touch the network (`retrieve_fn` is injected, exactly like
+`reranking.rerank`'s `score_fn` or `generation.generate_answer`'s
+`client`); a no-second-pass control proving the loop is selective
+(`retrieve_fn` called exactly once for Q001/Q005, asserted in a test, not
+just eyeballed); an honest stop-reason vocabulary that can say "still
+missing" as easily as "fixed"; and evidence reported per-document/chunk
+instead of one blended pass/fail number.
+
+**6. When should recursive retrieval not run?** When first-pass evidence is
+already complete (Q001, Q005 here); when the query is a simple lookup with
+a clean, already-working control; when there's no measurable target to
+reformulate toward; or when a second pass would add noise/cost without a
+concrete evidence gap driving it. The trigger check makes "don't run it"
+the default and "run it" the exception that has to earn its keep with a
+real missing `doc_id` or `chunk_id` - not a hunch that more context might
+help.
 
 ### Next step
 
-_TODO: Fill in after review._
+Immediate: confirm the "What remains weak" items above, especially whether
+`regression_suite.py`'s Q091 fixture should be updated now that this
+experiment shows the chunk-level gap is fixable (a real decision - wiring
+the merged context into an actual generation call and re-capturing the
+fixture is more work than today's read-only measurement, and is worth a
+deliberate yes/no rather than doing it as a side effect of Day 16).
 
 Likely route if Day 16 is clean: move from the local recursive-retrieval
-contract into a small LangGraph-shaped state/edge representation, or into the
-next Week 4 focus from HER-269 (observability/trace evidence) if the agentic
-loop needs inspection before guardrails.
+contract into a small LangGraph-shaped state/edge representation, or into
+the next Week 4 focus from HER-269 (observability/trace evidence) if the
+agentic loop needs inspection before guardrails - Q092's "reformulation
+beat depth" finding is itself a concrete signal an observability layer
+should be able to show (which lever fixed which query), reinforcing that
+HER-269's trace-evidence work is not generic scope but directly motivated
+by today's result.

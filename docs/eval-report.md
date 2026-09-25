@@ -3362,6 +3362,166 @@ answer, run today, would likely do the same for whatever it's missing) —
 an agentic loop here is solving a retrieval-completeness problem, not a
 faithfulness problem the eval harness already catches.
 
+## Day 16: Recursive RAG pass for Q091/Q092 gaps
+
+Linear: HER-283. Route doc:
+`docs/day-16-recursive-rag-q091-q092-agentic-search.md`.
+
+Day 15 measured two ceilings a single retrieval pass could not clear: Q091's
+`POL-001::chunk-4` (the actual Band 1/2/3 EUR thresholds) never reaching
+context even though `POL-001` itself does, and Q092's `CONTRACT-005`/
+`POL-002` never reaching context at all, for two different root causes (a
+reranker-judgment miss vs. a combined first-stage/fusion + reranker miss —
+see "Root-cause diagnostic for Q092" above). Day 16 builds a small, bounded
+recursive-retrieval loop — `src/agentic_retrieval.py` — directly against
+those two measured gaps, plus two no-second-pass controls (`Q001`, `Q005`).
+
+**The loop, in one sentence:** run first-pass retrieval under the query's
+normal `retrieval_config_for_query_type` config → check for a missing
+primary document or a missing required chunk → if (and only if) something
+is missing AND a known targeted follow-up query exists for this case, run
+exactly one more retrieval pass with that follow-up query → merge
+(additive-only — the first pass is never modified or reordered) →
+re-check → stop. No loop, no LLM decision-maker, never more than one extra
+pass — see that module's own docstring for the full contract and why every
+decision is driven by a computed `doc_id`/`chunk_id`, never by re-reading
+generated prose.
+
+### Trigger contract
+
+| Query | First-pass signal | Follow-up query | Stop reason |
+|---|---|---|---|
+| Q091 | `POL-001` present, but required chunk `POL-001::chunk-4` absent (`missing_chunk`) | `"approval bands EUR 50,000 250,000 Band 3 VP Procurement"` | `fixed_after_second_pass` |
+| Q092 | `CONTRACT-005` and `POL-002` both absent (`missing_doc`) | `"cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance"` | `fixed_after_second_pass` |
+| Q001 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once |
+| Q005 (control) | nothing missing | — (never run) | `no_missing_evidence`, `retrieve_fn` called once |
+
+### Q091 before/after (real, live pipeline run, 2026-09-25)
+
+- First-pass context docs: `CONTRACT-004, FAQ-001, GUIDE-002, POL-001,
+  POL-003, POL-008, SOP-001, SOP-006`. First-pass chunk ids include
+  `POL-001::chunk-3` (HOW total committed value is calculated) but NOT
+  `POL-001::chunk-4` (the actual Band 1/2/3 EUR thresholds) — the exact
+  Day 14/15 residual gap, confirmed still present at Day 16 kickoff.
+- Second pass (`"approval bands EUR 50,000 250,000 Band 3 VP Procurement"`)
+  surfaced `POL-001::chunk-4` directly.
+- Merged context: `POL-001::chunk-4` present → `final_missing_chunk_ids = []`.
+- **Verdict: fixed.** The chunk-level gap this project has tracked since Day
+  14 (`regression_suite.py`'s `retrieval-miss-q091` case,
+  `expected_missing_terms=["Band 3"]`) closes under a targeted
+  reformulation, not a deeper pool — `pool_size`/`top_k` were left at the
+  existing `MULTI_DOC_RETRIEVAL_CONFIG` values for both passes; only the
+  query text changed.
+
+### Q092 before/after (real, live pipeline run, 2026-09-25)
+
+Reported per-document, not blended, per the Day 16 contract:
+
+- First-pass context docs: `CONTRACT-006, FAQ-001, GUIDE-005, POL-001,
+  POL-004, POL-005, POL-006, POL-008, SOP-006` — `CONTRACT-005` and
+  `POL-002` both absent, matching Day 15's diagnosis exactly.
+- ONE combined second pass (both docs share the single allowed extra
+  retrieval pass, per the Day 16 cap of one extra pass per query).
+- **`CONTRACT-005`: RECOVERED.** The second pass surfaced
+  `CONTRACT-005::chunk-3` — "Labour Standards and Living Wage... Because
+  facilities services is a high-risk category... Orion must comply with the
+  applicable Spanish sectoral collective agreement... living wage" —
+  directly on-topic for Q092's labour-standards ground truth, not a
+  coincidental document-level match (chunk text verified directly against
+  `chunking.chunk_corpus` output, not assumed from the doc id alone).
+- **`POL-002`: RECOVERED.** The second pass surfaced both
+  `POL-002::chunk-8` ("High risk covers... Enhanced Due Diligence") and
+  `POL-002::chunk-9` ("Enhanced Due Diligence adds adverse media
+  screening... anti-bribery... PEP...") — this is the exact clause Q092's
+  own ground-truth evidence quotes verbatim ("High-risk suppliers require
+  Enhanced Due Diligence before activation and formal approval from
+  Legal").
+- Merged context: `final_missing_doc_ids = []`.
+- **Verdict: fully fixed** — better than Day 15's diagnosis anticipated.
+  Day 15 explicitly flagged `CONTRACT-005` as a reranker-judgment miss that
+  "a bigger `pool_size` cannot fix" (confirmed correct here — `pool_size`
+  was not the lever used) and `POL-002` as a combined first-stage/fusion +
+  reranker miss where even a diagnostic `pool_size=200` left it outside the
+  cutoff. What actually worked was neither depth nor a bigger `top_k`: **a
+  reformulated query changes what the cross-encoder scores each candidate
+  against.** `CONTRACT-005::chunk-3` and `POL-002::chunk-8/9` were always in
+  the corpus and always in reach of first-stage retrieval at this
+  `pool_size` — a query built from the missing chunks' own clause
+  vocabulary ("Enhanced Due Diligence", "Legal approval", "recruitment
+  fees", "subcontracting") scored them high enough with the cross-encoder
+  to clear the `top_k=10` cutoff where the original buyer-phrased query did
+  not (see `reranking.py`'s module docstring for why a cross-encoder scores
+  `(query, candidate)` jointly rather than from a cached candidate vector —
+  that is precisely the mechanism a query reformulation can move and a
+  bigger `pool_size` cannot).
+
+### Control evidence
+
+`Q001` (`FAQ-001`, `POL-001` both already in context) and `Q005`
+(`FAQ-001`, `POL-001`, `SOP-008` all already in context, matching Day 15's
+"already fine" finding) both stop with `no_missing_evidence` after exactly
+one `retrieve_fn` call each — the loop never runs a second pass on a query
+with nothing missing, which is the concrete proof it is selective rather
+than applied globally.
+
+### Verification (2026-09-25, after the Block 3A build)
+
+```bash
+./.venv/bin/pytest -q
+# 217 passed (206 baseline + 11 new tests in tests/test_agentic_retrieval.py)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# 7/7 frozen fixture cases as_expected; 6/6 current retrieval-pipeline checks [OK]
+# — unchanged from kickoff; agentic_retrieval.py is read-only and not wired
+# into generation.py or regression_suite.py, so this gate cannot regress from it
+
+./.venv/bin/python src/multi_doc_slice_eval.py
+# unchanged from kickoff: Q005 fine, Q016 addressed, Q091 doc-level fixed
+# (Band 3 chunk-level gap out of this script's scope), Q092 STILL missing
+# CONTRACT-005/POL-002 under both configs (confirms the single-pass
+# pipeline this script measures is untouched by Day 16's work)
+
+./.venv/bin/python src/agentic_retrieval.py
+# Q001, Q005: no_missing_evidence (controls hold)
+# Q091: missing_chunk -> fixed_after_second_pass (POL-001::chunk-4 recovered)
+# Q092: missing_doc -> fixed_after_second_pass (CONTRACT-005 AND POL-002 both recovered)
+```
+
+### What this does not change
+
+`src/agentic_retrieval.py` is a standalone, read-only experiment: it does
+not modify `reranking.py`, `generation.py`, or `regression_suite.py`, and
+its results are not wired into the production `generation.py` retrieval
+path. `regression_suite.py`'s `retrieval-miss-q091` case still asserts
+`expected_missing_terms=["Band 3"]` as a tracked, expected gap — that
+assertion is now stale relative to what a *second-pass-aware* pipeline
+could deliver, but updating it would require actually wiring the recursive
+loop into the production path (merged context → real generation → a real
+term check against the model's answer text), which Day 16 deliberately
+scoped out ("cap itself at one extra retrieval pass today", read-only
+measurement, no hidden live-LLM dependency in the deterministic tests).
+
+### Week 4 handoff, updated
+
+Day 15 predicted Q092 might reasonably stay open after Day 16 ("allowed to
+remain unsolved if the evidence is better"). It did not stay open — both
+root causes were addressed by one reformulated query. The more interesting
+finding for Week 4 is not "recursive retrieval helped" (expected) but *how*
+it helped: query reformulation, not depth. A future LangGraph-shaped
+version of this loop should treat "try a different `pool_size`" and "try a
+different query" as two structurally different repair actions, because Day
+16's evidence shows they fix different failure classes — Q091/Q093's
+original Day 14 fix WAS depth (the target chunk never entered the pool at
+all under the old `pool_size=15`); Q092's fix here was query semantics
+acting on the reranker's relevance judgment, and a bigger `pool_size` was
+independently shown insufficient for it in Day 15's diagnostic.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still
