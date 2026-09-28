@@ -3587,3 +3587,174 @@ beat depth" finding is itself a concrete signal an observability layer
 should be able to show (which lever fixed which query), reinforcing that
 HER-269's trace-evidence work is not generic scope but directly motivated
 by today's result.
+
+## 2026-09-28 — Day 17: LangGraph State Graph + ProcureRAG Tool Boundaries
+
+Route doc: `docs/day-17-langgraph-state-graph-procurerag-tools.md`.
+
+Linear: HER-284 — Day 17 loop: LangGraph state graph + ProcureRAG tools.
+
+Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrails.
+
+Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
+
+### Course / docs target
+
+- No new Boot.dev chapter today. Day 16 already covered Boot.dev Chapter 11 `Agentic` → `Recursive RAG` / `Agentic Search`; Day 17 converts that evidence into graph/state orchestration.
+- Primary: LangChain Academy — **Foundation: Introduction to LangGraph - Python** (<https://academy.langchain.com/courses/intro-to-langgraph>):
+  - Welcome/setup as needed: `Course Overview`, `Getting Set Up`, `Module 0 Resources`.
+  - Module 1 `Introduction`: `Lesson 2: Simple Graph`, `Lesson 4: Chain`, `Lesson 5: Router`, `Lesson 6: Agent`, `Lesson 7: Agent with Memory`.
+  - Module 2 `State and Memory`: `Lesson 1: State Schema`, `Lesson 2: State Reducers`, `Lesson 3: Multiple Schemas`.
+- Fallback/companion: LangChain Academy — **Quickstart: LangGraph Essentials - Python** (<https://academy.langchain.com/courses/langgraph-essentials-python>): Module 1 `Course Overview` → `Lesson 1: Nodes`, `Lesson 2: Edges`, `Lesson 3: Conditional Edges`, `Lesson 4: Memory`.
+- Companion skim: Hugging Face Agents Course Unit 1 `Introduction to Agents`; Unit 2.3 `The LangGraph framework` → `Introduction to LangGraph`, `What is LangGraph?`, `Building Blocks of LangGraph`, `Building Your First LangGraph`.
+
+### Objective
+
+_TODO: Fill in after build._
+
+Expected shape:
+
+- Explain how Day 16's recursive-retrieval loop maps to graph concepts: state, nodes, edges, conditional routing, tool boundaries, and stop reasons.
+- Explain whether the artifact used real LangGraph or a pure-Python graph simulation, and why that choice was appropriate today.
+- Anchor the graph in the measured Q001/Q005 controls and Q091/Q092 hard cases, not generic framework enthusiasm.
+
+### Baseline verification at kickoff
+
+```bash
+./.venv/bin/pytest -q
+# 218 passed in 4.26s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# frozen fixtures as_expected; current retrieval pipeline still matches every case's expectation
+# Q091 remains visible in the frozen fixture lane as: term-level gap OPEN: missing ['Band 3']
+
+./.venv/bin/python src/agentic_retrieval.py
+# Q001, Q005: no_missing_evidence
+# Q091: missing_chunk -> fixed_after_second_pass, POL-001::chunk-6 recovered
+# Q092: missing_doc -> fixed_after_second_pass, CONTRACT-005 and POL-002 recovered
+
+./.venv/bin/python src/multi_doc_slice_eval.py
+# single-pass multi_doc slice unchanged: Q092 still misses CONTRACT-005/POL-002 under both configs
+# expected because Day 16's recursive loop is not wired into the single-pass production path
+```
+
+### LangGraph / agent-framework notes
+
+_TODO: Fill in after course work._
+
+Prompts to answer:
+
+- What is the difference between a chain and a graph?
+- What makes a router / conditional edge different from a normal edge?
+- How do LangGraph `state`, `nodes`, `edges`, and `conditional edges` map to ProcureRAG?
+- What did HF's agents material add about tools/actions or `Think → Act → Observe` that matters for this repo?
+- What should stay deterministic in tests, even if a future graph uses live LLM decisions?
+
+### State schema
+
+_TODO: Fill in after design/build._
+
+Expected fields to record or justify:
+
+- `user_query` / original query text: _TODO_
+- `query_id` and `query_type` when known: _TODO_
+- retrieval config / route label: _TODO_
+- retrieved source docs and chunk IDs: _TODO_
+- missing-evidence diagnostics: _TODO_
+- follow-up query and recursive-retrieval output, if triggered: _TODO_
+- generated answer/refusal or explicit not-generated marker: _TODO_
+- trace/debug notes and stop reason: _TODO_
+
+### Graph nodes / routes implemented
+
+_TODO: Fill in after build._
+
+Expected shape:
+
+| Node / route | Responsibility | Existing ProcureRAG boundary reused | Evidence |
+|---|---|---|---|
+| retrieve node | _TODO_ | _TODO_ | _TODO_ |
+| diagnose node | _TODO_ | _TODO_ | _TODO_ |
+| router / conditional edge | _TODO_ | _TODO_ | _TODO_ |
+| recursive/diagnostic node | _TODO_ | _TODO_ | _TODO_ |
+| generate/finalize node | _TODO_ | _TODO_ | _TODO_ |
+
+### Routing evidence
+
+_TODO: Fill in after tests / run._
+
+Minimum expected rows:
+
+| Query | Expected route | Evidence to report |
+|---|---|---|
+| Q001 or Q005 | no recursive pass / normal path | _TODO_ |
+| Q091 | missing-chunk route / recursive diagnostic path | _TODO_ |
+| Q092 | missing-doc route / recursive diagnostic path | _TODO_ |
+| still-open or no-follow-up case, if present | gap/refusal/report route | _TODO_ |
+
+### Verification after build
+
+_TODO: Replace with real output._
+
+```bash
+./.venv/bin/pytest -q
+# TODO
+
+./.venv/bin/python -m compileall -q src tests
+# TODO
+
+./.venv/bin/python -m ruff check src tests
+# TODO
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# TODO
+
+# If a graph demo exists:
+./.venv/bin/python src/agent_graph.py
+# TODO
+```
+
+### What improved
+
+_TODO: Fill in after build._
+
+Expected shape:
+
+- What is more explainable now than Day 16's standalone function?
+- Which state/trace fields make the graph easier to review or debug?
+- Which hard case routes correctly, and what does the graph make visible?
+
+### What remains weak / confusing
+
+_TODO: Fill in after build._
+
+Possible areas:
+
+- real LangGraph dependency/API setup vs. pure-Python fallback;
+- production `generation.py` still not wired to recursive graph context;
+- no live generation or trace store yet;
+- route policy still hand-picked for Q091/Q092 rather than generalized;
+- state schema needs simplification or typing.
+
+### What I can now explain in an interview
+
+_TODO: Answer in Juan's own words after the drill._
+
+Prompts:
+
+1. Chain vs. graph in LangGraph terms.
+2. Router / conditional edge vs. normal edge.
+3. Why Day 16's recursive retrieval is graph-shaped.
+4. Why graph nodes should wrap existing retrieval/generation/eval boundaries.
+5. What makes the router safe and testable.
+6. When a pure-Python graph simulation is acceptable.
+
+### Next step
+
+If Day 17 is clean: move into the next Week 4 focus from HER-269 — observability / trace evidence for the agentic retrieval graph. The concrete target should be showing, for Q091/Q092, which route fired, which retrieval lever changed the evidence, what sources/chunks entered state before/after routing, and why the graph stopped before guardrails are layered on top.
