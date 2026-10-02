@@ -281,7 +281,20 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # "Reproducibility hardening" section for the full three-attempt trail with
 # the previous model, and why switching model families (not just tuning
 # `max_tokens` further) was the actual fix.
-DEFAULT_OPENROUTER_MODEL = "inclusionai/ling-3.0-flash-fin:free"
+#
+# UPDATE 2026-10-02: OpenRouter retired the free tier of
+# `ling-3.0-flash-fin:free` (every call returned 404 "This model is
+# unavailable for free", breaking every live entry point at once). The
+# replacement is `ling-3.0-flash-sante:free`, from the same Ling 3.0 Flash
+# family. Its token usage proved the claim above wrong: this family DOES
+# reason. On `agent_graph.py`'s 19-source Q091 prompt it spent 3044 hidden
+# reasoning tokens, hit `max_tokens`, and returned an empty answer
+# (`finish_reason="length"`). That is very likely what the 800/1600-token
+# "budget spent on output that never reaches message.content" puzzle below
+# actually was. The real fix is in the request (see `extra_body` in
+# `make_openrouter_client`): turn reasoning OFF instead of hiding it.
+# Measured on Q091/Q092: 0 reasoning tokens, complete answers in ~3s.
+DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o"
 
 # A free OpenRouter model can sit behind a slow or momentarily overloaded
 # backend - without a bound, a hung request blocks `main()` indefinitely
@@ -374,11 +387,13 @@ def make_openrouter_client(model=None, api_key=None):
             temperature=GENERATION_TEMPERATURE,
             # `reasoning` is an OpenRouter extension, not a standard OpenAI
             # API field, so it has to be passed through `extra_body` rather
-            # than as a normal keyword argument. `exclude: True` keeps a
-            # reasoning model's internal chain-of-thought out of the
-            # response entirely - see `DEFAULT_OPENROUTER_MODEL`'s comment
-            # above for the actual broken output this fixes.
-            extra_body={"reasoning": {"exclude": True}},
+            # than as a normal keyword argument. `enabled: False` tells the
+            # model not to reason at all. The previous setting,
+            # `exclude: True`, only HID the reasoning from the response: the
+            # model still reasoned, and those hidden tokens still counted
+            # against `max_tokens`, which emptied the answer on hard prompts
+            # (see `DEFAULT_OPENROUTER_MODEL`'s 2026-10-02 update above).
+            extra_body={"reasoning": {"enabled": False}},
         )
         answer_text = response.choices[0].message.content
 

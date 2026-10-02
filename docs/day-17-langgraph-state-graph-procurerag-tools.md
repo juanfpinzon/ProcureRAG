@@ -15,20 +15,20 @@ No new Boot.dev chapter today. Day 16 completed Boot.dev Chapter 11 (`Agentic` â
 Primary source:
 
 - **LangChain Academy â€” Foundation: Introduction to LangGraph - Python**: <https://academy.langchain.com/courses/intro-to-langgraph>
-  - **Welcome to the course!**
-    - `Course Overview`
-    - `Getting Set Up`
-    - `Module 0 Resources`
-  - **Module 1: Introduction**
-    - `Lesson 2: Simple Graph`
-    - `Lesson 4: Chain`
-    - `Lesson 5: Router`
-    - `Lesson 6: Agent`
-    - `Lesson 7: Agent with Memory`
+  - **Welcome to the course!**  - Completed
+    - `Course Overview` - Completed
+    - `Getting Set Up` - Completed
+    - `Module 0 Resources` - Completed
+  - **Module 1: Introduction** 
+    - `Lesson 2: Simple Graph`        - Completed
+    - `Lesson 4: Chain`- Completed
+    - `Lesson 5: Router`- Completed
+    - `Lesson 6: Agent`- Completed
+    - `Lesson 7: Agent with Memory`- Completed
   - **Module 2: State and Memory**
-    - `Lesson 1: State Schema`
-    - `Lesson 2: State Reducers`
-    - `Lesson 3: Multiple Schemas`
+    - `Lesson 1: State Schema` - Completed
+    - `Lesson 2: State Reducers`- Completed
+    - `Lesson 3: Multiple Schemas` - Completed
 
 Companion / fallback sources:
 
@@ -228,7 +228,7 @@ Keep the graph small enough to explain. A minimal version with three or four nod
 Possible artifact shape, for Juan to design and write:
 
 - `src/agent_graph.py` or equivalent.
-- A typed or documented state schema, such as a `TypedDict`, dataclass, or clearly documented dict contract.
+- A typed or documented state schema, such as a `TypedDict`.
 - Node functions that accept and return state, for example:
   - `retrieve_node(state, retrieve_fn=...)`
   - `diagnose_node(state, evidence_fn=...)`
