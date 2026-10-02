@@ -3564,7 +3564,7 @@ independently shown insufficient for it in Day 15's diagnostic.
 ## Day 17: LangGraph state graph over the Day 16 loop
 
 `src/agent_graph.py` re-expresses `agentic_retrieval.run_recursive_retrieval` as a LangGraph `StateGraph` (`langgraph==1.2.11`):
-`retrieve → diagnose → route_after_diagnosis → {generate | recursive_retrieve → diagnose | report_gap}`. Every node delegates to an existing boundary (`retrieve_fn`, `evaluate_missing_evidence`/`decide_trigger`, `merge_sources`, `generate_answer`). The router is deterministic and bounded by `MAX_RETRIEVAL_PASSES = 2`, with an explicit `recursion_limit` of 10 as a safety net. `tests/test_agent_graph.py` (13 tests) includes a parity test pinning the graph to Day 16's stop reasons, final gaps, and retrieval-call counts on every route.
+`retrieve → diagnose → route_after_diagnosis → {generate | recursive_retrieve → diagnose | report_gap}`. Every node delegates to an existing boundary (`retrieve_fn`, `evaluate_missing_evidence`/`decide_trigger`, `merge_sources`, `generate_answer`). The router is deterministic and bounded by `MAX_RETRIEVAL_PASSES = 2`, with an explicit `recursion_limit` of 10 as a safety net. `tests/test_agent_graph.py` (14 tests) includes a parity test pinning the graph to Day 16's stop reasons, final gaps, and retrieval-call counts on every route.
 
 ### Routing on the demo queries (live retrieval, no LLM, 2026-10-02)
 
@@ -3577,7 +3577,7 @@ independently shown insufficient for it in Day 15's diagnostic.
 
 Identical to Day 16's live outcomes, as the parity test predicts.
 
-### Route distribution over all 93 queries (one-off scratch run, not yet a committed command)
+### Route distribution over all 93 queries (`./.venv/bin/python src/agent_graph.py --all-queries-summary`, live retrieval, no LLM)
 
 | Route | Queries |
 |---|---|
@@ -3587,9 +3587,16 @@ Identical to Day 16's live outcomes, as the parity test predicts.
 
 The 15 `report_gap` queries (Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, Q090) are all non-`multi_doc` and each miss 1–2 primary docs under the default `top_k=5` config. They have no follow-up query defined, so the graph reports the gap instead of answering. The single-pass production path answers them with incomplete context. This is the first whole-corpus measurement of how narrow the Day 16 override table is (2 of 17 gapped queries covered).
 
-### Live generation through the graph (one run, 2026-10-02)
+### Live generation through the graph (`./.venv/bin/python src/agent_graph.py --generate`, 2026-10-02)
 
-Model `inclusionai/ling-3.0-flash-sante:free`, `reasoning: {"enabled": False}`: all four demo queries answered with 0 orphan citations. Q091's answer stated the Band 3 rule (*"above €50,000 up to and including €250,000 … VP Procurement"*), citing `[11]` = `POL-001::chunk-6`, the chunk added by the recursive pass. That closes the Day 14 term-level "Band 3" gap at the answer level for this run. The frozen regression fixture still shows it open because the graph is not wired into the regression suite. Caveats: a single free-model run; Q001's answer contained an incorrect "Band 2 (€5,000 to €250,000)" statement; not yet re-measured under the current default model or with `regression_suite.py --live`.
+Model: `openai/gpt-4o`, the current `generation.DEFAULT_OPENROUTER_MODEL`, with no `OPENROUTER_MODEL` override. All four demo queries answered with 0 orphan citations (cited: Q001 `[4]`, Q005 `[1, 4]`, Q091 `[5, 11]`, Q092 `[3, 11, 16]`). Q091's answer stated the Band 3 rule (*"above €50,000 up to and including €250,000 … VP Procurement, supported by a documented Finance review"*), citing `[11]` = `POL-001::chunk-6`, the chunk added by the recursive pass. That closes the Day 14 term-level "Band 3" gap at the answer level for this run. The frozen regression fixture still shows it open because the graph is not wired into the regression suite.
+
+Caveats:
+- It's a single run, read by hand.
+- The answers are grounded but incomplete against `expected_answer`: Q001 omits cumulative approvals, Q005 the 5-business-day retrospective PO, Q091 the ISO 27001 / SOC 2 / Tier-1 / DPA specifics, and Q092 Legal approval, EcoVadis, subcontracting, and insurance.
+- Not yet measured with `regression_suite.py --live`.
+
+An earlier smoke run the same day used the free `inclusionai/ling-3.0-flash-sante:free` (reproduce with `OPENROUTER_MODEL=inclusionai/ling-3.0-flash-sante:free`, if the free slot still exists). It also gave 0 orphan citations and longer answers, but stated an incorrect "Band 2 (€5,000 to €250,000)" for Q001.
 
 Generation-path finding: with the previous request option `reasoning: {"exclude": True}`, the same model spent 3044 hidden reasoning tokens on Q091's 19-source prompt and returned an empty answer (`finish_reason="length"`). `exclude` hides reasoning but does not prevent it. `enabled: False` brought reasoning tokens to 0.
 

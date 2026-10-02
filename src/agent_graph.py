@@ -525,6 +525,60 @@ def _print_summary_table(states):
         )
 
 
+# ---------------------------------------------------------------------------
+# Whole-corpus evidence: run every labeled query through the graph (live
+# retrieval, no LLM) and count which route each one took. This answers
+# "how selective is the recursive branch, and how often does the graph
+# refuse?" with one committed command instead of a scratch script.
+# ---------------------------------------------------------------------------
+
+
+def route_distribution(states):
+    """Group finished graph runs by the route path they took.
+
+    Returns `{route_path: [query_id, ...]}`, where `route_path` is the
+    run's `route_history` joined with " -> " (e.g.
+    "recursive_retrieve -> generate"). Pure function over final states, so
+    it can be tested on fake runs without loading any model.
+    """
+    distribution = {}
+    for state in states:
+        route_path = " -> ".join(state["route_history"])
+        distribution.setdefault(route_path, []).append(state["query_id"])
+    return distribution
+
+
+def _print_route_distribution(states):
+    distribution = route_distribution(states)
+
+    print("\n" + "=" * 78)
+    print(f"Route distribution over {len(states)} queries (live retrieval, no LLM):")
+    print("=" * 78)
+    print("| route | queries | query_ids |")
+    print("|---|---|---|")
+    # Most common route first.
+    for route_path, query_ids in sorted(distribution.items(), key=lambda item: -len(item[1])):
+        print(f"| {route_path} | {len(query_ids)} | {', '.join(query_ids)} |")
+
+    # Coverage of the recursive branch: of the queries whose FIRST pass
+    # had an evidence gap, how many did the follow-up pass fix?
+    gapped = [state for state in states if state["diagnoses"][0]["trigger_reason"] is not None]
+    fixed = [state for state in gapped if state["stop_reason"] == STOP_FIXED_AFTER_SECOND_PASS]
+    print(
+        f"\nQueries with a first-pass evidence gap: {len(gapped)}. "
+        f"Fixed by the recursive pass: {len(fixed)}. Ended in report_gap: {len(gapped) - len(fixed)}."
+    )
+
+    reported = [state for state in states if state["route_history"][-1] == ROUTE_REPORT_GAP]
+    if reported:
+        print("\n| query_id | query_type | stop_reason | still missing |")
+        print("|---|---|---|---|")
+        for state in reported:
+            final = state["diagnoses"][-1]
+            missing = final["missing_doc_ids"] + final["missing_chunk_ids"]
+            print(f"| {state['query_id']} | {state['query_type']} | {state['stop_reason']} | {missing} |")
+
+
 def main() -> None:
     """Build the live pipeline once, compile the graph once, run each demo query.
 
@@ -542,7 +596,18 @@ def main() -> None:
         help="Also call the live LLM (OpenRouter, needs OPENROUTER_API_KEY) on the 'generate' route. "
         "Default: routing/retrieval only, with an explicit 'not generated' marker as the answer.",
     )
+    parser.add_argument(
+        "--all-queries-summary",
+        action="store_true",
+        help="Instead of the four demo queries, run ALL labeled corpus queries through the graph "
+        "(live retrieval, no LLM) and print the route distribution plus every report_gap case.",
+    )
     args = parser.parse_args()
+    if args.all_queries_summary and args.generate:
+        # The whole-corpus summary is routing evidence only. With a paid
+        # default model, combining it with --generate would mean ~78 paid
+        # LLM calls for answers this summary never prints.
+        parser.error("--all-queries-summary runs without the LLM; do not combine it with --generate")
 
     from dotenv import load_dotenv
 
@@ -570,6 +635,11 @@ def main() -> None:
     client = make_openrouter_client() if args.generate else None
 
     graph = build_graph(retrieve_fn, client=client)
+
+    if args.all_queries_summary:
+        states = [graph.invoke(make_initial_state(query_row)) for query_row in load_example_queries()]
+        _print_route_distribution(states)
+        return
 
     # The diagram LangGraph derives from the wiring above: paste into any
     # Mermaid viewer (e.g. https://mermaid.live) for the whiteboard picture.

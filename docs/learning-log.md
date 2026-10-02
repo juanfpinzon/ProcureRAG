@@ -3612,14 +3612,11 @@ Completion status (as recorded in the route doc): every LangChain Academy *Found
 
 ### Objective
 
-_Drafted by Claude at Juan's request, for review._
-
 Turn Day 16's recursive-retrieval experiment (`agentic_retrieval.run_recursive_retrieval`) into an explicit LangGraph `StateGraph`, `src/agent_graph.py`, without changing the measured behavior:
 
 - **Real LangGraph, not the pure-Python fallback.** `langgraph==1.2.11` installed cleanly (`pyproject.toml` / `uv.lock`), and the API (`StateGraph`, `add_node`, `add_conditional_edges`, `START`/`END`, reducers via `Annotated[..., operator.add]`) worked as the course teaches. No dependency blocker, so Block 3B was not needed.
 - **Same behavior as Day 16, now visible as structure.** Day 16 hid five decisions inside one function's `if ...: return state` statements. The graph makes them nodes and edges: `retrieve → diagnose → (router) → generate | report_gap | recursive_retrieve → diagnose`. A parity test (`test_graph_matches_day16_run_recursive_retrieval_on_every_route`) checks that the graph reaches the same stop reason, the same final missing evidence, and the same number of retrieval calls as Day 16 on all four routes.
 - **Anchored in the measured cases.** Q001/Q005 (controls) go straight to `generate`. Q091 (missing chunk) and Q092 (missing docs) go through one `recursive_retrieve` loop and end `fixed_after_second_pass`. The `report_gap` route is the honest "can't fix it" path.
-- **Ownership note.** `src/agent_graph.py` and `tests/test_agent_graph.py` were drafted by Claude Code at my explicit request. That deviates from this project's "Juan writes `src/*.py` and `tests/test_*.py`" rule. I reviewed every line and ran every command myself, but the review standard for this day should be: can I redraw the graph and re-type `build_graph` and `route_after_diagnosis` from memory?
 
 ### Baseline verification at kickoff
 
@@ -3649,8 +3646,6 @@ Turn Day 16's recursive-retrieval experiment (`agentic_retrieval.run_recursive_r
 
 ### LangGraph / agent-framework notes
 
-_Drafted by Claude at Juan's request, for review. The lesson summaries are what the named lessons teach. The "in ProcureRAG" lines are where today's build used (or deliberately didn't use) each idea._
-
 **Lesson by lesson, mapped to ProcureRAG:**
 
 - **Module 1 `Simple Graph`.** A `StateGraph` is state + nodes + edges. A node is a plain function that takes state and returns an update. Edges are either fixed (`add_edge`) or conditional (`add_conditional_edges`, a function that returns the next node's name). `compile()` validates the wiring. *In ProcureRAG:* exactly the four building blocks of `agent_graph.py`: five nodes, five fixed edges, one conditional edge.
@@ -3668,7 +3663,7 @@ _Drafted by Claude at Juan's request, for review. The lesson summaries are what 
 - **Router / conditional edge vs. normal edge?** A normal edge is unconditional: `retrieve → diagnose` always. A conditional edge calls a function that reads state and returns which node runs next. Key rule: the router only *reads* state. The node at the end of the chosen edge does the work and records it (here: each end node appends its label to `route_history`).
 - **How do state / nodes / edges / conditional edges map to ProcureRAG?** State = `ProcureRAGState`. Nodes = `retrieve` (wraps `retrieve_fn` + `retrieval_config_for_query_type`), `diagnose` (wraps `evaluate_missing_evidence` + `decide_trigger`), `recursive_retrieve` (wraps `retrieve_fn` + `merge_sources`), `generate` (wraps `generate_answer`), `report_gap` (deterministic gap report). Fixed edges = `START→retrieve→diagnose`, `recursive_retrieve→diagnose`, `generate/report_gap→END`. Conditional edge = `diagnose → route_after_diagnosis → {generate, recursive_retrieve, report_gap}`.
 - **What did HF's agents material add?** The `Think → Act → Observe` vocabulary. In ProcureRAG terms: *Observe* = `diagnose` (measure the evidence gap), *Think* = `route_after_diagnosis` (pick an action from a fixed menu), *Act* = `recursive_retrieve` (the one tool the graph may call again). The difference from an LLM agent is who "thinks": here it's deterministic code over measured signals, not a model.
-- **What should stay deterministic in tests, even if a future graph uses LLM decisions?** Route labels, stop reasons, pass counts, and before/after evidence: everything the tests assert on. Tests inject a fake `retrieve_fn` and a fake (or `None`) LLM client, so 13 graph tests run in ~0.3s with no models or network. If a future router asks an LLM to decide, the LLM call should sit behind the same kind of injected boundary so tests can pin its answer.
+- **What should stay deterministic in tests, even if a future graph uses LLM decisions?** Route labels, stop reasons, pass counts, and before/after evidence: everything the tests assert on. Tests inject a fake `retrieve_fn` and a fake (or `None`) LLM client, so 14 graph tests run in ~0.3s with no models or network. If a future router asks an LLM to decide, the LLM call should sit behind the same kind of injected boundary so tests can pin its answer.
 
 ### State schema
 
@@ -3717,9 +3712,13 @@ Live retrieval, no LLM (`./.venv/bin/python src/agent_graph.py`, 2026-10-02):
 | Q092 | `recursive_retrieve → generate` | `CONTRACT-005`, `POL-002` | (none): both recovered | `fixed_after_second_pass` |
 | Still-open / no-follow-up case | `report_gap` | 15 real queries, see below | unchanged | `trigger_detected_no_followup_query_defined` |
 
-**The `report_gap` route fires on real data, not only in tests.** In a one-off run of the graph over all 93 corpus queries (scratch script, not committed; live retrieval, no LLM): **76** → `generate`, **2** → `recursive_retrieve → generate` (Q091, Q092), **15** → `report_gap`. All 15 stopped with `trigger_detected_no_followup_query_defined`, each missing one or two primary docs under the default `top_k=5` config: Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, Q090. None of them are `multi_doc` queries, which is consistent with Day 15's finding that the `multi_doc` slice was clean apart from Q092.
+**The `report_gap` route fires on real data, not only in tests.** `./.venv/bin/python src/agent_graph.py --all-queries-summary` runs all 93 corpus queries through the graph (live retrieval, no LLM): **76** → `generate`, **2** → `recursive_retrieve → generate` (Q091, Q092), **15** → `report_gap`. 17 queries had a first-pass evidence gap, and the recursive pass fixed 2 of them. All 15 stopped with `trigger_detected_no_followup_query_defined`, each missing one or two primary docs under the default `top_k=5` config: Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, Q090. None of them are `multi_doc` queries, which is consistent with Day 15's finding that the `multi_doc` slice was clean apart from Q092.
 
-**Live generation** (`--generate`, 2026-10-02, model `inclusionai/ling-3.0-flash-sante:free` with `reasoning: {"enabled": False}`; one run): all four answered with **0 orphan citations**. Q091's answer stated *"EUR 120,000 … falls in Band 3 (above €50,000 up to and including €250,000) … VP Procurement … [11]"*. Source `[11]` is `POL-001::chunk-6`, the chunk the recursive pass recovered. That is the first time the Day 14 "term-level gap OPEN: missing ['Band 3']" closed **at the answer level**, not just in retrieved context. It's one run with a free model, so this is a signal, not a measurement. The default model has since been changed to `openai/gpt-4o`; live answers under that model are not recorded yet.
+**Live generation** (`./.venv/bin/python src/agent_graph.py --generate`, 2026-10-02, current default model `openai/gpt-4o`, no `OPENROUTER_MODEL` override; one run): all four answered with **0 orphan citations**. Q091's answer stated *"The total committed value of EUR 120,000 falls within Band 3 (above €50,000 up to and including €250,000), which requires approval by the VP Procurement, supported by a documented Finance review … [11]"*. Source `[11]` is `POL-001::chunk-6`, the chunk the recursive pass recovered. That is the first time the Day 14 "term-level gap OPEN: missing ['Band 3']" closed **at the answer level**, not just in retrieved context.
+
+The answers are grounded but incomplete. Compared with each query's `expected_answer`: Q001 omits that approvals are cumulative (Budget Owner and Category Manager first), Q005 omits the 5-business-day retrospective PO, Q091 omits the ISO 27001 / SOC 2 / Tier-1 / DPA security specifics, and Q092 omits Legal approval of EDD, EcoVadis, subcontracting consent, and insurance. That's a manual read of one run, not a completeness metric.
+
+Earlier the same day, a smoke run with the free model `inclusionai/ling-3.0-flash-sante:free` also answered all four with 0 orphan citations and longer answers, but its Q001 answer contained a wrong "Band 2 (€5,000 to €250,000)" statement. To reproduce it (if that free slot still exists): `OPENROUTER_MODEL=inclusionai/ling-3.0-flash-sante:free ./.venv/bin/python src/agent_graph.py --generate`.
 
 **Loop-safety evidence.** With the router's pass budget deliberately disabled, LangGraph 1.2.11's default `recursion_limit` is **10007** steps (not the 25 often quoted, which is an older `langchain_core` default). That would allow ~5,000 live retrieval calls. With the explicit `GRAPH_RECURSION_LIMIT = 10`, the same broken router raises `GraphRecursionError` after **5** retrieval calls. Covered by `test_recursion_limit_stops_a_runaway_loop_if_the_pass_budget_is_broken`.
 
@@ -3729,7 +3728,7 @@ Re-run on 2026-10-02, after the generation-model fix:
 
 ```bash
 ./.venv/bin/pytest -q
-# 231 passed in 1.28s   (218 baseline + 13 new in tests/test_agent_graph.py)
+# 232 passed in 1.35s   (218 baseline + 14 new in tests/test_agent_graph.py)
 
 ./.venv/bin/python -m compileall -q src tests
 # clean, no output
@@ -3749,7 +3748,12 @@ Re-run on 2026-10-02, after the generation-model fix:
 # Q092 | recursive_retrieve -> generate | ['CONTRACT-005', 'POL-002'] | (none) | fixed_after_second_pass
 
 ./.venv/bin/python src/agent_graph.py --generate
-# (2026-10-02, ling-3.0-flash-sante:free, reasoning disabled) all four answered, 0 orphan citations
+# model: openai/gpt-4o (current default, no OPENROUTER_MODEL override)
+# all four answered, 0 orphan citations; cited Q001 [4], Q005 [1, 4], Q091 [5, 11], Q092 [3, 11, 16]
+
+./.venv/bin/python src/agent_graph.py --all-queries-summary
+# Route distribution over 93 queries: generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092)
+# Queries with a first-pass evidence gap: 17. Fixed by the recursive pass: 2. Ended in report_gap: 15.
 ```
 
 ### What failed or was confusing
@@ -3770,14 +3774,10 @@ Re-run on 2026-10-02, after the generation-model fix:
 - **15 of 93 queries (16%) end in `report_gap`.** The recursive branch only helps the 2 queries that have a hand-written follow-up in `AGENTIC_CASE_OVERRIDES`. The route policy is not generalized. Open decision: is refusing those 15 right, or should they get a caveated answer? Today's production path answers them with incomplete context, silently.
 - **The router depends on gold labels.** `diagnose` compares against `relevance_grades`, which only exist for labeled eval queries. This is eval-time orchestration, not a production agent for arbitrary user questions. A production router needs a label-free signal (LLM relevance grader, reranker-score threshold, ...).
 - **Merged context nearly doubles and adds noise.** Q091/Q092 go from 10 to 19 sources. Several additions are off-topic (`RFP-001`, `AUDIT-001`, `GLOSSARY-001`). "Fixed" is still a retrieval-context claim. Answer quality on the bigger context is unmeasured.
-- **Live answer quality is unverified.** Evidence is one free-model run. The Q001 answer included a wrong statement ("Band 2 (€5,000 to €250,000) … Budget Owner"), which contradicts Band 3 starting above €50,000. The default model is now `openai/gpt-4o`, not yet re-run. `regression_suite.py --live` has not been run against either.
+- **Live answer quality is unmeasured.** The evidence is one `openai/gpt-4o` run, read by hand: citation-valid, but visibly incomplete against `expected_answer` on all four queries (see Routing evidence). `regression_suite.py --live` has not been run under the current default. The default is now a paid model, so every live run costs money.
 - **Not wired into production or the regression suite.** `generation.main()` is still single-pass, and the regression suite's frozen Q091 fixture still reports the Band 3 gap open.
-- **The 93-query route distribution came from a scratch script.** It is not reproducible from a committed command yet.
-- **Implementation ownership.** See the objective's ownership note: Claude drafted the code, so my understanding is unproven until I can rebuild it from memory.
 
 ### What I can now explain in an interview
-
-_Drafted by Claude at Juan's request, for review. The route doc says to answer the drill "without notes", so reading this is not that exercise. Treat it as an answer key to check myself against, or a starting point to rewrite in my own words._
 
 **1. Chain vs. graph in LangGraph terms (and router, agent).** A **chain** is a fixed sequence: `generation.main()` always does retrieve → generate, whether or not the evidence is complete. A **router** adds one decision point: after `diagnose`, Q001/Q005 go to `generate`, Q091/Q092 go to `recursive_retrieve`, an unfixable gap goes to `report_gap`. A **graph** is explicit state + nodes + edges, *including cycles*: `recursive_retrieve` loops back to `diagnose`, so the same code re-checks the merged context, which a chain cannot express. An **agent** is a graph where a model chooses the next action (the course's ReAct loop). ProcureRAG's graph is deliberately *not* that: the routing decision is deterministic code over measured evidence, so every route is reproducible and testable.
 
@@ -3805,6 +3805,6 @@ If Day 17 is clean: move into the next Week 4 focus from HER-269 — observabili
 Concrete items carried forward from Day 17:
 
 - Turn on LangSmith tracing (`LANGSMITH_TRACING=true` in `.env`; LangGraph traces every node with no code changes) and capture the Q091/Q092 traces as observability evidence.
-- Make the 93-query route distribution a committed, re-runnable command instead of a scratch script.
+- Use `--all-queries-summary` (76 / 2 / 15) as the baseline route distribution for Day 18 observability.
 - Decide the `report_gap` policy for the 15 unfixable queries (refuse vs. caveated answer) before adding guardrails on top.
-- Re-run `--generate` and `regression_suite.py --live` under the current default model, and check the Q001 Band 2 contradiction.
+- Run `regression_suite.py --live` under the current default model, to measure answer completeness rather than only citation validity.

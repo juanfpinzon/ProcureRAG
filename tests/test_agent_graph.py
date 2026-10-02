@@ -478,3 +478,37 @@ def test_real_rows_route_as_the_day17_route_table_expects():
     assert state["diagnoses"][0]["missing_doc_ids"] == ["CONTRACT-005", "POL-002"]
     assert state["route_history"] == [module.ROUTE_RECURSIVE_RETRIEVE, module.ROUTE_GENERATE]
     assert state["stop_reason"] == module.STOP_FIXED_AFTER_SECOND_PASS
+
+
+# ---------------------------------------------------------------------------
+# Whole-corpus summary: `route_distribution` groups finished runs by route
+# path (the logic behind `agent_graph.py --all-queries-summary`).
+# ---------------------------------------------------------------------------
+
+
+def test_route_distribution_groups_runs_by_route_path():
+    module = _load_agent_graph_module()
+    followup_text = "targeted follow-up"
+    control = _query_row("QA", "threshold", {"POL-001": 2})
+    fixed = _query_row("QB", "multi_doc", {"POL-002": 2})
+    no_followup = _query_row("QC", "multi_doc", {"POL-009": 2})
+    retrieve_fn = _CountingRetrieveFn(
+        {
+            control["query"]: [_source("POL-001", "POL-001::chunk-1")],
+            fixed["query"]: [_source("FAQ-001", "FAQ-001::chunk-1")],
+            followup_text: [_source("POL-002", "POL-002::chunk-11")],
+            no_followup["query"]: [_source("FAQ-001", "FAQ-001::chunk-1")],
+        }
+    )
+    case_overrides = {"QB": {"followup_query": followup_text, "acceptable_chunk_ids": ()}}
+
+    states = [
+        _run_graph(module, query_row, retrieve_fn, case_overrides)
+        for query_row in (control, fixed, no_followup)
+    ]
+
+    assert module.route_distribution(states) == {
+        "generate": ["QA"],
+        "recursive_retrieve -> generate": ["QB"],
+        "report_gap": ["QC"],
+    }

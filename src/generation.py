@@ -256,16 +256,15 @@ def generate_answer(query, sources, client):
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
-# Free models on OpenRouter rotate over time, so if this one is ever
-# retired, override it without touching code by setting OPENROUTER_MODEL in
-# `.env` - see https://openrouter.ai/models?max_price=0 for the current
-# free list.
+# Any model can be overridden without touching code by setting
+# OPENROUTER_MODEL in `.env`. Free models on OpenRouter rotate over time -
+# see https://openrouter.ai/models?max_price=0 for the current free list.
 #
 # The original default here was `nvidia/nemotron-3.5-lightning:free`, a
 # *reasoning* model. That choice caused real, live-only trouble: by
 # default a reasoning model thinks out loud for many tokens before
 # answering, and OpenRouter's `reasoning: {"exclude": True}` request option
-# (still set below) is supposed to strip that internal trace from
+# (set below until 2026-10-02) is supposed to strip that internal trace from
 # `message.content`. In practice it only worked reliably for an easy,
 # single-source question - for a harder, four-source question it
 # repeatedly leaked the raw "Here's a thinking process..." trace instead of
@@ -282,18 +281,29 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # the previous model, and why switching model families (not just tuning
 # `max_tokens` further) was the actual fix.
 #
-# UPDATE 2026-10-02: OpenRouter retired the free tier of
-# `ling-3.0-flash-fin:free` (every call returned 404 "This model is
-# unavailable for free", breaking every live entry point at once). The
-# replacement is `ling-3.0-flash-sante:free`, from the same Ling 3.0 Flash
-# family. Its token usage proved the claim above wrong: this family DOES
-# reason. On `agent_graph.py`'s 19-source Q091 prompt it spent 3044 hidden
-# reasoning tokens, hit `max_tokens`, and returned an empty answer
+# HISTORY, 2026-10-02 (Day 17 smoke run): OpenRouter retired the free tier
+# of `ling-3.0-flash-fin:free` (every call returned 404 "This model is
+# unavailable for free"). The Day 17 `agent_graph.py --generate` smoke run
+# that day used `ling-3.0-flash-sante:free` instead, from the same Ling 3.0
+# Flash family. Its token usage proved the claim above wrong: this family
+# DOES reason. On the 19-source Q091 prompt it spent 3044 hidden reasoning
+# tokens, hit `max_tokens`, and returned an empty answer
 # (`finish_reason="length"`). That is very likely what the 800/1600-token
 # "budget spent on output that never reaches message.content" puzzle below
-# actually was. The real fix is in the request (see `extra_body` in
-# `make_openrouter_client`): turn reasoning OFF instead of hiding it.
-# Measured on Q091/Q092: 0 reasoning tokens, complete answers in ~3s.
+# actually was. The fix is in the request (see `extra_body` in
+# `make_openrouter_client`): turn reasoning OFF instead of hiding it. With
+# that, Q091/Q092 used 0 reasoning tokens and answered in ~3s.
+#
+# CURRENT DEFAULT (since 2026-10-02): `openai/gpt-4o`, a paid model (each
+# live call costs money, unlike every earlier default). For context: two
+# free defaults have now been retired from under this file, and on
+# 2026-10-02 several other free candidates were rate-limited upstream (429).
+# Day 17's documented `--generate` evidence (docs/learning-log.md,
+# docs/eval-report.md) was re-run under this default, with no override.
+#
+# To reproduce the older free-model smoke run instead, override the model
+# without touching code (if that free slot still exists):
+#   OPENROUTER_MODEL=inclusionai/ling-3.0-flash-sante:free ./.venv/bin/python src/agent_graph.py --generate
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o"
 
 # A free OpenRouter model can sit behind a slow or momentarily overloaded
