@@ -44,6 +44,8 @@ is the right amount of scope for today.
 import os
 import re
 
+from pydantic import BaseModel, ConfigDict, Field
+
 # ---------------------------------------------------------------------------
 # The context contract: ranked chunks -> numbered, citable sources
 # ---------------------------------------------------------------------------
@@ -244,6 +246,87 @@ def generate_answer(query, sources, client):
 
 
 # ---------------------------------------------------------------------------
+# Day 19: structured generation. The model returns a typed object, not prose.
+#
+# Why this exists: on 2026-10-05, Q092 had complete retrieved evidence, but
+# the model answered "The sources do not contain enough information to
+# answer...". That is prompt rule 3 above, followed in PROSE. Code reading
+# the result could only tell "declined" from "answered" by scraping that
+# sentence. Here the decision becomes a FIELD the model must fill in, and
+# the provider enforces the schema while generating (OpenAI-style
+# Structured Outputs, `response_format={"type": "json_schema", ...}`).
+# ---------------------------------------------------------------------------
+
+
+class GeneratedAnswer(BaseModel):
+    """The object the model must return when called with `response_model=GeneratedAnswer`.
+
+    The `description` strings are not just documentation. They go into the
+    JSON Schema that is sent to the provider, so the model reads them as
+    instructions for each field. A field description is part of the prompt.
+
+    Field order matters for generation: the model writes `answer` first,
+    then `answerable_from_sources`, so the flag LABELS the answer it has
+    just written instead of being guessed before it.
+
+    Only two fields, on purpose. Citations stay as inline `[n]` markers
+    inside `answer`, checked by the same `validate_citations` as always. A
+    separate `cited_ids` list would be a second source of truth that could
+    disagree with the text.
+    """
+
+    # Strict structured-output modes require `additionalProperties: false`
+    # and every field listed in `required`. `extra="forbid"` plus "no
+    # defaults" produces exactly that schema.
+    model_config = ConfigDict(extra="forbid")
+
+    answer: str = Field(
+        description="The answer to the question, citing the numbered sources inline like [1]. "
+        "If the sources do not contain the information needed, say plainly what is missing instead."
+    )
+    answerable_from_sources: bool = Field(
+        description="true if you answered the question from the sources, even partly; "
+        "false if the sources did not contain the information needed and you declined to answer."
+    )
+
+
+def generate_structured_answer(query, sources, client):
+    """Like `generate_answer`, but the client must return a `GeneratedAnswer` as JSON text.
+
+    The client is still `client(prompt) -> text`. The live one is
+    `make_openrouter_client(response_model=GeneratedAnswer)`, where the text
+    is JSON the provider was told to keep schema-valid. Even so, the reply is
+    validated again HERE with `model_validate_json`: a provider might not
+    enforce the schema, an answer can be cut off at `max_tokens` (truncated
+    JSON), and a fake client in a test can return anything. If the reply is
+    not a valid `GeneratedAnswer`, this raises `pydantic.ValidationError`
+    instead of guessing.
+
+    Returns `generate_answer`'s dict plus `answerable_from_sources`, the
+    model's own verdict, now readable without parsing the answer text.
+    """
+    if not sources:
+        # Same grounding rule as `generate_answer`: never send an empty context to the model.
+        return {
+            "query": query,
+            "answer": INSUFFICIENT_EVIDENCE_ANSWER,
+            "sources": [],
+            "citations": validate_citations(INSUFFICIENT_EVIDENCE_ANSWER, []),
+            "answerable_from_sources": False,
+        }
+
+    generated = GeneratedAnswer.model_validate_json(client(build_prompt(query, sources)))
+
+    return {
+        "query": query,
+        "answer": generated.answer,
+        "sources": sources,
+        "citations": validate_citations(generated.answer, sources),
+        "answerable_from_sources": generated.answerable_from_sources,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Optional live client: OpenRouter (OpenAI-compatible), smoke-test only
 #
 # Nothing above this line imports this section, and `tests/test_generation.py`
@@ -352,8 +435,16 @@ MAX_ANSWER_TOKENS = 3000
 GENERATION_TEMPERATURE = 0.0
 
 
-def make_openrouter_client(model=None, api_key=None):
+def make_openrouter_client(model=None, api_key=None, response_model=None):
     """Build a live `client(prompt) -> answer_text` callable backed by OpenRouter.
+
+    `response_model` (Day 19, optional): a Pydantic model class such as
+    `GeneratedAnswer`. When given, the request asks for provider-native
+    structured output: the model's JSON Schema is sent as
+    `response_format={"type": "json_schema", "json_schema": {..., "strict": True}}`,
+    and the returned text is that JSON object. Parse and validate it with
+    `generate_structured_answer`. When omitted, the request is exactly the
+    Day 10-18 one and the text is a plain prose answer.
 
     OpenRouter exposes an OpenAI-compatible `/chat/completions` endpoint, so
     the official `openai` Python SDK works against it unmodified - the only
@@ -389,21 +480,49 @@ def make_openrouter_client(model=None, api_key=None):
         timeout=OPENROUTER_TIMEOUT_SECONDS,
     )
 
+    # `reasoning` is an OpenRouter extension, not a standard OpenAI API
+    # field, so it has to be passed through `extra_body` rather than as a
+    # normal keyword argument. `enabled: False` tells the model not to
+    # reason at all. The previous setting, `exclude: True`, only HID the
+    # reasoning from the response: the model still reasoned, and those
+    # hidden tokens still counted against `max_tokens`, which emptied the
+    # answer on hard prompts (see `DEFAULT_OPENROUTER_MODEL`'s 2026-10-02
+    # update above).
+    extra_body = {"reasoning": {"enabled": False}}
+    structured_output = {}
+
+    if response_model is not None:
+        structured_output["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": response_model.__name__,
+                # strict: the provider constrains generation to this exact
+                # schema (all fields present, no extra keys, right types).
+                "strict": True,
+                "schema": response_model.model_json_schema(),
+            },
+        }
+        # Deliberately NOT sending OpenRouter's
+        # `provider={"require_parameters": True}`. It sounds like the safe
+        # choice ("only route to providers that support response_format"),
+        # but it is all-or-nothing over EVERY parameter in the request.
+        # Measured 2026-10-05: neither `openai/gpt-4o` endpoint (OpenAI,
+        # Azure) lists `reasoning`, and Azure doesn't list `max_tokens`, so
+        # the request failed with 404 "No endpoints found that can handle the
+        # requested parameters" before any model ran. Both endpoints DO
+        # support `response_format`/`structured_outputs`. The safety net is
+        # our own validation instead: if a provider ever ignored the schema
+        # and returned prose, `generate_structured_answer`'s
+        # `model_validate_json` would fail loudly.
+
     def client(prompt):
         response = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=MAX_ANSWER_TOKENS,
             temperature=GENERATION_TEMPERATURE,
-            # `reasoning` is an OpenRouter extension, not a standard OpenAI
-            # API field, so it has to be passed through `extra_body` rather
-            # than as a normal keyword argument. `enabled: False` tells the
-            # model not to reason at all. The previous setting,
-            # `exclude: True`, only HID the reasoning from the response: the
-            # model still reasoned, and those hidden tokens still counted
-            # against `max_tokens`, which emptied the answer on hard prompts
-            # (see `DEFAULT_OPENROUTER_MODEL`'s 2026-10-02 update above).
-            extra_body={"reasoning": {"enabled": False}},
+            extra_body=extra_body,
+            **structured_output,  # empty unless `response_model` was given
         )
         answer_text = response.choices[0].message.content
 

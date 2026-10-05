@@ -4132,6 +4132,7 @@ Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrai
 
 Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
 
+
 ### Course / docs target
 
 - No new Boot.dev chapter today. Day 19 turns the Day 17/18 agentic graph/control-plane path into a reviewable observability + structured-output artifact.
@@ -4151,15 +4152,36 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
 
 Completion status:
 
-- _TODO: Fill in which HF Bonus Unit 2 pages were completed._
-- _TODO: Fill in which LangGraph/LangSmith companion lessons/docs were completed._
-- _TODO: Fill in which structured-output docs were completed._
+- _TODO (Juan): which HF Bonus Unit 2 pages were completed._
+- _TODO (Juan): which LangGraph/LangSmith companion lessons/docs were completed._
+- _TODO (Juan): which structured-output docs were completed._
+
+(Left for Juan: the build can't verify what was read.)
+
+Verified on the installed versions while building (langsmith 0.12.5, langgraph 1.2.11, langchain-core 1.6.3, pydantic 2.12.5, openai 3.13.0):
+
+- **`run_id` → root run id.** A `run_id` in a LangGraph invoke config becomes the id of the root run, which is the LangSmith trace id. LangGraph also adds `thread_id` to that run's metadata. Checked in memory with `langchain_core.tracers.context.collect_runs()`.
+- **Env var order.** `langsmith.utils.tracing_is_enabled()` reads `LANGSMITH_TRACING_V2` before `LANGSMITH_TRACING`, and `langsmith.utils.get_env_var` is wrapped in `lru_cache`.
+- **Run URLs.** `Client.get_run_url` is deprecated ("will be removed after Jan 31, 2027"). Its replacement, `client.runs.get_url`, needs the project id and trace id.
+- **Pydantic schema.** `ConfigDict(extra="forbid")` shows up as `"additionalProperties": false` in `model_json_schema()`, and a `Literal[...]` becomes a JSON Schema `enum`.
+- **`Literal` takes literal values only.** `Literal[SOME_CONSTANT]` works at runtime, but the typing spec forbids it, and VS Code's Pylance flagged it ("Variable not allowed in type expression"). The schema now spells the strings out, and a test pins them to the constants.
+- **LangGraph silently drops unknown update keys.** A node returning a key that isn't in the state schema gets no error; the value just disappears.
+- **OpenRouter's `require_parameters` is all-or-nothing.** Neither `openai/gpt-4o` endpoint lists `reasoning`, and Azure's doesn't list `max_tokens` (`GET /api/v1/models/openai/gpt-4o/endpoints`). So requiring every parameter routes to nothing (404), even though both endpoints support `response_format`/`structured_outputs`.
 
 ### Objective
 
-_TODO: Fill in._
+Make the Day 17/18 agentic path inspectable and schema-disciplined **without changing retrieval policy**:
 
-Expected shape: explain how today makes ProcureRAG's agentic path inspectable and schema-disciplined without changing retrieval policy: trace route decisions, retrieval passes, approval/HITL decisions, missing-evidence signals, result status, citations/refusal/caveats, and live/local trace handles.
+- **Trace row.** Every finished run of the Day 18 controlled graph becomes one validated, structured trace row (`AgentRunTrace`) in a JSONL file. The row holds:
+  - route history and stop reason;
+  - the HITL decision;
+  - one entry per retrieval pass (query, config, chunks added);
+  - before/after missing evidence;
+  - the LangSmith root run ids.
+- **Typed outcome.** The outcome becomes an `AgentResult` with an explicit `status` (`answered` / `model_declined` / `gap_report` / `not_generated`) instead of an ad hoc answer string.
+- **Structured generation.** Added after the first live run. On the `generate` route the LLM must answer in a schema (`GeneratedAnswer`), so its own verdict, "could I answer from these sources?", is a field rather than prose.
+
+Anchored on Q091 (missing chunk), Q092 (missing docs), and Q014, one of the 15 `report_gap` cases.
 
 ### Baseline verification at kickoff
 
@@ -4190,114 +4212,344 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
 
 ### Observability source studied and chosen
 
-_TODO: Fill in._
-
-Expected evidence fields:
-
-- Backend chosen: _TODO: LangSmith / Langfuse / local JSONL fallback._
-- Why this backend fits ProcureRAG today: _TODO: Fill in._
-- CI-safe evidence boundary: _TODO: Which commands/tests do not need credentials?_
-- Live/SaaS evidence boundary: _TODO: Which commands require LangSmith/Langfuse/provider credentials?_
+- **Backend chosen:** LangSmith for the live trace, plus local JSONL as the CI-safe, reviewable artifact.
+- **Why LangSmith fits ProcureRAG today:**
+  - The graph is LangGraph, which sends one span per node (routers included) to LangSmith from environment variables alone, with no tracing code in the graph.
+  - `.env` already had the key, `LANGSMITH_TRACING_V2=true`, project `ProcureRAG`, and the EU endpoint.
+  - Day 18 already tagged runs, and LangGraph already puts `thread_id` in run metadata.
+  - Langfuse would need an extra package and callback handler for the same tree. It was not tried.
+- **Why JSONL as well:** review must not depend on a SaaS login, and CI must not need credentials.
+- **CI-safe evidence boundary (no credentials):**
+  - `pytest`: the 29 new tests are 21 in `test_agent_observability.py` (which check the LangSmith run-id link in memory with `collect_runs()`) and 8 in `test_generation.py` (which check the strict `response_format` request against a fake `openai.OpenAI`). Plus `compileall`, `ruff`, `regression_suite.py --verify-retrieval`;
+  - `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py` (local models only).
+- **Live/SaaS evidence boundary:**
+  - `./.venv/bin/python src/agent_observability.py --query-ids Q091 Q014 --output docs/traces/day19-langsmith-q091-q014.jsonl` needs `LANGSMITH_API_KEY`.
+  - `--generate` additionally needs `OPENROUTER_API_KEY` and is paid. It ran three times today: plain text by Juan (before the fix, tracing on), then structured twice (after the fix: once with tracing off, once by Juan with tracing on).
 
 ### Trace schema / evidence contract
 
-_TODO: Fill in._
+`AgentRunTrace` in `src/agent_observability.py`, one JSONL line per **finished** run. The full table is in `docs/eval-report.md`, "Day 19".
 
-Expected fields to document:
+Schema versions:
+- **v1:** the first version.
+- **v2:** added the status `model_declined`.
 
-- Run metadata: `run_id`, `thread_id`, timestamp, query id/type, optional git/code version.
-- Route fields: `route_history`, `stop_reason`, approval decision/edit/reject if any.
-- Retrieval fields: pass number, retrieval config, original/follow-up query, doc/chunk ids, added chunks.
-- Evidence fields: missing docs/chunks before and after, trigger reason, `report_gap` reason.
-- Result fields: answer/refusal/not-generated status, citations, citation validation, caveats/uncertainty.
-- Handle fields: LangSmith/Langfuse URL/id and/or local artifact path.
+New rows are written as v2. v2 only *added* a value, so every v1 row is still valid, and the reader accepts both. The committed v1 evidence files still validate.
+
+- **Run metadata:** `run_id` (UUID), `thread_id` (`<query_id>-<8 hex>`, the checkpointer key), `created_at` (timezone required), `code_version` (`git describe --always --dirty`), `query_id`, `query_type`, `query`.
+- **Route:** `route_history`, `stop_reason`, and `approval` (`decision`, `proposed_followup_query`, `approved_followup_query`, `message`), or `null` if the run never paused.
+- **Retrieval:** `retrieval_passes[]` with `pass_number`, `query_text`, `retrieval_config`, `added_chunk_ids`, `context_size_after`, `context_doc_ids_after`. Pass 1's context is read back from the Day 18 checkpointer (the final state only holds the merged context), so the graph itself is untouched.
+- **Evidence:** `diagnoses[]`, where `[0]` is the before and `[-1]` the after: `missing_doc_ids`, `missing_chunk_ids`, `trigger_reason`. The `report_gap` reason is `stop_reason`.
+- **Result:** `result`, an `AgentResult` (next section).
+- **Handles:** `langsmith` (`project`, `root_run_ids`; `null` when tracing is off) and `trace_lines` (Day 18's human-readable lines, unchanged).
 
 Sample run handle/path:
 
-- _TODO: Fill in exact trace URL/id, screenshot path, or local JSONL/report path._
-- _TODO: Fill in exact command that reproduces it._
+- **Local, tracing off (no LLM):** the first evidence run wrote `docs/traces/day19-agent-traces.jsonl`. Two later `--generate` runs overwrote that default path, so its row ids are gone. Reproduce a no-LLM file with `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py` (pass `--output` to keep the current file).
+- **LangSmith, no LLM:** project `ProcureRAG` (EU), local rows in `docs/traces/day19-langsmith-q091-q014.jsonl` (v1). Reproduce with `./.venv/bin/python src/agent_observability.py --query-ids Q091 Q014 --output docs/traces/day19-langsmith-q091-q014.jsonl`.
+  - Q091, row `37478b86-8c3b-46ee-a723-c42d693831ba`: root run `19960786-d2cf-43a4-b43c-a78cbec253d5` (pause), then `7d24decb-411d-4ecc-9c29-625462fa9cc1` (resume).
+  - Q014, row `e37364ae-bb3e-4843-aefb-d7febce7a9db`: root run `e4f8faeb-a00f-448e-b638-17597cfe599a`.
+  - All three were read back with `langsmith.Client.read_run`: status `success`, metadata linking to the local row.
+- **Plain-text `--generate`, before the fix (Juan, tracing on):** written as v1 to the default path, then **overwritten** by structured run 2. No local copy is left (`docs/traces/` was never committed).
+  - Q092 row `8aa14c52-5d74-46d3-871c-ffe563ac7186` is the one where the model declined in prose and was labeled `answered`.
+  - Its six LangSmith root runs (read back with status `success`, ids in `docs/eval-report.md`) are now the only copy of that run.
+- **Structured `--generate` run 1, after the fix (tracing off):** `docs/traces/day19-structured-generate.jsonl` (v2). Q091 row `01fe9f59-e52e-4107-9b41-0adad1ec8069` (the Band 4 answer). Reproduce with `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py --generate --output docs/traces/day19-structured-generate.jsonl`.
+- **Structured `--generate` run 2 (Juan, tracing on):** `docs/traces/day19-agent-traces.jsonl` (v2).
+  - Q091 row `566fd827-0c96-4db4-b76d-908e2188c281` (Band 3, correct): root runs `f9e8fe57-64af-422d-a55a-f7a791e0395b` (pause), `67436b15-ad11-4cdf-8cc2-54ad2930b7a4` (resume).
+  - Q092 row `b3865aad-20e1-4a24-8614-bfcf790ea625` (cites the Cobalt contract): root runs `6a5afcbb-c8bd-4a5a-adae-c32b85c0866b`, `e21577de-d40e-42ef-b44a-c94fe5872cc1`.
+  - All six root runs read back with status `success`; full table in `docs/eval-report.md`.
+- Re-running rewrites a file with new ids and timestamps. Routes, chunk ids, and diagnoses should come out the same; generated answers will not.
 
 ### Structured-output schema / validation behavior
 
-_TODO: Fill in._
+- **Schema name/path:** `AgentResult` (the output contract) inside `AgentRunTrace` (the trace row), both in `src/agent_observability.py`. Nested models: `RetrievalPass`, `EvidenceDiagnosis`, `ApprovalRecord`, `CitationCheck`, `LangSmithHandle`. All share `ContractModel` (`extra="forbid"`), and no field has a default.
+- **Status enum:**
+  - `answered`: the LLM answered from complete evidence.
+  - `model_declined`: complete evidence, but the LLM said the sources weren't enough.
+  - `gap_report`: evidence missing; the graph refused and named the gap.
+  - `not_generated`: evidence complete, no LLM wired in.
 
-Expected fields to document:
-
-- Schema name/path: _TODO._
-- Status enum or equivalent: _TODO, e.g. answer / refusal / gap_report / not_generated._
-- Evidence status fields: _TODO._
-- Citation/source fields: _TODO._
-- Trace handle/path fields: _TODO._
-- Validation behavior: _TODO: what invalid output is rejected or normalized?_
-- Relationship to LangChain/OpenAI structured output: _TODO: deterministic Pydantic wrapper now vs provider-native structured answer later._
+  There are two refusals, kept apart on purpose: the *graph* refusing (`gap_report`) and the *model* refusing (`model_declined`).
+- **Evidence status fields:** `evidence_status`, one of `complete` / `missing_docs` / `missing_chunks`, plus `missing_doc_ids` and `missing_chunk_ids` from the final diagnosis. A reviewer rejection is a stop reason, not an evidence status.
+- **Citation/source fields:** `citations` is a `CitationCheck` (`cited_ids`, `valid_ids`, `orphan_ids`, `uncited_ids`, `passed`) whenever an LLM wrote the text (`answered`/`model_declined`), otherwise `null`. `passed` means at least one valid citation and no orphans (Day 10's contract).
+- **Trace handle/path fields:** `result.run_id` points at the row; `row.langsmith.root_run_ids` points at the SaaS traces; `row.thread_id` points at the checkpointer thread.
+- **The LLM's own contract:** `generation.GeneratedAnswer`, with `answer` (inline `[n]` citations) and `answerable_from_sources` (`true` if it answered, even partly).
+  - It is sent as a strict `json_schema` `response_format` (`make_openrouter_client(response_model=GeneratedAnswer)`).
+  - The reply is validated again with `model_validate_json` (`generate_structured_answer`).
+  - `structured_generate_node` writes the verdict to state, and `build_result` maps `false` to `model_declined`.
+  - The field descriptions go inside the schema, so they act as prompt text for each field.
+- **Validation behavior:**
+  - **Rejected:** unknown enum values (`"Answered"`, `"gave_up"`, `"aprove"`), unknown keys (`stop_reson`), missing fields (named by location, e.g. `('result', 'status')`), naive timestamps, and a `schema_version` the reader doesn't know.
+  - **Rejected by cross-field rules:**
+    - `passed=True` next to orphans;
+    - `answered`/`model_declined`/`not_generated` with missing evidence;
+    - `complete` with missing ids;
+    - `gap_report` with complete evidence;
+    - citations present without an LLM, or absent with one;
+    - `result.run_id` ≠ row `run_id`;
+    - a route not ending on `generate`/`report_gap`.
+  - **Rejected at generation:** an LLM reply that is prose, lacks the verdict, or adds a key. The run fails loudly instead of guessing.
+  - **Normalized:** citation id `"3"` → `3`, while `"three"` is rejected.
+  - **Recorded, not rejected:** an orphan citation in a real answer (`passed=false` plus a caveat). The schema enforces shape; quality is the eval's job.
+- **Relationship to LangChain/OpenAI structured output:** both kinds are now in use, for two different producers.
+  - The LLM fills only the small `GeneratedAnswer`, enforced by the provider (OpenAI-style strict structured output through OpenRouter, via the plain `openai` SDK) and re-validated by Pydantic.
+  - The deterministic graph fills `AgentResult`, validated by plain Pydantic. Route and evidence facts are never left for the model to restate.
+  - No `create_agent(response_format=...)`: there is no tool-calling agent loop in this graph.
 
 ### Verification after build
 
-_TODO: Fill in real output._
-
-Expected commands:
+Run on 2026-10-05, after the build:
 
 ```bash
 ./.venv/bin/pytest -q
+# 262 passed in 1.75s   (244 baseline + 18 new in tests/test_agent_observability.py)
+
+./.venv/bin/pytest -q tests/test_agent_observability.py
+# 18 passed in 0.47s
+
 ./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
 ./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
 ./.venv/bin/python src/regression_suite.py --verify-retrieval
-# plus the chosen trace/demo command, documented with its real output or handle
+# All cases match their currently expected state (frozen fixtures).
+# Q091 frozen fixture lane still shows: term-level gap OPEN: missing ['Band 3']   (unchanged; still single-pass)
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_graph.py --all-queries-summary
+# generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092)   (unchanged)
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py
+# LangSmith tracing: off | code version: fc228a7-dirty
+# Q001: generate, no_missing_evidence -> status not_generated / complete
+# Q091: recursive_retrieve -> generate, fixed_after_second_pass, approve;
+#       pass 1: 10 sources, missing POL-001::chunk-5/6; pass 2: +9 chunks (POL-001::chunk-6 first) -> 19
+#       -> status not_generated / complete
+# Q092: recursive_retrieve -> generate, fixed_after_second_pass, approve;
+#       pass 1: missing CONTRACT-005, POL-002; pass 2: +9 chunks incl. POL-002::chunk-8/9, CONTRACT-005::chunk-3 -> 19
+#       -> status not_generated / complete
+# Q014: report_gap, trigger_detected_no_followup_query_defined;
+#       pass 1: 5 sources from GUIDE-002, POL-003, SOP-004, SOP-007 -> status gap_report / missing_docs ['CONTRACT-004']
+# Wrote 4 trace row(s) to docs/traces/day19-agent-traces.jsonl; re-read and re-validated 4.
+
+./.venv/bin/python src/agent_observability.py --query-ids Q091 Q014 --output docs/traces/day19-langsmith-q091-q014.jsonl
+# LangSmith tracing: ON, project 'ProcureRAG'
+# Q091 root runs ['19960786-d2cf-43a4-b43c-a78cbec253d5', '7d24decb-411d-4ecc-9c29-625462fa9cc1']
+# Q014 root runs ['e4f8faeb-a00f-448e-b638-17597cfe599a']
+# Wrote 2 trace row(s) ...; LangSmith: traces flushed to project 'ProcureRAG'.
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py --query-ids Q091 --decision reject --output <scratch file>
+# Q091: report_gap, followup_rejected_by_reviewer -> status gap_report / missing_chunks,
+#       caveats ['a reviewer rejected the follow-up retrieval pass: rejected from the Day 19 CLI demo']
 ```
+
+Then the tests themselves were checked: each must fail when the rule it guards is broken. In a scratch copy, four mutations each turned exactly the intended test red:
+- `extra="forbid"` → `"ignore"`;
+- the "needs complete evidence" rule disabled;
+- the `run_id`-match rule disabled;
+- all merged sources counted as pass-2 additions.
+
+### Verification after the structured-generation fix (option 3)
+
+Juan's plain-text `--generate` run (before the fix; tracing on; default output path):
+
+```bash
+./.venv/bin/python src/agent_observability.py --generate
+# Q001: answered, cites [4] -> FAQ-001::chunk-5, passed true
+# Q091: answered, cites [5, 11]; [11] = POL-001::chunk-6 (added by pass 2) states Band 3 correctly
+# Q092: status answered, cited_ids [], passed false, caveats []  <- the text was a DECLINE:
+#       "The sources do not contain enough information to answer the question ..."
+# Q014: gap_report
+# 6 LangSmith root runs read back, all success; generate span 1.3-2.4 s, about 90-95% of each answered run
+```
+
+After the fix, run on 2026-10-05:
+
+```bash
+./.venv/bin/pytest -q
+# 273 passed in 1.42s   (244 baseline + 21 in test_agent_observability.py + 8 new in test_generation.py)
+
+./.venv/bin/python -m compileall -q src tests      # clean, no output
+./.venv/bin/python -m ruff check src tests         # All checks passed!
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+
+# both v1 files still validated under the v2 reader at this point
+# (the first was overwritten later by structured run 2):
+# docs/traces/day19-agent-traces.jsonl 4 rows, schema_version {1}
+# docs/traces/day19-langsmith-q091-q014.jsonl 2 rows, schema_version {1}
+
+# first live attempt (with OpenRouter provider.require_parameters=true):
+# openai.NotFoundError 404: "No endpoints found that can handle the requested parameters"
+#   (failed_routing_step: "Filter by Parameters"), before any model ran
+# -> removed require_parameters; gpt-4o endpoints don't list `reasoning` (Azure: nor `max_tokens`)
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py --generate --output docs/traces/day19-structured-generate.jsonl
+# all 3 LLM replies schema-valid; 4 rows written and re-validated, schema_version 2
+# Q001: answerable true -> answered, cites [4, 5], passed true
+# Q091: answerable true -> answered, cites [5, 7, 11, 13], passed true
+#       BUT says "EUR 120,000 falls within Band 4 ... CPO and CFO [11]". Wrong: [11] lists Band 3 (VP Procurement)
+# Q092: answerable true -> answered, cites [3, 16] (POL-006 only), passed true
+#       none of the recovered POL-002 / CONTRACT-005 chunks ([11], [13], [19]) cited
+# Q014: gap_report
+```
+
+Juan's structured run 2 (same code, tracing on, default output path):
+
+```bash
+./.venv/bin/python src/agent_observability.py --generate
+# all 3 LLM replies schema-valid; 4 rows, schema_version 2; routes/passes/diagnoses identical to run 1
+# Q001: answered, cites [4] -> FAQ-001::chunk-5, passed true
+# Q091: answered, cites [7, 11]; "Band 3 ... VP Procurement ... Finance review [11]" -> correct this time
+#       BUT [7] = CONTRACT-004::chunk-9 (Meridian's own contract) stated as the general security requirement
+# Q092: answered, cites [3, 7, 11, 19]; uses recovered POL-002::chunk-8 [11] and CONTRACT-005::chunk-3 [19]
+#       BUT [7] = CONTRACT-006::chunk-14 = Cobalt Talent Partners (contingent labour), applied to a cleaning contractor
+# Q014: gap_report
+# 6 LangSmith root runs read back, all success; generate span 2.46-3.34 s
+```
+
+Two more mutations, in a scratch copy, each turned exactly `test_model_that_declines_on_complete_evidence_is_model_declined_not_answered` red:
+- the `model_declined` branch removed from `build_result`;
+- the `answerable_from_sources` field removed from the state schema. LangGraph then silently drops the model's `false`, and the row reverts to `answered`.
 
 ### What failed or was confusing
 
-_TODO: Fill in._
-
-Hints:
-
-- Did LangSmith/Langfuse capture work? If not, what exactly blocked it?
-- Did the trace schema blur traces with eval results?
-- Did structured output validate deterministic graph state or live model output?
-- Did any schema choice overconstrain future answers or hide useful caveats?
+- **Did LangSmith capture work?** Yes, after two traps.
+  - **Turning tracing off takes two variables.** LangSmith checks `LANGSMITH_TRACING_V2` before `LANGSMITH_TRACING`, and `.env` sets `TRACING_V2=true`, so `LANGSMITH_TRACING=false` alone would still upload. The CI-safe commands set both.
+  - **LangSmith caches environment lookups (`lru_cache`).** A tracing check made before `load_dotenv()` would keep its stale answer for the whole process, so `main()` loads `.env` first.
+- **"Flushed" is not proof of upload.** LangChain uploads on a background thread and reports failures as warnings, which are easy to miss in noisy output. `main()` calls `wait_for_all_tracers()`, and the three root runs were then confirmed server-side with `Client.read_run` (status `success`) before being recorded here.
+- **One query, two traces.** A run that pauses is two `graph.invoke` calls, so LangSmith has two root runs for one Q091 review. The local row records both ids, and LangSmith groups them by `thread_id`. The span tree also shows `approve_followup` in *both* traces. That is Day 18's "node re-runs from its first line on resume" gotcha, now visible.
+- **Where the "before" context lives.** The final state only holds the merged context. Instead of adding a field to the graph, the trace builder reads pass 1's sources from the checkpointer (`get_state_history`). The Day 18 resume store doubles as the observability store.
+- **Building URLs in code was a dead end.** `Client.get_run_url` is deprecated, and its replacement needs the project id and trace id (extra API calls). The row records the project and root run ids instead. That is a stable handle, and it keeps the org/project UUIDs (which the UI URL embeds) out of a repo with a GitHub remote.
+- **Did the trace schema blur traces with eval results?** Kept apart deliberately, with two blurry edges named:
+  - `citations.passed` is a deterministic contract check (every `[n]` maps to a retrieved source), not an answer-quality judgment. An orphan citation is *recorded*, not rejected.
+  - `evidence_status` comes from the gold-label diagnosis, so it is an eval-time signal carried in the trace, not something a production trace could compute.
+- **The first schema had the hole it was built to close.** In the first live `--generate` run, Q092's model wrote *"The sources do not contain enough information..."*, and the row said `status="answered"` with no caveat. v1 derived `status` from the route plus "did an LLM produce text", so a model refusal was indistinguishable from an answer. The only hint was `citations.passed=false`.
+  - Fixed with structured generation: the model's verdict is now a field (`answerable_from_sources`), and `false` means `model_declined`.
+  - Lesson: a contract built around the graph's decisions also needs the *model's* decisions as data, or it drifts back to prose-scraping.
+- **LangGraph dropped the new field without a word.** A node returning `answerable_from_sources` loses it unless the state schema declares it (measured: no error). Hence the `NotRequired[bool]` in Day 18's state. A mutation test proves the row reverts to `answered` without it.
+- **The "safe" OpenRouter flag broke the request.** `provider.require_parameters=true` (route only to providers that support `response_format`) failed with a 404 before any model ran, because it requires *every* parameter, including the `reasoning` flag gpt-4o's endpoints don't list. Removed; our own `model_validate_json` is the safety net.
+- **The IDE flagged my `Literal[CONSTANT]` types.** They are valid at runtime and invalid by the typing spec. The values are now plain strings, pinned to the constants by a test.
+- **Did structured output validate deterministic graph state or live model output?** Both, now. Pydantic validates the graph's state (`AgentResult`), and the provider plus Pydantic validate the model's reply (`GeneratedAnswer`).
+  - The first structured live run showed the limit: Q091's answer was schema-valid, cited real sources, passed every check, and named the **wrong approval band** (Band 4 instead of Band 3, misreading `POL-001::chunk-6`).
+  - The second showed a quieter version: Q092 cited a real chunk from the **wrong supplier's contract** (Cobalt, contingent labour) as a rule for a cleaning contractor, and `citations.passed` stayed `true`. The citation check proves the source exists in the context, not that it applies.
+  - Structured output fixes shape, not truth.
+- **Is the hosted model repeatable at temperature 0?** No. Between runs of the same query, Q092 flipped from a decline to an answer, and Q091 went Band 3 → Band 4 → Band 3 (plain, structured 1, structured 2). So the Band 4 error was not built into structured mode, but two structured runs are still too few to compare the modes.
+- **The default output path ate evidence.** Juan's plain-text run was written to the default path, and a later run overwrote it. The decline row survives only in the docs and in LangSmith. Lesson: evidence runs always get their own `--output`, or the files get committed before the next run.
+- **Did any schema choice overconstrain future answers?** Yes, on purpose. `AgentResult` forbids calling the LLM's output `answered` on incomplete evidence. A future caveated-answer policy (option (b) for the `report_gap` cases) therefore *cannot* be added quietly: it needs a new status, a relaxed rule, and a `schema_version` bump. Today showed that mechanism working. `model_declined` arrived as a deliberate v2, and v1 files still read. Caveats were not hidden: reviewer edits and rejects (with the reason) and orphan citations are surfaced in `caveats`.
 
 ### What improved
 
-_TODO: Fill in._
-
-Expected shape:
-
-- What can Juan now inspect later that was previously only printed once?
-- Which fields make Q091/Q092 easier to debug?
-- How does the structured result make downstream UI/eval/review safer?
+- **Inspectable later, not printed once.** Every run is now a saved, validated JSONL row. Two runs (approve vs. reject, today vs. after a retrieval change) can be compared field by field, and the file is re-validated on read, so a hand-edited or stale row fails loudly.
+- **Q091/Q092 debugging fields.** Per pass: `query_text`, `retrieval_config`, `added_chunk_ids`, `context_size_after`, plus `diagnoses[0]` vs `diagnoses[-1]` and the `approval` record. Q091's row shows directly that pass 2 added 9 chunks and that `POL-001::chunk-6`, the one that closes the gap, was the first of them.
+- **Safer downstream use.** A UI or eval switches on `status` instead of scraping `"[not generated..."`. The safety rule "never call the LLM on missing evidence" is enforced on the output object itself. A wording change in `report_gap_node` can no longer silently break a consumer.
+- **The model's refusal is data now.** Q092's prose decline would now be `status="model_declined"`, read from a schema field the provider enforces, with no sentence parsed. Graph refusals and model refusals are separate values, so "retrieval failed" and "generation failed" can be counted separately.
+- **Schema evolution done properly once.** v2 added a value, writers write v2, and the reader still accepts the committed v1 files. Tests cover both directions.
+- **A live trace linked both ways.** The LangSmith root run ids sit in the local row, and the local `trace_row_id` sits in LangSmith metadata. Routers show up as their own spans in the UI.
+- **No behavior drift.** The graph code is untouched, the added chunks and source counts match Day 18 exactly, and the route distribution is still 76 / 2 / 15.
 
 ### What remains weak / confusing
 
-_TODO: Fill in._
-
-Expected possibilities:
-
-- Local-only trace vs real LangSmith/Langfuse trace.
-- No answer-completeness metric under the graph path yet.
-- 15 `report_gap` cases still need root-cause diagnosis.
-- `generation.main()` / `regression_suite.py` still single-pass.
-- Structured schema covers deterministic wrapper but not provider-native live structured generation yet.
+- **The contract cannot see wrong answers.** Structured run 1's Q091 named the wrong approval band with `answered`, `complete`, and `citations.passed=true`. Only an answer-level eval can catch that.
+- **The citation check cannot see a wrong-scope source.** Structured run 2's Q092 applied the Cobalt (contingent labour) contract to a cleaning contractor, and Q091 stated Meridian's own certifications as the general rule. Both citations are real, so both pass.
+- **The live `answered` rows are all incomplete** against `expected_answer` (hand-read, all three runs).
+- **`model_declined` has not been observed live.** The fix is proven by the fake-client regression test. In two structured live runs (6 LLM calls), the model answered everything.
+- **No flag for "the answer ignored the recovered evidence".** Structured run 1's Q092 cited only `POL-006`, none of the `POL-002`/`CONTRACT-005` chunks the recursive pass recovered (run 2 did cite them). The row has both lists (`added_chunk_ids`, `valid_ids`), but nothing compares them.
+- **No caveat for an answered reply that cites nothing** (option 1, not done).
+- **Few live runs per generation mode** (one plain, two structured). Variance at temperature 0 (Q092 flipped, Q091 went Band 3 → 4 → 3) means these runs can't compare plain and structured generation.
+- **The row doesn't record the model or its settings.** The LLM call isn't traced as an LLM span in LangSmith either: it uses the unwrapped `openai` SDK.
+- **No answer-completeness metric under the graph path.** `regression_suite.py --live` still has not run through the graph.
+- **The 15 `report_gap` cases are traceable now, but not yet diagnosed.** Only Q014 was traced. Its row already shows a *partial* gap (`POL-003` and `GUIDE-002` retrieved, `CONTRACT-004` missing).
+- **`generation.main()` and `regression_suite.py` are still single-pass** and not graph-aware.
+- **The trace is still eval-time.** `evidence_status` needs gold labels.
+- **No latency/cost fields in the local row.** LangSmith has per-span latency, but nothing aggregates it into metrics.
+- **No online evaluation:** no user feedback and no LLM-as-judge on traces.
+- **Merged-context noise is still unfiltered.** Now it is measured per row: 1 of Q091's 9 added chunks closes the gap.
 
 ### What I can now explain in an interview
 
-_TODO: Fill in after answering without notes._
+_Draft answers built from today's evidence. Answer the drill without notes before the Hermes review._
 
-Expected answer-shape bullets:
+**1. Logs vs traces vs metrics vs tests vs evals.**
+- **Logs** are textual events: Day 18's printed lines.
+- **A trace** is the structured execution tree of one run. In LangSmith, a root run with one span per node and router (Q091's resume trace: `approve_followup → route_after_approval → recursive_retrieve → diagnose → route_after_diagnosis → generate`). Locally, it is the flat `AgentRunTrace` row.
+- **Metrics** aggregate across runs: route distribution 76 / 2 / 15, P@1/nDCG, and latency/cost later.
+- **Tests** assert deterministic code contracts in CI: 273 pytest tests, none needing credentials.
+- **Evals** judge task quality against labeled examples: the 93-query corpus, the regression suite, DeepEval/RAGAS.
 
-1. Difference between logs, traces, metrics, tests, and evals.
-2. Why Day 18's local `trace` list was useful but not sufficient.
-3. Which trace fields debug Q091/Q092.
-4. Why structured output beats parsing prose.
-5. When to use provider-native structured output vs LangChain `response_format` vs plain Pydantic validation.
-6. Offline vs online evaluation in ProcureRAG.
-7. Why the 15 `report_gap` cases should be traced before changing policy.
+Each answers a different question. A trace row tells me *why* Q091 needed a second pass. It does not tell me whether the answer was good. I measured that today: structured run 1's Q091 trace row was complete, valid, and green on citations, and its answer named the wrong approval band.
+
+**2. Why Day 18's `trace` list wasn't enough.**
+- It wasn't durable: it died with the process.
+- It wasn't comparable: free text, no stable fields or ids.
+- It wasn't validated: nothing checked its shape.
+- It had no span tree and no handle into a SaaS UI.
+- The outcome was still prose that downstream code would have to scrape.
+
+Day 19 adds stable, versioned, validated fields, a JSONL artifact, and LangSmith root run ids linked both ways.
+
+**3. Fields to debug Q091's recursive path.**
+- `query_id`/`query_type`;
+- `diagnoses[0]`: missing chunks `POL-001::chunk-5`/`chunk-6`, trigger `missing_chunk`;
+- `approval`: decision, plus the proposed and approved follow-up;
+- `retrieval_passes[1]`: the follow-up `query_text`, the reused `retrieval_config`, `added_chunk_ids` (9, with `POL-001::chunk-6` first), context 10 → 19;
+- `diagnoses[-1]`: nothing missing;
+- `route_history` and `stop_reason` (`fixed_after_second_pass`);
+- `result.status`/`evidence_status`/`citations`;
+- the two LangSmith root run ids (pause and resume).
+
+**4. Why structured output beats parsing prose.** `status` is an enum. Scraping `"[not generated"` breaks silently the day someone rewords a string. A schema violation is loud: a `ValidationError` names the exact field (`('result', 'status')`). Validators enforce invariants the prose never could ("never `answered` on missing evidence", "`passed` agrees with the orphan list"). Tests, evals, and a UI read the same fields, and the same model exports a JSON Schema a provider can enforce. The prose still exists, in `text`, for humans.
+
+Q092 is the concrete case. The model's "the sources do not contain enough information" was prose, so my first schema called it `answered`. Making the model fill `answerable_from_sources` turned that refusal into data (`model_declined`), with no sentence-matching.
+
+The limit is just as concrete: structured output guarantees shape, not truth. In one structured run, Q091's schema-valid answer said Band 4. In another, Q092 cited a real chunk from the wrong supplier's contract, and the citation check passed.
+
+**5. Provider-native vs LangChain `response_format` vs plain Pydantic.**
+- **Provider-native Structured Outputs:** when a model must produce the final object and the provider can enforce the schema while generating.
+- **LangChain `create_agent(response_format=...)`:** inside an agent loop. Given a Pydantic model, it uses provider-native output when available, otherwise a tool-call strategy, and returns `result["structured_response"]`.
+- **Plain Pydantic:** deterministic outputs and trace rows, and as the last-line re-validation of anything a model returns.
+
+ProcureRAG now uses two of the three:
+- **Provider-native strict `json_schema`** for the small object the LLM must produce (`GeneratedAnswer`: answer plus verdict), sent through the plain `openai` SDK to OpenRouter and re-validated with Pydantic.
+- **Plain Pydantic** for everything the graph already knows (`AgentResult`/`AgentRunTrace`).
+
+The model is never asked to restate facts the graph knows exactly, like route or missing evidence. `create_agent(response_format=...)` isn't used because there is no tool-calling agent loop here.
+
+A practical gotcha: OpenRouter's `require_parameters` (meant to guarantee schema support) filtered out every gpt-4o endpoint, because of an unrelated `reasoning` flag. Our own re-validation is the dependable safety net.
+
+**6. Offline vs online evaluation here.**
+- **Offline:** everything repeatable before deployment: the 93 labeled queries, `regression_suite.py`, retrieval metrics, pytest, and today's JSONL trace artifacts.
+- **Online:** watching live traffic: LangSmith traces of real user runs, latency and cost dashboards, user feedback, LLM-as-judge on sampled traces, and drift.
+
+ProcureRAG is offline plus one live trace capture; there is no production traffic. And `evidence_status` can't be an online signal at all, because it needs gold labels.
+
+**7. Why trace the 15 `report_gap` cases before changing policy.** In the route summary they all look the same (`report_gap`, no follow-up), but the causes differ.
+- **Q014 is a partial gap.** Its row shows `POL-003` and `GUIDE-002` retrieved and only `CONTRACT-004` missing.
+- **Q023 may be fixable.** It misses `CONTRACT-005`, the doc Q092's follow-up already recovered (a hypothesis for a targeted follow-up, not yet tested).
+
+Partial gaps might suit a caveated answer; total misses need retrieval fixes. Without per-query rows, a policy change is a blanket guess. And because the schema forbids `answered` on missing evidence, adding caveated answers becomes a visible contract change, not a quiet one.
 
 ### Next step
 
-_TODO: Fill in after review._
+1. **Juan:** review the drafted code line by line and re-run every command above:
+   - `src/agent_observability.py` and `tests/test_agent_observability.py`;
+   - the Day 19 parts of `src/generation.py` and `tests/test_generation.py`;
+   - the two small hooks in `src/agent_control_plane.py`.
 
-Likely next routes if Day 19 is clean:
-
-1. Week 4 guardrails focus: prompt-injection / PII / structured refusal controls over the now-observable graph path.
-2. HER-269 Week 4 gate review if Day 16–19 evidence is strong enough.
-3. If Day 19 exposes trace/result gaps, repair the local trace or structured-output contract before adding new guardrails.
+   Then fill in the course-completion TODOs and answer the drill without notes.
+2. **Measure answer quality, not just shape (paid):**
+   - Repeat `--generate` 3–5 times per mode (plain vs structured) on Q091/Q092, writing to separate `--output` files.
+   - Score each answer against `expected_answer`. Start with the "Band 3" term check from the regression suite.
+   - Structured run 2 (Band 3 again) already suggests the Band 4 error was variance, not structured output. Repeating it measures how often each mode gets the band wrong, and whether `model_declined` shows up live.
+3. **Close the remaining contract gaps (small, no LLM):**
+   - add a caveat when an `answered` reply cites nothing (option 1);
+   - flag an answer that cites none of the chunks the recursive pass recovered (compare `retrieval_passes[1].added_chunk_ids` with `citations.valid_ids`);
+   - consider a scope caveat when an answer cites a supplier-specific contract (`doc_type`/`supplier` metadata) for a question that names no supplier (the Cobalt case). This is a heuristic, so check it against the 93 queries before trusting it;
+   - consider a `generation` field (model, temperature) as the next `schema_version` bump.
+4. **`report_gap` diagnostic with the new rows:**
+   - Run `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py --query-ids Q012 Q014 Q015 Q023 Q032 Q039 Q045 Q057 Q061 Q067 Q073 Q075 Q082 Q086 Q090 --output docs/traces/day20-report-gap.jsonl`.
+   - Classify each case as partial vs total gap from `context_doc_ids_after` vs the gold labels.
+   - Test the Q023/`CONTRACT-005` follow-up hypothesis.
+5. **Ask Hermes to review HER-286** with the route doc's protocol, noting the implementation note at the top of this entry.
+6. Then the Week 4 guardrails focus (prompt-injection / PII / structured refusal controls), or the HER-269 gate review.

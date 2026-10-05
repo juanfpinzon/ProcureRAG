@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -323,3 +324,116 @@ def test_make_openrouter_client_raises_a_clear_error_on_blank_provider_content()
 
         with pytest.raises(RuntimeError, match="returned no answer text"):
             client("any prompt")
+
+
+# ---------------------------------------------------------------------------
+# Day 19: structured generation (GeneratedAnswer). Fake clients return the
+# JSON text a provider returns under `response_format=json_schema`. No
+# network is involved.
+# ---------------------------------------------------------------------------
+
+
+def _one_source(generation):
+    return generation.build_sources([_reranked_chunk(1, "POL-001", "Approval Policy", "Band 3 needs VP approval.")])
+
+
+def test_generated_answer_schema_is_ready_for_strict_structured_output():
+    """Strict modes need `additionalProperties: false` and every property
+    listed in `required`. The field descriptions travel in the schema,
+    which is how the model learns what each field means."""
+    generation = _load_generation_module()
+    schema = generation.GeneratedAnswer.model_json_schema()
+
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["answer", "answerable_from_sources"]  # also the order the model writes them
+    assert schema["properties"]["answerable_from_sources"]["type"] == "boolean"
+    assert "declined" in schema["properties"]["answerable_from_sources"]["description"]
+
+
+@pytest.mark.parametrize("answerable", [True, False])
+def test_generate_structured_answer_reads_the_models_verdict_from_a_field(answerable):
+    generation = _load_generation_module()
+    answer = "Band 3 needs VP Procurement approval [1]." if answerable else "The sources do not cover this."
+
+    def fake_structured_client(prompt):
+        assert "POL-001" in prompt  # the same augmented prompt as generate_answer
+        return json.dumps({"answer": answer, "answerable_from_sources": answerable})
+
+    result = generation.generate_structured_answer("What approval?", _one_source(generation), fake_structured_client)
+
+    assert result["answerable_from_sources"] is answerable
+    assert result["answer"] == answer
+    # Citations are still checked from the inline [n] markers, exactly as in Day 10.
+    assert result["citations"]["valid_ids"] == ([1] if answerable else [])
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The sources do not contain enough information.",  # prose, not JSON: what Q092 got before the fix
+        json.dumps({"answer": "Band 3 [1]."}),  # the verdict field is missing
+        json.dumps({"answer": "Band 3 [1].", "answerable_from_sources": True, "confidence": 0.9}),  # unknown key
+    ],
+)
+def test_generate_structured_answer_rejects_a_reply_outside_the_schema(reply):
+    """Even with provider-enforced schemas, the reply is validated again on
+    our side. A reply that doesn't fit fails loudly instead of being guessed at."""
+    from pydantic import ValidationError
+
+    generation = _load_generation_module()
+
+    with pytest.raises(ValidationError):
+        generation.generate_structured_answer("What approval?", _one_source(generation), lambda prompt: reply)
+
+
+def test_generate_structured_answer_with_empty_sources_never_calls_the_client():
+    generation = _load_generation_module()
+
+    def client_that_must_not_be_called(prompt):
+        raise AssertionError("client should never be called with zero retrieved sources")
+
+    result = generation.generate_structured_answer("Any question", [], client_that_must_not_be_called)
+
+    assert result["answer"] == generation.INSUFFICIENT_EVIDENCE_ANSWER
+    assert result["answerable_from_sources"] is False
+
+
+def test_make_openrouter_client_sends_a_strict_json_schema_only_when_asked():
+    """Checks the REQUEST shape with a fake `openai.OpenAI` (no network).
+    Without `response_model` the request is exactly the Day 10-18 one, and
+    with it, the schema goes out as a strict `response_format`."""
+    import types
+
+    import openai
+
+    generation = _load_generation_module()
+    sent_requests = []
+
+    class RecordingOpenAIClient:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            sent_requests.append(kwargs)
+            message = types.SimpleNamespace(content='{"answer": "ok", "answerable_from_sources": true}')
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message, finish_reason="stop")])
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(openai, "OpenAI", RecordingOpenAIClient)
+        generation.make_openrouter_client(model="fake-model", api_key="fake-key")("prompt")
+        generation.make_openrouter_client(
+            model="fake-model", api_key="fake-key", response_model=generation.GeneratedAnswer
+        )("prompt")
+
+    plain, structured = sent_requests
+    assert "response_format" not in plain
+    assert plain["extra_body"] == {"reasoning": {"enabled": False}}
+
+    json_schema = structured["response_format"]["json_schema"]
+    assert structured["response_format"]["type"] == "json_schema"
+    assert json_schema["strict"] is True
+    assert json_schema["name"] == "GeneratedAnswer"
+    assert json_schema["schema"] == generation.GeneratedAnswer.model_json_schema()
+    # No `require_parameters`: it filtered out every gpt-4o endpoint live (see make_openrouter_client).
+    assert structured["extra_body"] == plain["extra_body"]

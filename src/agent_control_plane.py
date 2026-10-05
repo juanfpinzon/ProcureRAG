@@ -189,6 +189,14 @@ class ControlledProcureRAGState(ProcureRAGState):
     # Code reading it must use `state.get("approval")`.
     approval: NotRequired[dict]
 
+    # Day 19: the model's own verdict ("could I answer from these sources?"),
+    # written only by `agent_observability.structured_generate_node`. It has
+    # to be declared here even though Day 18 never writes it: LangGraph
+    # silently DROPS any key a node returns that is not in the state schema
+    # (measured on 1.2.11: no error, the value just disappears). Absent on
+    # every run that used Day 17's plain `generate_node`.
+    answerable_from_sources: NotRequired[bool]
+
 
 # ---------------------------------------------------------------------------
 # The approval point.
@@ -383,8 +391,15 @@ def controlled_report_gap_node(state):
 # ---------------------------------------------------------------------------
 
 
-def build_controlled_graph(retrieve_fn, client=None, checkpointer=None):
+def build_controlled_graph(retrieve_fn, client=None, checkpointer=None, generate_node_fn=generate_node):
     """Assemble the Day 17 graph plus the approval node, compiled WITH a checkpointer.
+
+    `generate_node_fn` (added Day 19) is the function used for the
+    `generate` node. The default is Day 17's `generate_node`, so every
+    Day 18 caller gets the same graph as before. Day 19 passes
+    `agent_observability.structured_generate_node` to make the LLM answer in
+    a schema. It is swapped here, at wiring time, so the graph's shape
+    (nodes, edges, routers) stays exactly the same.
 
     Compare with `agent_graph.build_graph`. There are three differences:
 
@@ -416,7 +431,7 @@ def build_controlled_graph(retrieve_fn, client=None, checkpointer=None):
     builder.add_node("retrieve", partial(retrieve_node, retrieve_fn=retrieve_fn))
     builder.add_node("diagnose", diagnose_node)
     builder.add_node("recursive_retrieve", partial(recursive_retrieve_node, retrieve_fn=retrieve_fn))
-    builder.add_node("generate", partial(generate_node, client=client))
+    builder.add_node("generate", partial(generate_node_fn, client=client))
     # Same node name as Day 17, but this version also knows "rejected".
     builder.add_node("report_gap", controlled_report_gap_node)
     # The new node: the human approval point.
