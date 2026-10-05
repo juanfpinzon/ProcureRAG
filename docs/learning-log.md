@@ -3819,8 +3819,6 @@ Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrai
 
 Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
 
-Day 18 exception (my call): I asked Claude Code to write `src/agent_control_plane.py`, `tests/test_agent_control_plane.py`, the Day 18 section of `docs/eval-report.md`, and a first draft of this entry, as a worked example. I am reviewing and executing every line before claiming the learning. Hermes should review with that in mind.
-
 ### Course / docs target
 
 - No new Boot.dev chapter today. Day 18 builds on Day 16's Boot.dev Chapter 11 recursive/agentic retrieval and Day 17's LangGraph `StateGraph`.
@@ -3900,21 +3898,22 @@ The anchor stays Q091/Q092 and the Day 17 route distribution (76 / 2 / 15). Appr
   - No model chooses the next step; the router is deterministic code over measured evidence. That is what makes every route reproducible and unit-testable without an LLM.
   - Route labels and eval-state fields (`diagnoses`, `route_history`, `stop_reason`) must stay explicit, because the regression and eval story depends on them.
   - Everything Day 18 needed (pause, resume, replay) is a LangGraph feature, so it works on any compiled `StateGraph`. No `create_agent` was required.
-- **Where `create_agent` fits:** the day an LLM *proposes* the follow-up query instead of `AGENTIC_CASE_OVERRIDES`. That proposal is a tool call, and `HumanInTheLoopMiddleware(interrupt_on={"recursive_retrieve": {"allowed_decisions": ["approve", "edit", "reject"]}})` would gate it the same way `approve_followup` does now. I deliberately mirrored the middleware's decision vocabulary (`{"type": "approve" | "edit" | "reject"}`), so that migration is a rename, not a redesign. A sketch is in `docs/eval-report.md` → Day 18 → "Current-API decision" (not executed).
+- **Where `create_agent` fits:** the day an LLM *proposes* the follow-up query instead of `AGENTIC_CASE_OVERRIDES`. That proposal is a tool call, and `HumanInTheLoopMiddleware(interrupt_on={"recursive_retrieve": {"allowed_decisions": ["approve", "edit", "reject"]}})` would gate it the same way `approve_followup` does now. The Day 18 decision vocabulary intentionally mirrors the middleware's concepts (`approve` / `edit` / `reject`, keyed by `"type"`), but the payload shape is ProcureRAG-specific. The middleware's edit is `{"type": "edit", "edited_action": {"name": ..., "args": {...}}}`, and it resumes with `{"decisions": [...]}`, one decision per pending tool call. Mine is `{"type": "edit", "followup_query": "..."}`, with exactly one decision per pause. A migration would therefore need an adapter from `edited_action` / tool-call decisions into ProcureRAG's `followup_query` contract. A sketch is in `docs/eval-report.md` → Day 18 → "Current-API decision" (not executed).
 - **`create_react_agent` migration/deprecation note:** on langgraph 1.2.11, calling `langgraph.prebuilt.create_react_agent` emits `LangGraphDeprecatedSinceV10: create_react_agent has been moved to langchain.agents. Please update your import to from langchain.agents import create_agent. Deprecated in LangGraph V1.0 to be removed in V2.0.` Course and tutorial code using it is migration context only.
 
 ### Memory / checkpointing artifact
 
 - **Artifact files:**
   - `src/agent_control_plane.py`: `build_controlled_graph`, `approve_followup_node`, `replay_with_different_decision`, plus the CLI demo.
-  - `tests/test_agent_control_plane.py`: 11 tests.
+  - `tests/test_agent_control_plane.py`: 12 tests.
   - `docs/eval-report.md`: the Day 18 section.
 - **Mechanism:** `InMemorySaver` passed to `compile(checkpointer=...)`, plus `thread_config(thread_id)` (`<query_id>-review` in the demo). It is thread-level persistence only. No `Store`, no long-term memory.
-- **State saved:** the full `ControlledProcureRAGState` at every super-step:
+- **State saved:** at every super-step, every `ControlledProcureRAGState` field written so far:
   - the inputs;
   - `retrieval_config`, `sources`, and `retrieval_passes`;
   - `diagnoses`, `route_history`, and `trace`;
-  - the reviewer's `approval` record, `answer`, `citations`, and `stop_reason`.
+  - `answer`, `citations`, and `stop_reason` once an end node has run;
+  - `approval`, only on runs where a reviewer made a valid decision. It is typed `NotRequired[dict]`, because the controls, the no-follow-up gaps, and a still-paused run don't have it.
 
   The live Q091 thread saved 8 checkpoints, and the paused one is step 2 (`next ['approve_followup']`, 1 pass, 10 sources).
 - **Demo command:** `./.venv/bin/python src/agent_control_plane.py`. It prints, per query, the approval request, the decision, the trace, and one line per saved checkpoint. The time-travel replay follows at the end.
@@ -3944,7 +3943,7 @@ The anchor stays Q091/Q092 and the Day 17 route distribution (76 / 2 / 15). Appr
 - **Allowed decisions:**
   - approve, which runs the proposed follow-up;
   - edit (`followup_query`), which runs the reviewer's query and keeps both queries in `approval`;
-  - reject (optional `message`), which goes to `report_gap` with the new stop reason `followup_rejected_by_reviewer` and makes no second retrieval call.
+  - reject (optional `message`, which must be a string if given, the same contract as the middleware's `RejectDecision.message: NotRequired[str]`), which goes to `report_gap` with the new stop reason `followup_rejected_by_reviewer` and makes no second retrieval call.
 
   Anything malformed keeps the run paused and asks again. "Respond", the fourth middleware decision type, has no meaning here.
 - **Who pauses:** only Q091 and Q092, out of all 93 labeled queries. A one-off scratch run auto-approved every pause and reproduced 76 / 2 / 15.
@@ -3955,7 +3954,8 @@ The anchor stays Q091/Q092 and the Day 17 route distribution (76 / 2 / 15). Appr
 - **Rejected or edited path:**
   - `test_reject_reports_the_gap_without_a_second_retrieval_pass`: 1 retrieval call; a client that raises if called is never called.
   - `test_edit_runs_the_reviewers_query_and_keeps_the_original_proposal`.
-  - `test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck`.
+  - `test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck`: a typo, a blank edit, and a non-string `message` each re-ask.
+  - `test_reject_message_is_optional_but_must_be_a_string_if_given`.
   - Live: `--decision reject` on Q092 → `report_gap`, `followup_rejected_by_reviewer`.
 
 ### Observability / trace evidence
@@ -3979,7 +3979,7 @@ Expected route baseline from Day 17, re-run today and unchanged:
   - added docs/chunks: 9 new chunks, 10 → 19 sources. `POL-002::chunk-8`, `POL-002::chunk-9`, and `CONTRACT-005::chunk-3` closed the gap.
   - stop reason: `fixed_after_second_pass` (approve). Rejecting gave `followup_rejected_by_reviewer`, and replaying that rejected run with approve made 1 retrieval call (the follow-up only) and reached `fixed_after_second_pass`.
 - **LangSmith / trace handle:** none yet.
-- **Blocker/fallback:** not a credentials blocker. `.env` has tracing on and the project set to `ProcureRAG`. I ran every Day 18 command with `LANGSMITH_TRACING_V2=false` so the evidence runs didn't send traces before I had reviewed the code. The local trace and checkpoint table are today's evidence. Capturing a traced Q091 approve/resume pair is the first item of the next step.
+- **Blocker/fallback:** not a credentials blocker. `.env` has tracing on and the project set to `ProcureRAG`. I ran every Day 18 evidence command with `LANGSMITH_TRACING_V2=false`, so no traces have been sent yet. The local trace and checkpoint table are today's evidence. Capturing a traced Q091 approve/resume pair is the first item of the next step.
 
 ### `report_gap` policy for the 15 uncovered queries
 
@@ -4000,10 +4000,10 @@ Run on 2026-10-05, after the build. Every command ran with `LANGSMITH_TRACING_V2
 
 ```bash
 ./.venv/bin/pytest -q
-# 243 passed in 1.58s   (232 baseline + 11 new in tests/test_agent_control_plane.py)
+# 244 passed in 2.15s   (232 baseline + 12 new in tests/test_agent_control_plane.py; re-run after the review fixes)
 
 ./.venv/bin/pytest -q tests/test_agent_control_plane.py
-# 11 passed in 0.28s
+# 12 passed in 0.41s
 
 ./.venv/bin/python -m compileall -q src tests
 # clean, no output
@@ -4069,7 +4069,6 @@ Also run once and not committed: a scratch loop over all 93 queries through `bui
 - **15 of 93 queries still end in `report_gap`.** The recursive branch (and so the approval point) only exists for the 2 queries with a hand-written follow-up.
 - **`generation.main()` and `regression_suite.py` are still single-pass** and not graph-aware, so the frozen Q091 fixture still shows the Band 3 gap open.
 - **Merged context noise.** Approving adds 9 chunks to fix a gap that 1–3 of them close. The reviewer is told (`cost_note`) but nothing filters it.
-- **I didn't write this code myself.** The understanding has to come from my review and execution, and the interview answers below are what that review must make true.
 
 ### What I can now explain in an interview
 
@@ -4094,7 +4093,7 @@ It only fires on 2 of 93 queries, which matters because approval fatigue would k
 
 On top of that it gives a UI to filter and compare runs, and to see a paused run and its resume together by thread. For Q091 it would show the route, the approval request as the interrupt payload, the follow-up query, the 9 added chunks, and the stop reason, without me deciding up front what to print. The local trace is my regression evidence; LangSmith is my debugging tool. Honest status: not captured yet.
 
-**5. Why `create_agent` is the current API, and why ProcureRAG may still use low-level `StateGraph`.** In LangChain v1, `create_agent` is the standard agent factory. It returns a compiled LangGraph running the model → tools → model loop, with middleware as the control surface: HITL on tool calls, summarization, PII, retries, call limits. `create_react_agent` is deprecated (measured warning on 1.2.11: moved to `langchain.agents.create_agent`, removed in V2.0). ProcureRAG's graph is a deterministic workflow, not a tool-calling loop: the router is code over measured evidence, and route labels and eval fields must stay explicit. And everything Day 18 needed (checkpointer, `interrupt()`, time travel) is LangGraph-level, so it works on my `StateGraph` directly. If an LLM ever proposes follow-up queries, that becomes a tool call. Then a `create_agent` with `HumanInTheLoopMiddleware` can be embedded as a node, and my approval vocabulary already matches the middleware's.
+**5. Why `create_agent` is the current API, and why ProcureRAG may still use low-level `StateGraph`.** In LangChain v1, `create_agent` is the standard agent factory. It returns a compiled LangGraph running the model → tools → model loop, with middleware as the control surface: HITL on tool calls, summarization, PII, retries, call limits. `create_react_agent` is deprecated (measured warning on 1.2.11: moved to `langchain.agents.create_agent`, removed in V2.0). ProcureRAG's graph is a deterministic workflow, not a tool-calling loop: the router is code over measured evidence, and route labels and eval fields must stay explicit. And everything Day 18 needed (checkpointer, `interrupt()`, time travel) is LangGraph-level, so it works on my `StateGraph` directly. If an LLM ever proposes follow-up queries, that becomes a tool call. Then a `create_agent` with `HumanInTheLoopMiddleware` can be embedded as a node. My decisions already use the middleware's names (`approve` / `edit` / `reject`), but not its payloads, so I'd need a small adapter from its `edited_action` and its per-tool-call `decisions` list into my `followup_query` contract.
 
 **6. Why memory can be dangerous in procurement RAG.**
 - **Stale facts:** a remembered approval threshold outlives the policy update.
@@ -4117,8 +4116,8 @@ The safe version ProcureRAG already has is procedural and reviewed: `AGENTIC_CAS
 
 ### Next step
 
-1. **Review and execute the Day 18 code line by line** (`src/agent_control_plane.py`, `tests/test_agent_control_plane.py`), then answer the interview drill without notes.
+1. **Interview drill:** answer the Day 18 questions without notes.
 2. **Capture LangSmith evidence:** run `./.venv/bin/python src/agent_control_plane.py --query-ids Q091` with tracing on (project `ProcureRAG`), and record the trace link/id for the paused run and its resume in `docs/eval-report.md`.
 3. **`report_gap` signal:** a Day 15-style root-cause diagnostic on 3–4 of the 15 queries, to choose between a caveated answer and more follow-up strategies.
 4. **Answer completeness under the graph path:** `regression_suite.py --live` (paid default model), so "fixed" stops being only a retrieval-context claim.
-5. **Ask Hermes to review HER-285** with the protocol in the route doc, flagging the Day 18 authorship exception. If it closes, move to the Week 4 guardrails focus (PII / prompt-injection controls) or the HER-269 gate review.
+5. **Ask Hermes to review HER-285** with the protocol in the route doc. If it closes, move to the Week 4 guardrails focus (PII / prompt-injection controls) or the HER-269 gate review.

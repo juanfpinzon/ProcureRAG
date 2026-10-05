@@ -325,6 +325,10 @@ def test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck():
     blank_edit = graph.invoke(Command(resume={"type": "edit", "followup_query": "   "}), config)
     assert "non-empty 'followup_query'" in blank_edit["__interrupt__"][0].value["error"]
 
+    # A non-string message would end up in the trace and the gap report.
+    numeric_message = graph.invoke(Command(resume={"type": "reject", "message": 123}), config)
+    assert "'message' must be a string" in numeric_message["__interrupt__"][0].value["error"]
+
     # Still paused, and the second pass has not run. Measured on 1.2.11:
     # after a re-ask, `snapshot.next` reads `()`, so `snapshot.interrupts`
     # (the pending request) is the reliable "is this run paused?" signal.
@@ -335,6 +339,31 @@ def test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck():
     assert resumed["stop_reason"] == STOP_FIXED_AFTER_SECOND_PASS
     assert resumed["approval"]["decision"] == "approve"
     assert graph.get_state(config).interrupts == ()
+
+
+def test_reject_message_is_optional_but_must_be_a_string_if_given():
+    """The message contract, checked directly on `decision_error`.
+
+    It is the same as the middleware's `RejectDecision.message:
+    NotRequired[str]`: leaving it out, or sending an explicit None, is fine,
+    and anything that is not a string is refused. An end-to-end reject
+    without a message also gets an explicit reason in the gap report.
+    """
+    module = _load_control_plane_module()
+
+    assert module.decision_error({"type": "reject"}) is None
+    assert module.decision_error({"type": "reject", "message": None}) is None
+    assert module.decision_error({"type": "reject", "message": "out of scope"}) is None
+    assert "'message' must be a string" in module.decision_error({"type": "reject", "message": 123})
+    assert "'message' must be a string" in module.decision_error({"type": "approve", "message": ["ok"]})
+
+    query_row, retrieve_fn = _q091_shaped_case()
+    graph, config, _ = _start_run(module, query_row, retrieve_fn, Q091_CASE_OVERRIDES)
+    resumed = graph.invoke(Command(resume={"type": "reject"}), config)
+
+    assert resumed["stop_reason"] == module.STOP_FOLLOWUP_REJECTED
+    assert resumed["approval"]["message"] is None
+    assert "no reason given" in resumed["answer"]
 
 
 # ---------------------------------------------------------------------------

@@ -3613,7 +3613,7 @@ Day 17's graph (`src/agent_graph.py`) decides on its own whether to run a second
 Day 17's code is not modified. The control plane reuses its nodes and its router, and adds one node (`approve_followup`) plus one stop reason (`followup_rejected_by_reviewer`).
 
 ```bash
-./.venv/bin/pytest -q tests/test_agent_control_plane.py          # 11 deterministic tests, fakes only
+./.venv/bin/pytest -q tests/test_agent_control_plane.py          # 12 deterministic tests, fakes only
 ./.venv/bin/python src/agent_control_plane.py                     # Q001/Q091/Q092: approve, then time-travel to reject
 ./.venv/bin/python src/agent_control_plane.py --decision reject   # reject, then time-travel to approve
 ./.venv/bin/python src/agent_control_plane.py --query-ids Q091 --decision edit --edited-followup "POL-001 Band 3 VP Procurement"
@@ -3654,19 +3654,26 @@ Day 17's code is not modified. The control plane reuses its nodes and its router
 |---|---|---|---|
 | `{"type": "approve"}` | `recursive_retrieve` | `approval` with both queries equal | Day 17's own (`fixed_after_second_pass` / `still_missing_after_max_passes`) |
 | `{"type": "edit", "followup_query": "..."}` | `recursive_retrieve`, running the reviewer's query | `approval.proposed_followup_query` + `approved_followup_query`; `followup_query` overwritten | Day 17's own |
-| `{"type": "reject", "message": "..."}` (message optional) | `report_gap`, with no second retrieval call | `approval.approved_followup_query = None` | `followup_rejected_by_reviewer` |
+| `{"type": "reject", "message": "..."}` (`message` optional; a string if given) | `report_gap`, with no second retrieval call | `approval.approved_followup_query = None` | `followup_rejected_by_reviewer` |
 | anything else | stays paused; a new request carries `error` | nothing | — |
 
-The decision shape deliberately mirrors LangChain v1's `HumanInTheLoopMiddleware` (`ApproveDecision` / `EditDecision` / `RejectDecision`, each with a `type` key). That keeps the migration path below a renaming, not a redesign.
+The Day 18 decision vocabulary intentionally mirrors the middleware concepts (`approve`, `edit`, `reject`, keyed by `"type"`), but the payload shape is ProcureRAG-specific:
+
+- The middleware's `EditDecision` is `{"type": "edit", "edited_action": {"name": ..., "args": {...}}}`, an edited tool call.
+- Its resume value is `{"decisions": [...]}`, one decision per pending tool call.
+- Here an edit is `{"type": "edit", "followup_query": "..."}`, with exactly one decision per pause.
+
+A future `HumanInTheLoopMiddleware` migration would need an adapter from `edited_action` / tool-call decisions into ProcureRAG's `followup_query` contract. The reject `message` contract does match the middleware's (`RejectDecision.message: NotRequired[str]`): optional, but a string if given.
 
 ### What the checkpointer saves (short-term memory)
 
-Every checkpoint holds the full `ControlledProcureRAGState`:
+Every checkpoint holds every `ControlledProcureRAGState` field written so far:
 
 - the inputs (query, ids, labels, follow-up);
 - `retrieval_config`, `sources`, and `retrieval_passes`;
 - `diagnoses`, `route_history`, and `trace`;
-- `approval`, `answer`, `citations`, and `stop_reason`.
+- `answer`, `citations`, and `stop_reason`, once an end node has run;
+- `approval`, only when the run entered the approval node and a reviewer made a valid decision. It is typed `NotRequired[dict]`, because the controls, the no-follow-up gaps, and a still-paused run don't have it.
 
 Snapshots are keyed by `thread_id`, so one compiled graph serves many independent reviews (`test_each_thread_keeps_its_own_state_on_one_shared_graph`).
 

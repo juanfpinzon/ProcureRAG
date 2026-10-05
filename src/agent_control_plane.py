@@ -84,13 +84,18 @@ node validate the decision and record it in state like any other update.
    an error message for the reviewer.
 
 **Migration path to LangChain v1.** The decision vocabulary (`approve` /
-`edit` / `reject`, with an optional reject `message`) deliberately mirrors
+`edit` / `reject`, keyed by `"type"`, with an optional reject `message`)
+intentionally mirrors the concepts of
 `langchain.agents.middleware.HumanInTheLoopMiddleware`. That middleware does
 the same pause/approve/resume for TOOL CALLS inside a `create_agent` loop,
-using the same `interrupt()` + checkpointer underneath. This graph has no
-tool-calling model (the router is deterministic code), so it calls
-`interrupt()` directly. See the Day 18 section of `docs/eval-report.md` for
-the decision.
+using the same `interrupt()` + checkpointer underneath. The payload shape,
+though, is ProcureRAG-specific. The middleware's edit carries an
+`edited_action` (a tool name and args), and it resumes with one decision per
+pending tool call. Here an edit carries a `followup_query`, and there is
+exactly one decision per pause. So a migration needs a small adapter, not
+just a rename. This graph has no tool-calling model (the router is
+deterministic code), so it calls `interrupt()` directly. See the Day 18
+section of `docs/eval-report.md` for the decision.
 
 **Honest limits.**
 
@@ -113,6 +118,7 @@ request, the trace, and one line per saved checkpoint.
 
 import argparse
 from functools import partial
+from typing import NotRequired
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -141,11 +147,18 @@ from generation_eval import context_doc_ids
 # The name of the one node this module adds to the Day 17 graph.
 APPROVAL_NODE = "approve_followup"
 
-# The three decisions a reviewer may send back. Same names, and the same
-# `{"type": ...}` dict shape, as LangChain v1's HumanInTheLoopMiddleware:
+# The three decisions a reviewer may send back:
 #   {"type": "approve"}
-#   {"type": "edit", "followup_query": "..."}   (the middleware's version edits a tool call's args)
-#   {"type": "reject", "message": "why"}        (`message` is optional)
+#   {"type": "edit", "followup_query": "..."}
+#   {"type": "reject", "message": "why"}        (`message` optional; must be a string if given)
+#
+# The decision NAMES and the `{"type": ...}` key mirror LangChain v1's
+# HumanInTheLoopMiddleware, but the PAYLOAD shape is ProcureRAG-specific. The
+# middleware's edit changes a tool call,
+# `{"type": "edit", "edited_action": {"name": ..., "args": {...}}}`, and its
+# resume value is a list with one decision per pending tool call,
+# `{"decisions": [...]}`. Migrating to the middleware would need a small
+# adapter, e.g. `edited_action["args"]["followup_query"]` -> `followup_query`.
 DECISION_APPROVE = "approve"
 DECISION_EDIT = "edit"
 DECISION_REJECT = "reject"
@@ -167,11 +180,14 @@ STOP_FOLLOWUP_REJECTED = "followup_rejected_by_reviewer"
 
 
 class ControlledProcureRAGState(ProcureRAGState):
-    # The reviewer's decision, written by `approve_followup` on resume:
+    # The reviewer's decision, written by `approve_followup` once a valid
+    # decision arrives:
     # {"decision", "proposed_followup_query", "approved_followup_query", "message"}.
-    # Absent from the state of any run that never needed approval
-    # (the controls and the no-follow-up gaps).
-    approval: dict
+    # `NotRequired` says in the type what happens at runtime: the key is
+    # ABSENT from any run that never reached a decision. That covers the
+    # controls, the no-follow-up gaps, and a run that is still paused.
+    # Code reading it must use `state.get("approval")`.
+    approval: NotRequired[dict]
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +236,19 @@ def build_approval_request(state):
 def decision_error(decision):
     """Return why `decision` is not a usable reviewer decision, or None if it is.
 
-    A typo like `{"type": "aprove"}` must never be treated as approval. Note
-    that this function RETURNS the problem instead of raising it.
+    The rules:
+
+    1. `decision` is a dict whose `"type"` is approve, edit, or reject. A
+       typo like `{"type": "aprove"}` must never be treated as approval.
+    2. An edit carries a non-empty `followup_query` string.
+    3. `message` is optional on any decision. If given, it must be a string
+       (an explicit `None` counts as "not given"). This is the same contract
+       as the middleware's `RejectDecision.message: NotRequired[str]`. It
+       matters because the message is stored in `approval` and, on a reject,
+       copied into the trace and the gap report, so `{"message": 123}` must
+       not slip through.
+
+    Note that this function RETURNS the problem instead of raising it.
     `approve_followup_node` uses the message to ask the reviewer again (gotcha
     3 in the module docstring explains why raising would be a trap).
     """
@@ -232,6 +259,10 @@ def decision_error(decision):
         edited_query = decision.get("followup_query")
         if not isinstance(edited_query, str) or not edited_query.strip():
             return "an 'edit' decision needs a non-empty 'followup_query' string"
+
+    message = decision.get("message")
+    if message is not None and not isinstance(message, str):
+        return f"'message' must be a string if given, got {message!r}"
 
     return None
 
