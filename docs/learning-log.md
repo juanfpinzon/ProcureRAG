@@ -4121,3 +4121,183 @@ The safe version ProcureRAG already has is procedural and reviewed: `AGENTIC_CAS
 3. **`report_gap` signal:** a Day 15-style root-cause diagnostic on 3–4 of the 15 queries, to choose between a caveated answer and more follow-up strategies.
 4. **Answer completeness under the graph path:** `regression_suite.py --live` (paid default model), so "fixed" stops being only a retrieval-context claim.
 5. **Ask Hermes to review HER-285** with the protocol in the route doc. If it closes, move to the Week 4 guardrails focus (PII / prompt-injection controls) or the HER-269 gate review.
+
+## 2026-10-05 — Day 19: Observability Traces and Structured Outputs
+
+Route doc: `docs/day-19-observability-traces-structured-outputs.md`.
+
+Linear: HER-286 — Day 19 loop: observability traces + structured outputs.
+
+Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrails.
+
+Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
+
+### Course / docs target
+
+- No new Boot.dev chapter today. Day 19 turns the Day 17/18 agentic graph/control-plane path into a reviewable observability + structured-output artifact.
+- Primary: Hugging Face Agents Course — **Bonus Unit 2: Agent Observability and Evaluation**:
+  - `Introduction`: <https://huggingface.co/learn/agents-course/en/bonus-unit2/introduction>
+  - `What is agent observability and evaluation?`: <https://huggingface.co/learn/agents-course/en/bonus-unit2/what-is-agent-observability-and-evaluation>
+  - `Monitoring and evaluating agents` / `Bonus Unit 2: Observability and Evaluation of Agents`: <https://huggingface.co/learn/agents-course/en/bonus-unit2/monitoring-and-evaluating-agents-notebook>
+  - `Quiz: Evaluating AI Agents`: <https://huggingface.co/learn/agents-course/bonus-unit2/quiz>
+- LangGraph/LangSmith companion:
+  - LangChain Academy — **Foundation: Introduction to LangGraph - Python** Module 1 `Lesson 3: LangSmith Studio`.
+  - Module 6 `Deployment` preview/reference: `Deployment Concepts`, `Creating a Deployment`, `Connecting to a Deployment`, `Double Texting`, `Assistants`.
+  - LangGraph deployment docs, LangSmith double-texting docs, and LangSmith tracing for LangGraph.
+- Structured-output companion:
+  - LangChain structured-output docs and `create_agent.response_format` reference.
+  - OpenAI Structured Outputs guide.
+  - Pydantic model docs (`BaseModel`, validation, serialization, JSON Schema).
+
+Completion status:
+
+- _TODO: Fill in which HF Bonus Unit 2 pages were completed._
+- _TODO: Fill in which LangGraph/LangSmith companion lessons/docs were completed._
+- _TODO: Fill in which structured-output docs were completed._
+
+### Objective
+
+_TODO: Fill in._
+
+Expected shape: explain how today makes ProcureRAG's agentic path inspectable and schema-disciplined without changing retrieval policy: trace route decisions, retrieval passes, approval/HITL decisions, missing-evidence signals, result status, citations/refusal/caveats, and live/local trace handles.
+
+### Baseline verification at kickoff
+
+```bash
+./.venv/bin/pytest -q
+# 244 passed in 3.23s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
+# Q091 frozen fixture lane still shows: term-level gap OPEN: missing ['Band 3'].
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_graph.py --all-queries-summary
+# Route distribution over 93 queries: generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092)
+# Queries with a first-pass evidence gap: 17. Fixed by the recursive pass: 2. Ended in report_gap: 15.
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_control_plane.py --query-ids Q091
+# Q091 pauses for approval before recursive_retrieve, resumes with approve,
+# reaches ['recursive_retrieve', 'generate'] / fixed_after_second_pass,
+# saves 8 checkpoints, and time-travel reject replays with 0 pass-1 retrieval calls.
+```
+
+### Observability source studied and chosen
+
+_TODO: Fill in._
+
+Expected evidence fields:
+
+- Backend chosen: _TODO: LangSmith / Langfuse / local JSONL fallback._
+- Why this backend fits ProcureRAG today: _TODO: Fill in._
+- CI-safe evidence boundary: _TODO: Which commands/tests do not need credentials?_
+- Live/SaaS evidence boundary: _TODO: Which commands require LangSmith/Langfuse/provider credentials?_
+
+### Trace schema / evidence contract
+
+_TODO: Fill in._
+
+Expected fields to document:
+
+- Run metadata: `run_id`, `thread_id`, timestamp, query id/type, optional git/code version.
+- Route fields: `route_history`, `stop_reason`, approval decision/edit/reject if any.
+- Retrieval fields: pass number, retrieval config, original/follow-up query, doc/chunk ids, added chunks.
+- Evidence fields: missing docs/chunks before and after, trigger reason, `report_gap` reason.
+- Result fields: answer/refusal/not-generated status, citations, citation validation, caveats/uncertainty.
+- Handle fields: LangSmith/Langfuse URL/id and/or local artifact path.
+
+Sample run handle/path:
+
+- _TODO: Fill in exact trace URL/id, screenshot path, or local JSONL/report path._
+- _TODO: Fill in exact command that reproduces it._
+
+### Structured-output schema / validation behavior
+
+_TODO: Fill in._
+
+Expected fields to document:
+
+- Schema name/path: _TODO._
+- Status enum or equivalent: _TODO, e.g. answer / refusal / gap_report / not_generated._
+- Evidence status fields: _TODO._
+- Citation/source fields: _TODO._
+- Trace handle/path fields: _TODO._
+- Validation behavior: _TODO: what invalid output is rejected or normalized?_
+- Relationship to LangChain/OpenAI structured output: _TODO: deterministic Pydantic wrapper now vs provider-native structured answer later._
+
+### Verification after build
+
+_TODO: Fill in real output._
+
+Expected commands:
+
+```bash
+./.venv/bin/pytest -q
+./.venv/bin/python -m compileall -q src tests
+./.venv/bin/python -m ruff check src tests
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# plus the chosen trace/demo command, documented with its real output or handle
+```
+
+### What failed or was confusing
+
+_TODO: Fill in._
+
+Hints:
+
+- Did LangSmith/Langfuse capture work? If not, what exactly blocked it?
+- Did the trace schema blur traces with eval results?
+- Did structured output validate deterministic graph state or live model output?
+- Did any schema choice overconstrain future answers or hide useful caveats?
+
+### What improved
+
+_TODO: Fill in._
+
+Expected shape:
+
+- What can Juan now inspect later that was previously only printed once?
+- Which fields make Q091/Q092 easier to debug?
+- How does the structured result make downstream UI/eval/review safer?
+
+### What remains weak / confusing
+
+_TODO: Fill in._
+
+Expected possibilities:
+
+- Local-only trace vs real LangSmith/Langfuse trace.
+- No answer-completeness metric under the graph path yet.
+- 15 `report_gap` cases still need root-cause diagnosis.
+- `generation.main()` / `regression_suite.py` still single-pass.
+- Structured schema covers deterministic wrapper but not provider-native live structured generation yet.
+
+### What I can now explain in an interview
+
+_TODO: Fill in after answering without notes._
+
+Expected answer-shape bullets:
+
+1. Difference between logs, traces, metrics, tests, and evals.
+2. Why Day 18's local `trace` list was useful but not sufficient.
+3. Which trace fields debug Q091/Q092.
+4. Why structured output beats parsing prose.
+5. When to use provider-native structured output vs LangChain `response_format` vs plain Pydantic validation.
+6. Offline vs online evaluation in ProcureRAG.
+7. Why the 15 `report_gap` cases should be traced before changing policy.
+
+### Next step
+
+_TODO: Fill in after review._
+
+Likely next routes if Day 19 is clean:
+
+1. Week 4 guardrails focus: prompt-injection / PII / structured refusal controls over the now-observable graph path.
+2. HER-269 Week 4 gate review if Day 16–19 evidence is strong enough.
+3. If Day 19 exposes trace/result gaps, repair the local trace or structured-output contract before adding new guardrails.
