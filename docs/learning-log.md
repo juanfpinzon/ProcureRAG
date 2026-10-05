@@ -3808,3 +3808,223 @@ Concrete items carried forward from Day 17:
 - Use `--all-queries-summary` (76 / 2 / 15) as the baseline route distribution for Day 18 observability.
 - Decide the `report_gap` policy for the 15 unfixable queries (refuse vs. caveated answer) before adding guardrails on top.
 - Run `regression_suite.py --live` under the current default model, to measure answer completeness rather than only citation validity.
+
+## 2026-10-02 — Day 18: Agent Memory, HITL, Observability, and Current Agent APIs
+
+Route doc: `docs/day-18-agent-memory-hitl-current-agent-apis.md`.
+
+Linear: HER-285 — Day 18 loop: agent memory, HITL, and current create_agent APIs.
+
+Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrails.
+
+Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
+
+### Course / docs target
+
+- No new Boot.dev chapter today. Day 18 builds on Day 16's Boot.dev Chapter 11 recursive/agentic retrieval and Day 17's LangGraph `StateGraph`.
+- Primary: LangChain Academy — **Foundation: Introduction to LangGraph - Python** (<https://academy.langchain.com/courses/intro-to-langgraph>):
+  - Module 2 `State and Memory`: `Lesson 4: Trim and Filter Messages`, `Lesson 5: Chatbot w/ Summarizing Messages and Memory`, `Lesson 6: Chatbot w/ Summarizing Messages and External Memory`.
+  - Module 3 `UX and Human-in-the-Loop`: `Lesson 1: Streaming`, `Lesson 2: Breakpoints`, `Lesson 3: Editing State and Human Feedback`, `Lesson 4: Dynamic Breakpoints`, `Lesson 5: Time Travel`.
+  - Module 5 `Long-Term Memory`: `Lesson 1: Short vs. Long-Term Memory`, `Lesson 2: LangGraph Store`, `Lesson 3: Memory Schema + Profile`, `Lesson 4: Memory Schema + Collection`, `Lesson 5: Build an Agent with Long-Term Memory`.
+- API-current companion docs:
+  - LangChain v1 release notes: `create_agent` as the standard LangChain 1.x agent builder.
+  - LangChain middleware overview + prebuilt middleware: `HumanInTheLoopMiddleware`, `SummarizationMiddleware`, `PIIMiddleware`, model/tool-call limits.
+  - LangGraph checkpointers and time travel.
+  - LangSmith tracing for LangGraph.
+  - `langgraph.prebuilt.create_react_agent` deprecation/migration note.
+
+Completion status:
+
+- _TODO: Fill in exact lessons completed and any skipped/deferred lessons._
+
+### Objective
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Explain how Day 18 turns Day 17's graph into a controlled/observable agentic system.
+- Name the control points added or deliberately deferred: checkpointing/thread memory, HITL approval/interrupt, trace evidence, current API decision, and `report_gap` policy.
+- Keep the story anchored in Q091/Q092 and the Day 17 route distribution, not generic “agent framework” enthusiasm.
+
+### Baseline verification at kickoff
+
+```bash
+./.venv/bin/pytest -q
+# 232 passed in 2.85s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# all 7 frozen cases as_expected; current retrieval pipeline still matches every case's expectation
+# Q091 frozen fixture lane still shows: term-level gap OPEN: missing ['Band 3']
+```
+
+### Current-API decision: low-level `StateGraph` vs `create_agent`
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Decision made:
+  - _TODO: e.g. “Keep Day 17's deterministic retrieval orchestration as low-level `StateGraph`; use `create_agent` for future model-driven tool loops with middleware.”_
+- Why low-level graph is or is not still appropriate for ProcureRAG:
+  - _TODO: Fill in._
+- Where `create_agent` fits:
+  - _TODO: Fill in._
+- `create_react_agent` migration/deprecation note:
+  - _TODO: Fill in._
+
+### Memory / checkpointing artifact
+
+_TODO: Fill in._
+
+Evidence to record:
+
+- Artifact file(s): _TODO._
+- Checkpointer/store/thread mechanism used: _TODO._
+- State saved or resumed: _TODO._
+- Q091/Q092 or synthetic demo command: _TODO._
+- Tests added or updated: _TODO._
+- What this proves: _TODO._
+- What it does **not** prove: _TODO._
+
+### HITL / approval point
+
+_TODO: Fill in._
+
+Evidence to record:
+
+- Approval point chosen: _TODO: before recursive retrieval, before generation/export, or another explicit action._
+- Risk controlled: _TODO._
+- What the reviewer sees: _TODO: missing docs/chunks, proposed follow-up query, source count/noise, route label, stop reason._
+- Allowed decisions: _TODO: approve / reject / edit / respond._
+- Test/demo proving approved path: _TODO._
+- Test/demo proving rejected or edited path: _TODO._
+
+### Observability / trace evidence
+
+_TODO: Fill in._
+
+Expected route baseline from Day 17:
+
+```bash
+./.venv/bin/python src/agent_graph.py --all-queries-summary
+# generate 76 | recursive_retrieve -> generate 2 (Q091, Q092) | report_gap 15
+```
+
+Evidence to record:
+
+- Trace mechanism used: _TODO: local trace table, LangSmith trace, both, or blocker._
+- Q091 trace summary:
+  - first-pass missing: _TODO._
+  - follow-up/action: _TODO._
+  - added docs/chunks: _TODO._
+  - stop reason: _TODO._
+- Q092 trace summary:
+  - first-pass missing: _TODO._
+  - follow-up/action: _TODO._
+  - added docs/chunks: _TODO._
+  - stop reason: _TODO._
+- LangSmith / trace handle if any: _TODO._
+- If no LangSmith trace: blocker/fallback: _TODO._
+
+### `report_gap` policy for the 15 uncovered queries
+
+_TODO: Fill in._
+
+Expected shape:
+
+- Policy chosen or open decision:
+  - _TODO: refuse/report missing evidence, human-approved caveated answer, add more follow-up strategies, or leave open with a next signal._
+- Why:
+  - _TODO: Fill in._
+- Query ids affected:
+  - _TODO: carry forward Day 17 list if still current._
+- How the policy will be tested:
+  - _TODO: Fill in._
+
+### Verification after Juan's build
+
+_TODO: Fill in real outputs, not expected outputs._
+
+```bash
+./.venv/bin/pytest -q
+# TODO
+
+./.venv/bin/python -m compileall -q src tests
+# TODO
+
+./.venv/bin/python -m ruff check src tests
+# TODO
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# TODO
+
+# Optional/day-specific demos:
+# ./.venv/bin/python src/agent_graph.py
+# ./.venv/bin/python src/agent_graph.py --all-queries-summary
+# TODO: memory/HITL/checkpoint/tracing command
+```
+
+### What failed or was confusing
+
+_TODO: Fill in._
+
+Prompts:
+
+- Did checkpointer/thread behavior differ from expectations?
+- Did HITL require a checkpointer, config, or resume pattern that was non-obvious?
+- Did LangSmith tracing work locally, or was it blocked by credentials/config?
+- Did `create_agent` vs low-level `StateGraph` feel redundant? If so, what distinction resolved it?
+- Did the current docs conflict with older tutorial/API examples?
+
+### What improved
+
+_TODO: Fill in._
+
+Prompts:
+
+- What can a reviewer now inspect that was previously only printed locally?
+- Which action is now interruptible/approvable?
+- Which state can now be resumed/replayed?
+- What is clearer about current LangChain agent APIs?
+
+### What remains weak / confusing
+
+_TODO: Fill in._
+
+Prompts:
+
+- Is the graph still eval-only because it depends on `relevance_grades`?
+- Is live answer completeness still unmeasured under the graph path?
+- Is long-term memory only scoped, not implemented?
+- Is HITL a fake/deterministic interface rather than real LangGraph interrupt/middleware?
+- Is `generation.main()` / `regression_suite.py` still single-pass and not graph-aware?
+
+### What I can now explain in an interview
+
+_TODO: Answer without notes first; then fill in a cleaned-up version._
+
+1. **Checkpointing vs short-term memory vs long-term memory.**
+   - _TODO._
+2. **Why HITL requires saved state / checkpointers.**
+   - _TODO._
+3. **Where ProcureRAG should pause for approval and why.**
+   - _TODO._
+4. **What LangSmith tracing adds beyond `state["trace"]`.**
+   - _TODO._
+5. **Why `create_agent` is the current API, and why ProcureRAG may still use low-level `StateGraph`.**
+   - _TODO._
+6. **Why memory can be dangerous in procurement RAG.**
+   - _TODO._
+7. **What policy should apply to `report_gap` queries.**
+   - _TODO._
+
+### Next step
+
+_TODO: Fill in after the Day 18 artifact and review. Likely options: guardrails / PII / prompt-injection controls, answer-completeness eval under the graph path, or a Week 4 gate review if HER-285 closes cleanly._
