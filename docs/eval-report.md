@@ -3600,6 +3600,197 @@ An earlier smoke run the same day used the free `inclusionai/ling-3.0-flash-sant
 
 Generation-path finding: with the previous request option `reasoning: {"exclude": True}`, the same model spent 3044 hidden reasoning tokens on Q091's 19-source prompt and returned an empty answer (`finish_reason="length"`). `exclude` hides reasoning but does not prevent it. `enabled: False` brought reasoning tokens to 0.
 
+## Day 18: Agent control plane (checkpointer, HITL approval, time travel)
+
+Linear: HER-285. Route doc: `docs/day-18-agent-memory-hitl-current-agent-apis.md` (Block 3A).
+
+Day 17's graph (`src/agent_graph.py`) decides on its own whether to run a second retrieval pass, and keeps no intermediate state once `invoke` returns. `src/agent_control_plane.py` wraps that same graph with three controls:
+
+1. **Checkpointer + `thread_id`.** Every step's full state is saved, per thread.
+2. **A human approval point (`interrupt()`) before the recursive pass.** The reviewer can approve, edit the follow-up query, or reject.
+3. **Time travel.** A thread can be replayed from its approval checkpoint with a different decision.
+
+Day 17's code is not modified. The control plane reuses its nodes and its router, and adds one node (`approve_followup`) plus one stop reason (`followup_rejected_by_reviewer`).
+
+```bash
+./.venv/bin/pytest -q tests/test_agent_control_plane.py          # 11 deterministic tests, fakes only
+./.venv/bin/python src/agent_control_plane.py                     # Q001/Q091/Q092: approve, then time-travel to reject
+./.venv/bin/python src/agent_control_plane.py --decision reject   # reject, then time-travel to approve
+./.venv/bin/python src/agent_control_plane.py --query-ids Q091 --decision edit --edited-followup "POL-001 Band 3 VP Procurement"
+```
+
+### Control-plane contract
+
+| Control concept | ProcureRAG use | Built today | Production version |
+|---|---|---|---|
+| Checkpoint / thread memory | Save every step of a Q091/Q092 run so it can pause and resume | `InMemorySaver`, one thread per review (`<query_id>-review`) | Durable checkpointer (SQLite/Postgres) or Agent Server; the graph code does not change |
+| HITL approval | Pause before `recursive_retrieve`; approve / edit / reject | `interrupt()` in `approve_followup`, resumed with `Command(resume=...)` | Approval queue UI; `HumanInTheLoopMiddleware` if this becomes a `create_agent` tool loop |
+| Time travel | Replay from the approval point with a different decision | `replay_with_different_decision` (`get_state_history` + fork) | Trace-driven debugging: fork a production thread to test an alternate follow-up |
+| Observability | Show route, missing evidence, added chunks, stop reason | Local trace + approval request + per-checkpoint table; LangSmith tags `procurerag`, `day18-control-plane` | LangSmith project with tagged runs, grouped by `thread_id` |
+| Current agent API | Avoid stale `create_react_agent` examples | Decision below; no `create_agent` code yet | `create_agent` node/subgraph with middleware, inside the `StateGraph` |
+
+### The approval point
+
+**Where:** between the router's `recursive_retrieve` decision and the `recursive_retrieve` node. In the graph's path map the `recursive_retrieve` label now points at `approve_followup`. The router function is unchanged.
+
+**Why there:** it is the only autonomous decision in the graph that changes the evidence the answer is built from. Live, the second pass grew Q091's and Q092's context from 10 to 19 sources. `generate` and `report_gap` are end states. Approving the final answer or an export is a separate, later control point, and it needs the live-generation path wired in first.
+
+**Who pauses:** only runs that the router sends towards `recursive_retrieve`. A scratch run of all 93 labeled queries through the controlled graph (live retrieval, every pause auto-approved, not committed) paused exactly **Q091 and Q092**, and reproduced Day 17's distribution: `generate` 76, `recursive_retrieve → generate` 2, `report_gap` 15. Approving changes nothing about the outcome. `test_approve_resumes_the_same_run_and_ends_exactly_like_day17` pins this against `agent_graph.build_graph`.
+
+**What the reviewer sees** (`build_approval_request`, the `interrupt()` payload):
+
+| Field | Answers |
+|---|---|
+| `query_id`, `query` | Which question is this? |
+| `trigger_reason`, `missing_doc_ids`, `missing_chunk_ids` | Why is the graph asking? (first-pass diagnosis) |
+| `proposed_action`, `proposed_followup_query` | What exactly would run? |
+| `first_pass_source_count`, `first_pass_doc_ids`, `cost_note` | What is in context now, and what the extra pass can add |
+| `allowed_decisions` | `approve`, `edit`, `reject` |
+| `error` (re-asks only) | Why the previous answer was refused |
+
+**Decisions:**
+
+| Decision (resume value) | Next node | Recorded in state | Stop reason |
+|---|---|---|---|
+| `{"type": "approve"}` | `recursive_retrieve` | `approval` with both queries equal | Day 17's own (`fixed_after_second_pass` / `still_missing_after_max_passes`) |
+| `{"type": "edit", "followup_query": "..."}` | `recursive_retrieve`, running the reviewer's query | `approval.proposed_followup_query` + `approved_followup_query`; `followup_query` overwritten | Day 17's own |
+| `{"type": "reject", "message": "..."}` (message optional) | `report_gap`, with no second retrieval call | `approval.approved_followup_query = None` | `followup_rejected_by_reviewer` |
+| anything else | stays paused; a new request carries `error` | nothing | — |
+
+The decision shape deliberately mirrors LangChain v1's `HumanInTheLoopMiddleware` (`ApproveDecision` / `EditDecision` / `RejectDecision`, each with a `type` key). That keeps the migration path below a renaming, not a redesign.
+
+### What the checkpointer saves (short-term memory)
+
+Every checkpoint holds the full `ControlledProcureRAGState`:
+
+- the inputs (query, ids, labels, follow-up);
+- `retrieval_config`, `sources`, and `retrieval_passes`;
+- `diagnoses`, `route_history`, and `trace`;
+- `approval`, `answer`, `citations`, and `stop_reason`.
+
+Snapshots are keyed by `thread_id`, so one compiled graph serves many independent reviews (`test_each_thread_keeps_its_own_state_on_one_shared_graph`).
+
+Live Q091 thread, approved (`./.venv/bin/python src/agent_control_plane.py`, 2026-10-05, tracing off):
+
+```text
+checkpoints saved on thread 'Q091-review': 8
+  step -1 | next ['__start__'] | passes - | sources 0 | routes []
+  step  0 | next ['retrieve'] | passes - | sources 0 | routes []
+  step  1 | next ['diagnose'] | passes 1 | sources 10 | routes []
+  step  2 | next ['approve_followup'] | passes 1 | sources 10 | routes []      <- the paused checkpoint
+  step  3 | next ['recursive_retrieve'] | passes 1 | sources 10 | routes []
+  step  4 | next ['diagnose'] | passes 2 | sources 19 | routes ['recursive_retrieve']
+  step  5 | next ['generate'] | passes 2 | sources 19 | routes ['recursive_retrieve']
+  step  6 | next (done) | passes 2 | sources 19 | routes ['recursive_retrieve', 'generate']
+```
+
+**Scope:** this is **thread-level** memory only: state within one run, kept so it can be paused, resumed, and replayed. Long-term memory (a LangGraph `Store` shared across threads) is deliberately **not** built. See "Deferred, with reasons" below.
+
+### Time travel
+
+`replay_with_different_decision(graph, config, decision)` finds the approval checkpoint in `get_state_history` and replays it with `invoke(None, paused.config)`. That re-runs `approve_followup`, which pauses again with a fresh request. It then resumes the thread with the new decision. The original branch stays in the history.
+
+Live evidence (same runs as above):
+
+| Thread | Original decision → outcome | Replayed decision → outcome | Retrieval calls during replay |
+|---|---|---|---|
+| `Q091-review` | approve → `recursive_retrieve → generate`, `fixed_after_second_pass` | reject → `report_gap`, `followup_rejected_by_reviewer` | 0 |
+| `Q092-review` | approve → `recursive_retrieve → generate`, `fixed_after_second_pass` | reject → `report_gap`, `followup_rejected_by_reviewer` | 0 |
+| `Q092-review` (`--decision reject`) | reject → `report_gap`, `followup_rejected_by_reviewer` | approve → `recursive_retrieve → generate`, `fixed_after_second_pass` | 1 (the follow-up only) |
+
+Pass-1 retrieval is never re-run: it comes from the checkpoint. That is what makes a counterfactual cheap and fair, because both branches start from the same first-pass evidence.
+
+### Trace evidence: Q091 / Q092
+
+Live retrieval, no LLM, 2026-10-05:
+
+| | Q091 | Q092 |
+|---|---|---|
+| First-pass missing | chunks `POL-001::chunk-5`, `POL-001::chunk-6` (`missing_chunk`) | docs `CONTRACT-005`, `POL-002` (`missing_doc`) |
+| Paused with follow-up | `approval bands EUR 50,000 250,000 Band 3 VP Procurement` | `cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance` |
+| Sources before → after approve | 10 → 19 | 10 → 19 |
+| Added chunks that closed the gap | `POL-001::chunk-6` (of 9 added) | `POL-002::chunk-8`, `POL-002::chunk-9`, `CONTRACT-005::chunk-3` (of 9 added) |
+| Route (approve) | `recursive_retrieve → generate` | `recursive_retrieve → generate` |
+| Stop reason (approve) | `fixed_after_second_pass` | `fixed_after_second_pass` |
+| Stop reason (reject) | `followup_rejected_by_reviewer` | `followup_rejected_by_reviewer` |
+
+Each added chunk list is printed in full by the demo's `recursive_retrieve:` trace line. Only 1 of Q091's 9 added chunks closed the measured gap. The other 8 are extra context the answer step must read past, though some, like `POL-001::chunk-4`, are related. `cost_note` warns the reviewer about exactly this.
+
+**LangSmith:** `.env` enables tracing into the `ProcureRAG` project, and `main()` loads it. The runs above were made with `LANGSMITH_TRACING_V2=false`, so nothing was sent. A traced run (tags `procurerag`, `day18-control-plane`; LangGraph adds `thread_id` to each run's metadata) has not been captured yet. That is the next observability step.
+
+### Current-API decision: low-level `StateGraph` vs `create_agent`
+
+**Decision:** keep ProcureRAG's retrieval orchestration as a hand-written `StateGraph`. Use `langchain.agents.create_agent` only when a step becomes a model-driven tool loop. If both are needed, embed the `create_agent` as a node or subgraph of the `StateGraph`. Treat `langgraph.prebuilt.create_react_agent` as migration context only.
+
+Why:
+
+- **The graph is not an agent.** No model chooses the next step; the router is deterministic code over measured evidence, which is what makes every route reproducible and unit-testable without an LLM. `create_agent` builds a model → tools → model loop, so it would add a model decision this design deliberately avoids.
+- **The control plane did not need `create_agent`.** Checkpointing, `interrupt()`, and time travel are LangGraph features, so they work on any compiled `StateGraph`. `create_agent`'s middleware wraps the *model and tool calls* of its own loop, and this graph has neither.
+- **`create_react_agent` is deprecated in the installed version.** Measured on langgraph 1.2.11, calling it emits `LangGraphDeprecatedSinceV10: create_react_agent has been moved to langchain.agents. Please update your import to from langchain.agents import create_agent. Deprecated in LangGraph V1.0 to be removed in V2.0.`
+- **When `create_agent` would fit:** if an LLM proposed the follow-up query (instead of `AGENTIC_CASE_OVERRIDES`), that proposal *is* a tool call. `HumanInTheLoopMiddleware` would then gate it the same way `approve_followup` does now. A sketch, not executed in this repo:
+
+```python
+from langchain.agents import create_agent
+from langchain.agents.middleware import HumanInTheLoopMiddleware
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
+
+agent = create_agent(
+    model=chat_model,  # any tool-calling chat model
+    tools=[recursive_retrieve],  # a @tool taking `followup_query: str`
+    middleware=[
+        HumanInTheLoopMiddleware(interrupt_on={"recursive_retrieve": {"allowed_decisions": ["approve", "edit", "reject"]}})
+    ],
+    checkpointer=InMemorySaver(),  # same requirement as here: no checkpointer, no resume
+)
+# Resume shape: one decision per pending tool call.
+agent.invoke(Command(resume={"decisions": [{"type": "approve"}]}), config)
+```
+
+### Deferred, with reasons
+
+- **Streaming (Module 3 L1).** No UI consumes partial output yet. `graph.stream(..., stream_mode="updates")` would emit the same pause as an `__interrupt__` chunk, so nothing in the design blocks it.
+- **Static breakpoints (Module 3 L2).** Not used. `compile(interrupt_before=["recursive_retrieve"])` pauses at the same place but carries no request and returns no decision, so edit and reject would need manual `update_state` calls. `interrupt()` (the L4 dynamic breakpoint) replaces it.
+- **Editing state with `update_state` (Module 3 L3).** Not used. The edit flows through the resume value instead, so the node can validate it and record an audit trail. Time-travel forks use `invoke(None, paused.config)`, not `update_state`.
+- **Message trimming and summarization (Module 2 L4–L6, `SummarizationMiddleware`).** Not applicable yet: the state has no growing message list. Context is bounded by `top_k` and the two-pass budget.
+- **Long-term memory / `Store` (Module 5).** Not built. Nothing yet qualifies for cross-thread retention, and the risks are concrete:
+  - stale policy facts outliving a document update;
+  - one user's supplier context leaking into another user's query;
+  - answers that depend on hidden state instead of cited evidence.
+
+  The closest thing ProcureRAG has to long-term memory is `AGENTIC_CASE_OVERRIDES`: a curated table of follow-up queries, versioned in git. A reviewer's edited follow-up should become a *proposed* row there, through code review, not something the system remembers automatically.
+- **`PIIMiddleware`.** Belongs with a future user-facing chat path; the eval graph sees only the synthetic corpus.
+- **Durable checkpointer.** `InMemorySaver` dies with the process, so a real review queue (where the decision arrives later, from another process) needs SQLite or Postgres.
+
+### `report_gap` policy for the 15 uncovered queries
+
+The queries are Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, and Q090. All are non-`multi_doc`, each missing 1–2 primary docs, and none has a follow-up query, so the controlled graph never pauses for them.
+
+The options:
+
+- **(a) Refuse and report the gap.** This is today's default.
+- **(b) Human-approved caveated answer.** This would add a *second* approval point before `generate`. The pause, decision, and audit mechanism built here is reusable for it.
+- **(c) Add more follow-up strategies.** This grows the override table, or eventually replaces it with a label-free trigger.
+
+**Status:** (a) stays the default. The choice between (b) and (c) is open until the root cause is measured for a few of the 15, because (c) attacks the cause and (b) only manages the symptom.
+
+### Gotchas measured on langgraph 1.2.11
+
+Each one is covered by a test or by the module docstring.
+
+1. **The node re-runs from its first line on resume.** Code before `interrupt()` runs again on every resume, so it must be side-effect-free. `build_approval_request` is pure.
+2. **Resuming an *old* checkpoint replays the original decision.** `Command(resume=new)` sent to `paused.config` ignores `new` (`test_resuming_an_old_checkpoint_directly_replays_the_original_decision`). Replay with `invoke(None, paused.config)` first.
+3. **Raising after `interrupt()` traps the run.** The bad resume value is saved, and every later resume (even a valid one) replays it and fails. Re-ask with a second `interrupt()` instead (`test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck`).
+4. **`snapshot.next` reads `()` after a re-ask.** The run is still paused. `snapshot.interrupts` is the reliable "is it paused?" signal.
+5. **No checkpointer fails late, not early.** Without one, `interrupt()` still stops the run and returns `__interrupt__`. Only the resume fails, with `RuntimeError: Cannot use Command(resume=...) without checkpointer`.
+
+### Limits
+
+- The trigger still reads gold `relevance_grades`. This is eval-time orchestration over the 93 labeled queries, the same limitation as Day 16/17.
+- The approval point controls a retrieval action. It says nothing about answer completeness, which Day 17 found still incomplete against `expected_answer` for all four demo queries.
+- The reviewer's decision comes from a CLI flag. There is no real review UI or queue.
+- `generation.main()` and `regression_suite.py` remain single-pass and are not graph-aware.
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

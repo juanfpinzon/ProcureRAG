@@ -116,7 +116,7 @@ Day 17 already prints route distribution: 76 direct `generate`, 2 `recursive_ret
 - why the router stopped;
 - whether the final answer was generated, blocked, or reported as a gap.
 
-LangSmith tracing is a natural fit if credentials are available. If not, a local trace artifact or printed trace table is acceptable today. Do not block the learning day on SaaS setup.
+LangSmith tracing is a natural fit if credentials are available (they are). If not, a local trace artifact or printed trace table is acceptable today. Do not block the learning day on SaaS setup.
 
 ### `create_agent` is the current agent factory; low-level `StateGraph` still has a role
 
@@ -230,9 +230,9 @@ Keep the artifact small. A focused checkpoint/HITL wrapper around the existing D
 
 ### Block 3A — Primary route: Juan-owned control-plane artifact, 120–150m
 
-Possible artifact shape, for Juan to design and write:
+Possible artifact shape, to design and write:
 
-- A docs decision note, for example a Day 18 section in `docs/eval-report.md` or a new `docs/agent-control-plane.md`.
+- A docs decision note, for example a Day 18 section in `docs/eval-report.md` or a new `docs/agent-control-plane.md`. - Day 18 section in eval-report.md
 - A small module or extension around `src/agent_graph.py`, if needed, that demonstrates one of:
   - compiling the existing graph with an `InMemorySaver` checkpointer and invoking it with a `thread_id`;
   - a HITL approval function that receives `{query_id, route, missing_evidence, proposed_followup_query}` and returns approve/reject/edit;
@@ -248,6 +248,8 @@ Recommended behavior:
 4. If rejected, route to `report_gap` or another explicit stop reason.
 5. If edited, use the edited follow-up query and record that it was edited.
 6. Keep the live LLM optional. HITL/checkpoint tests should be deterministic and fast.
+
+Finally, Block 4 updates.
 
 ### Block 3B — Fallback route: docs-first + fake checkpointer/HITL, 60–90m
 

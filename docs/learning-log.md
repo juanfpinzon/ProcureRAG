@@ -3819,6 +3819,8 @@ Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrai
 
 Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
 
+Day 18 exception (my call): I asked Claude Code to write `src/agent_control_plane.py`, `tests/test_agent_control_plane.py`, the Day 18 section of `docs/eval-report.md`, and a first draft of this entry, as a worked example. I am reviewing and executing every line before claiming the learning. Hermes should review with that in mind.
+
 ### Course / docs target
 
 - No new Boot.dev chapter today. Day 18 builds on Day 16's Boot.dev Chapter 11 recursive/agentic retrieval and Day 17's LangGraph `StateGraph`.
@@ -3835,17 +3837,44 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
 
 Completion status:
 
-- _TODO: Fill in exact lessons completed and any skipped/deferred lessons._
+- Every LangChain Academy lesson listed above (Module 2 Lessons 4/5/6, Module 3 Lessons 1–5, Module 5 Lessons 1–5) is marked **Completed** in the route doc. None skipped.
+- API-current companion material: every API claim this day relies on was checked against the **installed** packages (`langchain 1.4.0`, `langgraph 1.2.11`, `langgraph-checkpoint 4.2.0`, `langsmith 0.12.5`), not taken from memory or tutorials. These include `create_agent`'s signature, the `HumanInTheLoopMiddleware` decision types, the `create_react_agent` and `NodeInterrupt` deprecation warnings, and `MemorySaver` being an alias of `InMemorySaver`.
+
+### Course notes mapped to ProcureRAG
+
+**Module 2: State and Memory (Lessons 4–6).**
+
+- **`Trim and Filter Messages`.** A chat state's message list grows every turn. You can delete messages from state (`RemoveMessage` through the `add_messages` reducer), send only the last N to the model without changing state, or trim by token count (`trim_messages`). *In ProcureRAG:* there is no message list. The thing that grows is `sources`: 10 → 19 on Q091/Q092's second pass. It is bounded by `top_k` and the two-pass budget, not by trimming. Capping or filtering the merged context is the open analogue, and it is not built.
+- **`Chatbot w/ Summarizing Messages and Memory`.** Keep a running `summary` in state, summarize once the conversation gets long, delete the old messages, and use a checkpointer + `thread_id` so the conversation continues across `invoke` calls. *In ProcureRAG:* not applicable yet (no multi-turn conversation). LangChain v1's packaged version is `SummarizationMiddleware` on `create_agent`.
+- **`Chatbot w/ Summarizing Messages and External Memory`.** Swap the in-memory checkpointer for SQLite so the thread survives a restart. *In ProcureRAG:* this is exactly the production gap of today's artifact. `InMemorySaver` dies with the process, so a real review queue needs a durable checkpointer. The graph code does not change, only the `checkpointer` argument.
+
+**Module 3: UX and Human-in-the-Loop (Lessons 1–5).**
+
+- **`Streaming`.** `.stream(stream_mode="updates")` yields each node's update as it finishes. `stream_mode="values"` yields the full state after every step. Token streaming from the LLM is a separate mode. *In ProcureRAG:* deferred, because no UI consumes partial output. With `stream_mode="updates"` the approval pause would arrive as an `__interrupt__` chunk, so nothing in the design blocks it.
+- **`Breakpoints`.** `compile(interrupt_before=["tools"])` pauses before a node, and `invoke(None, thread)` continues. It needs a checkpointer. *In ProcureRAG:* `interrupt_before=["recursive_retrieve"]` would pause at the right place. But it carries no request and receives no decision, so edit and reject would need manual state surgery. I chose the dynamic version instead (Lesson 4).
+- **`Editing State and Human Feedback`.** While paused, `graph.update_state(config, values, as_node=...)` rewrites state, and the run then continues from the edited state. *In ProcureRAG:* the reviewer's edit (a new follow-up query) travels as the resume value instead. The node validates it and records `proposed_followup_query` vs `approved_followup_query`, so the edit leaves an audit trail rather than silently changing state.
+- **`Dynamic Breakpoints`.** The node itself decides to pause, with a payload. The course used `NodeInterrupt`, which on langgraph 1.2.11 warns `NodeInterrupt is deprecated. Please use langgraph.types.interrupt instead`. *In ProcureRAG:* this is the pattern I used. `approve_followup` calls `interrupt(request)` and receives the decision from `Command(resume=decision)`.
+- **`Time Travel`.** `get_state_history` lists every checkpoint of a thread, and a past `checkpoint_id` can be replayed or forked. *In ProcureRAG:* `replay_with_different_decision` rewinds Q091/Q092 to the approval checkpoint and decides the other way. It makes 0 retrieval calls for the rejected branch, because pass 1 comes from the checkpoint.
+
+**Module 5: Long-Term Memory (Lessons 1–5).**
+
+- **`Short vs. Long-Term Memory`.** Short-term memory is thread-scoped and kept by the checkpointer. Long-term memory is cross-thread and kept in a `Store`. Memories can be semantic (facts), episodic (past experiences), or procedural (how to do things), and they can be written during the run or in the background.
+- **`LangGraph Store`.** `InMemoryStore` with `put` / `get` / `search` over a namespace tuple (e.g. `(user_id, "memories")`) and a key. Nodes receive the store and read or write it explicitly.
+- **`Memory Schema + Profile` vs. `Memory Schema + Collection`.** A profile is one schema-shaped document per user, updated in place. A collection is many small memory items, inserted and updated one by one. The profile is easier to keep consistent; the collection is better for open-ended facts.
+- **`Build an Agent with Long-Term Memory`.** An agent that decides, through a tool call, which kind of memory to update after each turn.
+- *In ProcureRAG:* no `Store` was built. Nothing yet deserves to outlive a thread. The closest thing ProcureRAG has to long-term memory is **procedural**: `AGENTIC_CASE_OVERRIDES`, the hand-curated "for this known gap, search like this" table. It is versioned in git and changes only through code review. That is the right home for a reviewer's good edited follow-up query, as a *proposed* row and not an automatic memory write.
 
 ### Objective
 
-_TODO: Fill in._
+Turn Day 17's graph from "a working orchestration artifact" into "a controlled, observable agentic system", without changing what it measures. Concretely, wrap the same graph (same nodes, same router) with:
 
-Expected shape:
+- **Checkpointing / thread memory.** `InMemorySaver` + one `thread_id` per review, so every step's full state is saved and a run can pause, resume, and be inspected afterwards.
+- **A HITL approval point.** Pause before `recursive_retrieve`, the one autonomous decision that changes the evidence. Show the reviewer what is missing, the proposed follow-up, and the cost, and accept approve / edit / reject.
+- **Time travel.** Replay a thread from its approval checkpoint with the opposite decision.
+- **Trace evidence for Q091/Q092.** Route, before/after evidence, added chunks, stop reason, and every saved checkpoint.
+- **A current-API decision** (`StateGraph` vs `create_agent`) and a recorded `report_gap` policy.
 
-- Explain how Day 18 turns Day 17's graph into a controlled/observable agentic system.
-- Name the control points added or deliberately deferred: checkpointing/thread memory, HITL approval/interrupt, trace evidence, current API decision, and `report_gap` policy.
-- Keep the story anchored in Q091/Q092 and the Day 17 route distribution, not generic “agent framework” enthusiasm.
+The anchor stays Q091/Q092 and the Day 17 route distribution (76 / 2 / 15). Approving must leave both untouched.
 
 ### Baseline verification at kickoff
 
@@ -3866,165 +3895,230 @@ Expected shape:
 
 ### Current-API decision: low-level `StateGraph` vs `create_agent`
 
-_TODO: Fill in._
-
-Expected shape:
-
-- Decision made:
-  - _TODO: e.g. “Keep Day 17's deterministic retrieval orchestration as low-level `StateGraph`; use `create_agent` for future model-driven tool loops with middleware.”_
-- Why low-level graph is or is not still appropriate for ProcureRAG:
-  - _TODO: Fill in._
-- Where `create_agent` fits:
-  - _TODO: Fill in._
-- `create_react_agent` migration/deprecation note:
-  - _TODO: Fill in._
+- **Decision made:** keep Day 17's deterministic retrieval orchestration as a low-level `StateGraph`, and build the control plane on LangGraph primitives (checkpointer, `interrupt()`, state history). Use `create_agent` only for a future model-driven tool loop with middleware, embedded as a node or subgraph if ProcureRAG needs both.
+- **Why the low-level graph is still appropriate:**
+  - No model chooses the next step; the router is deterministic code over measured evidence. That is what makes every route reproducible and unit-testable without an LLM.
+  - Route labels and eval-state fields (`diagnoses`, `route_history`, `stop_reason`) must stay explicit, because the regression and eval story depends on them.
+  - Everything Day 18 needed (pause, resume, replay) is a LangGraph feature, so it works on any compiled `StateGraph`. No `create_agent` was required.
+- **Where `create_agent` fits:** the day an LLM *proposes* the follow-up query instead of `AGENTIC_CASE_OVERRIDES`. That proposal is a tool call, and `HumanInTheLoopMiddleware(interrupt_on={"recursive_retrieve": {"allowed_decisions": ["approve", "edit", "reject"]}})` would gate it the same way `approve_followup` does now. I deliberately mirrored the middleware's decision vocabulary (`{"type": "approve" | "edit" | "reject"}`), so that migration is a rename, not a redesign. A sketch is in `docs/eval-report.md` → Day 18 → "Current-API decision" (not executed).
+- **`create_react_agent` migration/deprecation note:** on langgraph 1.2.11, calling `langgraph.prebuilt.create_react_agent` emits `LangGraphDeprecatedSinceV10: create_react_agent has been moved to langchain.agents. Please update your import to from langchain.agents import create_agent. Deprecated in LangGraph V1.0 to be removed in V2.0.` Course and tutorial code using it is migration context only.
 
 ### Memory / checkpointing artifact
 
-_TODO: Fill in._
+- **Artifact files:**
+  - `src/agent_control_plane.py`: `build_controlled_graph`, `approve_followup_node`, `replay_with_different_decision`, plus the CLI demo.
+  - `tests/test_agent_control_plane.py`: 11 tests.
+  - `docs/eval-report.md`: the Day 18 section.
+- **Mechanism:** `InMemorySaver` passed to `compile(checkpointer=...)`, plus `thread_config(thread_id)` (`<query_id>-review` in the demo). It is thread-level persistence only. No `Store`, no long-term memory.
+- **State saved:** the full `ControlledProcureRAGState` at every super-step:
+  - the inputs;
+  - `retrieval_config`, `sources`, and `retrieval_passes`;
+  - `diagnoses`, `route_history`, and `trace`;
+  - the reviewer's `approval` record, `answer`, `citations`, and `stop_reason`.
 
-Evidence to record:
-
-- Artifact file(s): _TODO._
-- Checkpointer/store/thread mechanism used: _TODO._
-- State saved or resumed: _TODO._
-- Q091/Q092 or synthetic demo command: _TODO._
-- Tests added or updated: _TODO._
-- What this proves: _TODO._
-- What it does **not** prove: _TODO._
+  The live Q091 thread saved 8 checkpoints, and the paused one is step 2 (`next ['approve_followup']`, 1 pass, 10 sources).
+- **Demo command:** `./.venv/bin/python src/agent_control_plane.py`. It prints, per query, the approval request, the decision, the trace, and one line per saved checkpoint. The time-travel replay follows at the end.
+- **Tests added:**
+  - `test_each_thread_keeps_its_own_state_on_one_shared_graph`: one graph, two threads, an unknown thread is empty.
+  - `test_time_travel_replays_the_approval_with_a_different_decision_without_rerunning_pass_one`.
+  - `test_resuming_an_old_checkpoint_directly_replays_the_original_decision`: a characterization test of a LangGraph gotcha.
+- **What this proves:**
+  - A run can stop at a precise point, keep its full state, and continue later in the same process.
+  - Two runs on one graph cannot see each other's state.
+  - Any past step can be inspected and replayed.
+  - A counterfactual decision costs no re-retrieval of pass 1.
+- **What it does *not* prove:** durability across a restart or another process (`InMemorySaver` dies with the process), multi-user isolation in a real deployment, or anything about long-term memory.
 
 ### HITL / approval point
 
-_TODO: Fill in._
+- **Approval point chosen:** before `recursive_retrieve`. In the path map, the router's `recursive_retrieve` label now leads to the new `approve_followup` node; the router function itself is unchanged.
+- **Risk controlled:** the graph silently changing the evidence an answer is built from. Live, approving grows Q091's and Q092's context from 10 to 19 sources, and only some of the added chunks are the missing evidence. For Q091, only 1 of the 9 added chunks (`POL-001::chunk-6`) closed the gap.
+- **What the reviewer sees** (`build_approval_request`, the `interrupt()` payload):
+  - `query_id` and `query`;
+  - `trigger_reason`, `missing_doc_ids`, and `missing_chunk_ids`;
+  - `proposed_action` and `proposed_followup_query`;
+  - `first_pass_source_count` and `first_pass_doc_ids`;
+  - a `cost_note`, with the retrieval config and how many chunks the pass may add;
+  - `allowed_decisions`;
+  - on a re-ask, an `error` saying why the last answer was refused.
+- **Allowed decisions:**
+  - approve, which runs the proposed follow-up;
+  - edit (`followup_query`), which runs the reviewer's query and keeps both queries in `approval`;
+  - reject (optional `message`), which goes to `report_gap` with the new stop reason `followup_rejected_by_reviewer` and makes no second retrieval call.
 
-Evidence to record:
-
-- Approval point chosen: _TODO: before recursive retrieval, before generation/export, or another explicit action._
-- Risk controlled: _TODO._
-- What the reviewer sees: _TODO: missing docs/chunks, proposed follow-up query, source count/noise, route label, stop reason._
-- Allowed decisions: _TODO: approve / reject / edit / respond._
-- Test/demo proving approved path: _TODO._
-- Test/demo proving rejected or edited path: _TODO._
+  Anything malformed keeps the run paused and asks again. "Respond", the fourth middleware decision type, has no meaning here.
+- **Who pauses:** only Q091 and Q092, out of all 93 labeled queries. A one-off scratch run auto-approved every pause and reproduced 76 / 2 / 15.
+- **Approved path:**
+  - `test_approve_resumes_the_same_run_and_ends_exactly_like_day17`: same routes, sources, diagnoses, answer, and stop reason as `agent_graph.build_graph`.
+  - `test_approved_followup_that_only_partly_helps_asks_for_approval_once`: Q092 shape, no second pause.
+  - Live: Q091/Q092 → `recursive_retrieve → generate`, `fixed_after_second_pass`.
+- **Rejected or edited path:**
+  - `test_reject_reports_the_gap_without_a_second_retrieval_pass`: 1 retrieval call; a client that raises if called is never called.
+  - `test_edit_runs_the_reviewers_query_and_keeps_the_original_proposal`.
+  - `test_invalid_decision_asks_again_instead_of_proceeding_or_getting_stuck`.
+  - Live: `--decision reject` on Q092 → `report_gap`, `followup_rejected_by_reviewer`.
 
 ### Observability / trace evidence
 
-_TODO: Fill in._
-
-Expected route baseline from Day 17:
+Expected route baseline from Day 17, re-run today and unchanged:
 
 ```bash
 ./.venv/bin/python src/agent_graph.py --all-queries-summary
 # generate 76 | recursive_retrieve -> generate 2 (Q091, Q092) | report_gap 15
 ```
 
-Evidence to record:
-
-- Trace mechanism used: _TODO: local trace table, LangSmith trace, both, or blocker._
-- Q091 trace summary:
-  - first-pass missing: _TODO._
-  - follow-up/action: _TODO._
-  - added docs/chunks: _TODO._
-  - stop reason: _TODO._
-- Q092 trace summary:
-  - first-pass missing: _TODO._
-  - follow-up/action: _TODO._
-  - added docs/chunks: _TODO._
-  - stop reason: _TODO._
-- LangSmith / trace handle if any: _TODO._
-- If no LangSmith trace: blocker/fallback: _TODO._
+- **Trace mechanism:** local only. The run's `trace` lines are printed together with the approval request and a per-checkpoint table from `get_state_history`. LangSmith is wired (tags `procurerag` and `day18-control-plane`; LangGraph adds `thread_id` to each run's metadata, which I verified with a callback) but not captured yet. See the blocker below.
+- **Q091 trace summary:**
+  - first-pass missing: chunks `POL-001::chunk-5`, `POL-001::chunk-6` (`missing_chunk`); `POL-001` itself was present via `chunk-3`.
+  - follow-up/action: paused; approved `approval bands EUR 50,000 250,000 Band 3 VP Procurement`.
+  - added docs/chunks: 9 new chunks, 10 → 19 sources. `POL-001::chunk-6` closed the gap; the others included `POL-001::chunk-4`, `SOP-001::chunk-11`, `FAQ-001::chunk-5`, `GUIDE-005::chunk-7`, `POL-007::chunk-5`, `AUDIT-001::chunk-6`, `SOP-008::chunk-7`, and `RFP-001::chunk-6`.
+  - stop reason: `fixed_after_second_pass` (approve). The time-travel fork with reject gave `followup_rejected_by_reviewer`, with 0 retrieval calls during the replay.
+- **Q092 trace summary:**
+  - first-pass missing: docs `CONTRACT-005`, `POL-002` (`missing_doc`).
+  - follow-up/action: paused; approved `cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance`.
+  - added docs/chunks: 9 new chunks, 10 → 19 sources. `POL-002::chunk-8`, `POL-002::chunk-9`, and `CONTRACT-005::chunk-3` closed the gap.
+  - stop reason: `fixed_after_second_pass` (approve). Rejecting gave `followup_rejected_by_reviewer`, and replaying that rejected run with approve made 1 retrieval call (the follow-up only) and reached `fixed_after_second_pass`.
+- **LangSmith / trace handle:** none yet.
+- **Blocker/fallback:** not a credentials blocker. `.env` has tracing on and the project set to `ProcureRAG`. I ran every Day 18 command with `LANGSMITH_TRACING_V2=false` so the evidence runs didn't send traces before I had reviewed the code. The local trace and checkpoint table are today's evidence. Capturing a traced Q091 approve/resume pair is the first item of the next step.
 
 ### `report_gap` policy for the 15 uncovered queries
 
-_TODO: Fill in._
-
-Expected shape:
-
-- Policy chosen or open decision:
-  - _TODO: refuse/report missing evidence, human-approved caveated answer, add more follow-up strategies, or leave open with a next signal._
-- Why:
-  - _TODO: Fill in._
-- Query ids affected:
-  - _TODO: carry forward Day 17 list if still current._
-- How the policy will be tested:
-  - _TODO: Fill in._
+- **Policy:** (a) refuse and report the missing evidence stays the default. Whether to add (b), a human-approved caveated answer, or (c), more follow-up strategies, is **left open with a named next signal**: a Day 15-style root-cause diagnostic on 3–4 of the 15.
+- **Why:**
+  - "Just answer anyway" is what the single-pass production path does today, silently, with incomplete context. That is the behavior Day 13 diagnosed as the source of incomplete multi-doc answers.
+  - (c) attacks the cause, a retrieval miss; (b) only manages the symptom.
+  - Day 18 made (b) cheap to build later: the same `interrupt()` + checkpointer + decision-record pattern can sit before `generate`. But I don't want a second approval queue before I know whether these 15 are fixable.
+- **Query ids affected (still current, re-run today):** Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, Q090. All are non-`multi_doc`, each missing 1–2 primary docs under `top_k=5`, and none has a follow-up query, so the controlled graph never pauses for them.
+- **How the policy will be tested:**
+  - Today, (a) is already pinned by Day 17's `report_gap` tests (no LLM call, gap named).
+  - If (b) is chosen, it gets the same test shape as today's: pause before `generate`, approve or reject, and assert the caveat text and the stop reason.
+  - If (c) is chosen, each new override gets a Q091/Q092-style before/after test plus a re-run of `--all-queries-summary`.
 
 ### Verification after Juan's build
 
-_TODO: Fill in real outputs, not expected outputs._
+Run on 2026-10-05, after the build. Every command ran with `LANGSMITH_TRACING_V2=false`.
 
 ```bash
 ./.venv/bin/pytest -q
-# TODO
+# 243 passed in 1.58s   (232 baseline + 11 new in tests/test_agent_control_plane.py)
+
+./.venv/bin/pytest -q tests/test_agent_control_plane.py
+# 11 passed in 0.28s
 
 ./.venv/bin/python -m compileall -q src tests
-# TODO
+# clean, no output
 
 ./.venv/bin/python -m ruff check src tests
-# TODO
+# All checks passed!
 
 ./.venv/bin/python src/regression_suite.py --verify-retrieval
-# TODO
+# All cases match their currently expected state (frozen fixtures).
+# "The current retrieval pipeline still matches every case's expectation."
+# Q091 frozen fixture lane still shows: term-level gap OPEN: missing ['Band 3']
+# (expected: the regression suite is still single-pass; the graph is not wired into it)
 
-# Optional/day-specific demos:
-# ./.venv/bin/python src/agent_graph.py
-# ./.venv/bin/python src/agent_graph.py --all-queries-summary
-# TODO: memory/HITL/checkpoint/tracing command
+./.venv/bin/python src/agent_graph.py --all-queries-summary
+# Route distribution over 93 queries: generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092)
+# Queries with a first-pass evidence gap: 17. Fixed by the recursive pass: 2. Ended in report_gap: 15.
+
+./.venv/bin/python src/agent_control_plane.py
+# Q001: no approval needed -> ['generate'], no_missing_evidence, 5 checkpoints
+# Q091: PAUSED -> approve -> ['recursive_retrieve', 'generate'], fixed_after_second_pass, 8 checkpoints
+# Q092: PAUSED -> approve -> ['recursive_retrieve', 'generate'], fixed_after_second_pass, 8 checkpoints
+# Time travel Q091 and Q092 -> reject: ['report_gap'], followup_rejected_by_reviewer,
+#   retrieval calls during replay: 0, checkpoints on thread now: 11 (both branches kept)
+
+./.venv/bin/python src/agent_control_plane.py --query-ids Q092 --decision reject
+# Q092: PAUSED -> reject -> ['report_gap'], followup_rejected_by_reviewer, 6 checkpoints
+# Time travel -> approve: retrieval calls during replay: 1 (the follow-up only),
+#   ['recursive_retrieve', 'generate'], fixed_after_second_pass, 11 checkpoints
 ```
+
+Also run once and not committed: a scratch loop over all 93 queries through `build_controlled_graph`, auto-approving every pause. Result: paused for approval `['Q091', 'Q092']`; `generate` 76, `report_gap` 15, `recursive_retrieve -> generate` 2.
 
 ### What failed or was confusing
 
-_TODO: Fill in._
-
-Prompts:
-
-- Did checkpointer/thread behavior differ from expectations?
-- Did HITL require a checkpointer, config, or resume pattern that was non-obvious?
-- Did LangSmith tracing work locally, or was it blocked by credentials/config?
-- Did `create_agent` vs low-level `StateGraph` feel redundant? If so, what distinction resolved it?
-- Did the current docs conflict with older tutorial/API examples?
+- **Raising on a bad decision trapped the run.** The first design validated the reviewer's decision and raised `ValueError` on a typo like `{"type": "aprove"}`, so the run would stay paused for a retry. The test proved the opposite. LangGraph saves the resume value before the node finishes, so every later resume (even a valid `approve`) replayed the bad value and failed again, and `invoke(None)` did too. The run was stuck. Fix: LangGraph's "validate human input" loop. On a bad answer the node calls `interrupt()` again with an `error` field, and the run stays paused and recoverable. Lesson: after `interrupt()` returns, never raise on bad human input; ask again.
+- **Time travel was not "resume the old checkpoint with a new answer".** `graph.invoke(Command(resume={"type": "reject"}), paused.config)` silently replayed the *original* approve. The working pattern takes two steps: `invoke(None, paused.config)` re-runs the node, which pauses again fresh; then resume the thread with the new decision. A characterization test pins this, so a LangGraph upgrade that changes it will show up.
+- **The node re-runs from its first line on resume.** Everything before `interrupt()` runs twice per approval (more with re-asks). Fine here because `build_approval_request` is pure, but a side effect there (logging to a DB, sending a notification) would duplicate.
+- **`snapshot.next` is not a reliable "is it paused?" check.** After a re-ask it reads `()` even though the run is still paused. `snapshot.interrupts` is the right field.
+- **The checkpointer requirement fails late.** Without a checkpointer, `interrupt()` still stops the run and returns `__interrupt__`. Only the resume fails, with `RuntimeError: Cannot use Command(resume=...) without checkpointer`. I expected compile-time or first-call failure.
+- **Did HITL need a non-obvious config or resume pattern?** Yes. The resume must use the *same* `thread_id`, and passing `None` vs `Command(resume=...)` means two different things ("continue/replay from here" vs "answer the pending pause").
+- **Did LangSmith work?** Not exercised. I kept tracing off for the evidence runs (see Observability). Not a credentials problem.
+- **Did `create_agent` vs `StateGraph` feel redundant?** At first. One distinction resolved it: middleware wraps the *model and tool calls* of `create_agent`'s own loop, and my graph has neither, while checkpointer, `interrupt()`, and state history are LangGraph-level features available to any graph.
+- **Did the course conflict with current APIs?** Three places, each checked on the installed versions:
+  - `NodeInterrupt` (Dynamic Breakpoints) is deprecated in favor of `interrupt()`;
+  - `MemorySaver` is now an alias of `InMemorySaver`;
+  - `create_react_agent` is deprecated in favor of `create_agent`.
 
 ### What improved
 
-_TODO: Fill in._
-
-Prompts:
-
-- What can a reviewer now inspect that was previously only printed locally?
-- Which action is now interruptible/approvable?
-- Which state can now be resumed/replayed?
-- What is clearer about current LangChain agent APIs?
+- **A reviewer can inspect the decision before it happens.** Previously the second pass just ran, and the evidence was only visible afterwards in printed trace lines. Now the run stops *before* `recursive_retrieve` with a structured request: what is missing, what would run, and what it costs.
+- **One action is now interruptible and approvable:** the recursive retrieval pass, with approve / edit / reject. Every decision is recorded in state (`approval`) and in the trace, and a rejection gets an honest stop reason (`followup_rejected_by_reviewer`) instead of Day 17's misleading "no follow-up query defined".
+- **State is resumable and replayable.** Every step of every run is checkpointed per `thread_id`, inspectable with `get_state_history`, and forkable from the approval point. A counterfactual costs no pass-1 re-retrieval.
+- **No behavior drift.** Day 17's code is untouched, approved runs match Day 17 exactly (test), and the 76 / 2 / 15 distribution is unchanged.
+- **Clearer API picture.** I can now say precisely which features are LangGraph-level (checkpointer, `interrupt`, time travel) and which are LangChain v1 agent-level (`create_agent` + middleware), and why ProcureRAG needs only the first today.
 
 ### What remains weak / confusing
 
-_TODO: Fill in._
-
-Prompts:
-
-- Is the graph still eval-only because it depends on `relevance_grades`?
-- Is live answer completeness still unmeasured under the graph path?
-- Is long-term memory only scoped, not implemented?
-- Is HITL a fake/deterministic interface rather than real LangGraph interrupt/middleware?
-- Is `generation.main()` / `regression_suite.py` still single-pass and not graph-aware?
+- **Still eval-only.** The router's trigger reads gold `relevance_grades`, so the approval point only ever fires on labeled queries. A production version needs a label-free trigger.
+- **Answer completeness is unmeasured under the graph path.** The approval controls a retrieval action; it says nothing about whether the generated answer is complete (Day 17's single `--generate` run was incomplete on all four demo queries). `regression_suite.py --live` has not been run under the graph.
+- **Long-term memory is scoped, not implemented.** Deliberately, but it means Module 5 is only on paper for ProcureRAG.
+- **The HITL is a real LangGraph `interrupt()`, but the "human" is a CLI flag.** There is no review UI or queue, and `InMemorySaver` cannot hold a pause across a restart or hand it to another process.
+- **No LangSmith trace yet.** The run-tree evidence the route doc wanted is still local-only.
+- **15 of 93 queries still end in `report_gap`.** The recursive branch (and so the approval point) only exists for the 2 queries with a hand-written follow-up.
+- **`generation.main()` and `regression_suite.py` are still single-pass** and not graph-aware, so the frozen Q091 fixture still shows the Band 3 gap open.
+- **Merged context noise.** Approving adds 9 chunks to fix a gap that 1–3 of them close. The reviewer is told (`cost_note`) but nothing filters it.
+- **I didn't write this code myself.** The understanding has to come from my review and execution, and the interview answers below are what that review must make true.
 
 ### What I can now explain in an interview
 
-_TODO: Answer without notes first; then fill in a cleaned-up version._
+**1. Checkpointing vs short-term memory vs long-term memory.** **Checkpointing** is the mechanism: after every super-step, the checkpointer saves a snapshot of the full graph state under a `thread_id` (plus a `checkpoint_id` per snapshot). **Short-term memory** is what checkpointing gives you: the state of one thread, available across invocations of that thread. That is how a run resumes after a pause, or how a conversation continues. **Long-term memory** is different storage, a `Store`, holding selected facts across threads by namespace. It is never automatic: you decide the schema (profile or collection) and when to write. ProcureRAG uses checkpointing today, with one thread per review (`Q091-review`: 8 checkpoints, the pause at step 2). Long-term memory isn't built, because nothing deserves to outlive a thread until there is a schema, a retention policy, and a PII policy.
 
-1. **Checkpointing vs short-term memory vs long-term memory.**
-   - _TODO._
-2. **Why HITL requires saved state / checkpointers.**
-   - _TODO._
-3. **Where ProcureRAG should pause for approval and why.**
-   - _TODO._
-4. **What LangSmith tracing adds beyond `state["trace"]`.**
-   - _TODO._
-5. **Why `create_agent` is the current API, and why ProcureRAG may still use low-level `StateGraph`.**
-   - _TODO._
-6. **Why memory can be dangerous in procurement RAG.**
-   - _TODO._
-7. **What policy should apply to `report_gap` queries.**
-   - _TODO._
+**2. Why HITL requires saved state / checkpointers.** `interrupt()` stops the run *inside* a node. The only thing that lets it continue is the saved checkpoint from the step before, plus the pending interrupt. On resume, LangGraph loads that checkpoint and re-runs the node, and `interrupt()` returns the reviewer's decision. No checkpointer, nothing to load: measured on 1.2.11, the pause still happens, but the resume fails with `RuntimeError: Cannot use Command(resume=...) without checkpointer`. In production the decision may arrive hours later from another process, so the checkpointer must also be *durable* (SQLite/Postgres), not `InMemorySaver`.
+
+**3. Where ProcureRAG should pause for approval, and why.** Before `recursive_retrieve`. It is the only autonomous decision in the graph that changes the evidence the answer is built from: 10 → 19 sources on Q091/Q092, of which only 1 to 3 added chunks are the actual missing evidence. Two design reasons:
+- **The reviewer sees enough to decide:** what is missing, the exact follow-up query, and the cost.
+- **Every outcome is safe:**
+  - approve keeps Day 17 behavior exactly;
+  - edit runs a better query and records both;
+  - reject reports the gap honestly with no extra retrieval.
+
+It only fires on 2 of 93 queries, which matters because approval fatigue would kill a gate that fired on everything. The next candidate pause is before `generate` or export for incomplete evidence: the caveated-answer option for the 15 `report_gap` queries.
+
+**4. What LangSmith tracing adds beyond `state["trace"]`.** `state["trace"]` is a curated, testable summary: one line per node, which I assert on in tests. LangSmith records *everything* as a run tree:
+- one span per node, with its full inputs and outputs;
+- latency and token usage on LLM calls;
+- errors with stack traces;
+- metadata and tags (`thread_id` is added automatically, plus my `procurerag` / `day18-control-plane` tags).
+
+On top of that it gives a UI to filter and compare runs, and to see a paused run and its resume together by thread. For Q091 it would show the route, the approval request as the interrupt payload, the follow-up query, the 9 added chunks, and the stop reason, without me deciding up front what to print. The local trace is my regression evidence; LangSmith is my debugging tool. Honest status: not captured yet.
+
+**5. Why `create_agent` is the current API, and why ProcureRAG may still use low-level `StateGraph`.** In LangChain v1, `create_agent` is the standard agent factory. It returns a compiled LangGraph running the model → tools → model loop, with middleware as the control surface: HITL on tool calls, summarization, PII, retries, call limits. `create_react_agent` is deprecated (measured warning on 1.2.11: moved to `langchain.agents.create_agent`, removed in V2.0). ProcureRAG's graph is a deterministic workflow, not a tool-calling loop: the router is code over measured evidence, and route labels and eval fields must stay explicit. And everything Day 18 needed (checkpointer, `interrupt()`, time travel) is LangGraph-level, so it works on my `StateGraph` directly. If an LLM ever proposes follow-up queries, that becomes a tool call. Then a `create_agent` with `HumanInTheLoopMiddleware` can be embedded as a node, and my approval vocabulary already matches the middleware's.
+
+**6. Why memory can be dangerous in procurement RAG.**
+- **Stale facts:** a remembered approval threshold outlives the policy update.
+- **Leakage across users or tenants:** one buyer's supplier pricing or contract terms surfacing in another buyer's answer.
+- **Hidden state replacing evidence:** an answer that depends on a memory instead of a cited source can't be audited, and ProcureRAG's whole contract is cited evidence.
+- **Memory poisoning:** one wrong fact written once and reused forever.
+- **Retention and PII obligations:** for example, supplier contact data.
+
+Before any long-term memory, it needs:
+- a schema;
+- per-user/tenant namespaces;
+- retention/TTL;
+- redaction;
+- evidence-first prompting, where memory never substitutes for a citation;
+- human review of what gets written.
+
+The safe version ProcureRAG already has is procedural and reviewed: `AGENTIC_CASE_OVERRIDES` in git.
+
+**7. What policy should apply to `report_gap` queries.** Not "just answer anyway". That is what the single-pass path does silently today, and it's how Day 13's incomplete multi-doc answers happened. Default: refuse and name the missing evidence. Beyond that, the choice is between a human-approved caveated answer (manages the symptom; Day 18's interrupt pattern makes it cheap) and more targeted follow-up strategies (fix the cause). I'm choosing between them on evidence, a root-cause diagnostic on a few of the 15, and recording the choice as a product decision, because it changes what users receive and the system's risk posture.
 
 ### Next step
 
-_TODO: Fill in after the Day 18 artifact and review. Likely options: guardrails / PII / prompt-injection controls, answer-completeness eval under the graph path, or a Week 4 gate review if HER-285 closes cleanly._
+1. **Review and execute the Day 18 code line by line** (`src/agent_control_plane.py`, `tests/test_agent_control_plane.py`), then answer the interview drill without notes.
+2. **Capture LangSmith evidence:** run `./.venv/bin/python src/agent_control_plane.py --query-ids Q091` with tracing on (project `ProcureRAG`), and record the trace link/id for the paused run and its resume in `docs/eval-report.md`.
+3. **`report_gap` signal:** a Day 15-style root-cause diagnostic on 3–4 of the 15 queries, to choose between a caveated answer and more follow-up strategies.
+4. **Answer completeness under the graph path:** `regression_suite.py --live` (paid default model), so "fixed" stops being only a retrieval-context claim.
+5. **Ask Hermes to review HER-285** with the protocol in the route doc, flagging the Day 18 authorship exception. If it closes, move to the Week 4 guardrails focus (PII / prompt-injection controls) or the HER-269 gate review.
