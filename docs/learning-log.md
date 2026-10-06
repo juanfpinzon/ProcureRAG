@@ -4587,3 +4587,227 @@ Partial gaps might suit a caveated answer; total misses need retrieval fixes. Wi
    - Test the Q023/`CONTRACT-005` follow-up hypothesis.
 5. **Ask Hermes to review HER-286** with the route doc's protocol, noting the implementation note at the top of this entry.
 6. Then the Week 4 guardrails focus (prompt-injection / PII / structured refusal controls), or the HER-269 gate review.
+
+## 2026-10-06 — Day 20: Guardrails and Week 4 Gate Review
+
+Route doc: `docs/day-20-guardrails-week4-gate-review.md`.
+
+Linear: HER-287 — Day 20 loop: guardrails + Week 4 gate review.
+
+Related gate: HER-269 — Week 4 gate: LangGraph agents, observability, guardrails.
+
+Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
+
+### Course / docs target
+
+- No new Boot.dev chapter today. Day 20 adds a minimal guardrail layer around the Day 16–19 agentic ProcureRAG path and prepares the Week 4 gate review.
+- Primary: DeepLearning.AI short course — **Safe and reliable AI via guardrails**:
+  - `Introduction`.
+  - `Failure modes in RAG applications`.
+  - `What are guardrails`.
+  - `Building your first guardrail`.
+  - `Checking for hallucinations with Natural Language Inference`.
+  - `Using hallucination guardrail in a chatbot`.
+  - `Keeping a chatbot on topic`.
+  - `Ensuring no personal identifiable information (PII) is leaked`.
+  - `Preventing competitor mentions`.
+  - `Conclusion`.
+  - `Quiz` / self-check if available.
+- Security companion: OWASP Top 10 for LLMs and GenAI Apps — 2025:
+  - `LLM01:2025 Prompt Injection`.
+  - `LLM02:2025 Sensitive Information Disclosure`.
+  - `LLM05:2025 Improper Output Handling`.
+  - `LLM06:2025 Excessive Agency`.
+  - `LLM07:2025 System Prompt Leakage`.
+  - `LLM08:2025 Vector and Embedding Weaknesses`.
+  - `LLM09:2025 Misinformation`.
+  - `LLM10:2025 Unbounded Consumption`.
+
+Completion status:
+
+- DeepLearning.AI guardrails course: _TODO: Fill in exact lessons completed and notes._
+- OWASP risk mapping: _TODO: Fill in risks reviewed and ProcureRAG-specific mapping._
+- Any companion docs / package docs used: _TODO: Fill in._
+
+### Objective
+
+Add tested, explainable safety controls around the agentic ProcureRAG path and prepare the Week 4 gate inventory:
+
+- **Prompt-injection guardrail:** _TODO: Describe input/retrieved-context injection examples and expected block/flag behavior._
+- **PII/sensitive-data guardrail:** _TODO: Describe what is detected, redacted, blocked, or flagged._
+- **Excessive-agency / HITL guardrail:** _TODO: Describe how Day 18 approve/edit/reject and max-pass controls are reused or tested._
+- **Structured-output / output-handling guardrail:** _TODO: Describe schema, citation, recovered-chunk, or unsafe-answer checks._
+- **Week 4 gate inventory:** _TODO: Link every Week 4 artifact to evidence and name unresolved caveats honestly._
+
+### Baseline verification at kickoff
+
+Run on 2026-10-06 before this route/log scaffold:
+
+```bash
+./.venv/bin/pytest -q
+# 275 passed in 4.14s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_graph.py --all-queries-summary
+# Route distribution over 93 queries: generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092)
+# Queries with a first-pass evidence gap: 17. Fixed by the recursive pass: 2. Ended in report_gap: 15.
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py --query-ids Q091 Q014 --output /tmp/day20-kickoff-trace.jsonl
+# Q091: recursive_retrieve -> generate, fixed_after_second_pass, status not_generated / complete.
+# Q014: report_gap, trigger_detected_no_followup_query_defined, status gap_report / missing_docs ['CONTRACT-004'].
+# Wrote 2 trace row(s) to /tmp/day20-kickoff-trace.jsonl; re-read and re-validated 2.
+```
+
+Git status at kickoff was clean on `main` before this route/log scaffold.
+
+### Guardrail artifact / contract
+
+_TODO: Fill in after build._
+
+Suggested evidence shape:
+
+| Risk | Layer | Example | Expected behavior | Evidence file/test |
+|---|---|---|---|---|
+| Prompt injection | input or retrieved context | _TODO_ | block/flag/treat as evidence only | _TODO_ |
+| PII / sensitive data | input/output | _TODO_ | redact/block/flag | _TODO_ |
+| Excessive agency | graph/action | Q091/Q092 follow-up retrieval | pause + approve/edit/reject; reject -> `gap_report` | _TODO_ |
+| Improper output handling | output/schema | _TODO_ | validation error/caveat/refusal | _TODO_ |
+| Misinformation / wrong scope | output/eval | Band 4 vs Band 3 / wrong supplier contract | _TODO: state what is detected now vs deferred_ | _TODO_ |
+
+### OWASP mapping
+
+_TODO: Fill in after source work._
+
+Expected answer shape:
+
+- **LLM01 Prompt Injection:** user prompt and retrieved-context injection risk; ProcureRAG control is _TODO_.
+- **LLM02 Sensitive Information Disclosure:** PII, supplier data, contract terms, and hidden config; ProcureRAG control is _TODO_.
+- **LLM05 Improper Output Handling:** schema/citation/result validation before downstream use; ProcureRAG control is _TODO_.
+- **LLM06 Excessive Agency:** recursive retrieval action bounded by max passes and HITL; ProcureRAG control is _TODO_.
+- **LLM07 System Prompt Leakage:** hidden prompt/config leakage risk; ProcureRAG control is _TODO_.
+- **LLM08 Vector and Embedding Weaknesses:** retrieval poisoning / unauthorized retrieval / stale embeddings; ProcureRAG control or caveat is _TODO_.
+- **LLM09 Misinformation:** wrong Band 4 / wrong-scope contract examples; ProcureRAG control or next eval is _TODO_.
+- **LLM10 Unbounded Consumption:** max passes, output budgets, live-call controls; ProcureRAG control is _TODO_.
+
+### Week 4 gate inventory
+
+_TODO: Fill in after build._
+
+| Week 4 requirement | Evidence / artifact | Status | Caveat / next step |
+|---|---|---|---|
+| Recursive retrieval / agentic search | `src/agentic_retrieval.py`, Day 16 docs | _TODO_ | _TODO_ |
+| LangGraph state/routing | `src/agent_graph.py`, Day 17 docs | _TODO_ | _TODO_ |
+| Memory/checkpointing/HITL | `src/agent_control_plane.py`, Day 18 docs | _TODO_ | _TODO_ |
+| Observability/tracing | `src/agent_observability.py`, Day 19 trace docs | _TODO_ | _TODO_ |
+| Structured output | `AgentResult`, `AgentRunTrace`, `GeneratedAnswer` | _TODO_ | _TODO_ |
+| Guardrails | Day 20 artifact | _TODO_ | _TODO_ |
+| Known caveats | Day 19 / Day 20 evidence | _TODO_ | _TODO_ |
+
+### Verification after build
+
+_TODO: Fill in exact output after Juan’s implementation._
+
+Required minimum:
+
+```bash
+./.venv/bin/pytest -q
+# TODO
+
+./.venv/bin/python -m compileall -q src tests
+# TODO
+
+./.venv/bin/python -m ruff check src tests
+# TODO
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# TODO
+
+# chosen guardrail demo command(s)
+# TODO
+```
+
+If any live/SaaS/LLM/GuardrailsAI dependency blocks, record:
+
+- exact command tried: _TODO_;
+- exact error/blocker: _TODO_;
+- local CI-safe fallback evidence: _TODO_;
+- next retry path: _TODO_.
+
+### What failed or was confusing
+
+_TODO: Fill in._
+
+Prompts to answer:
+
+- Did any guardrail accidentally block safe procurement queries?
+- Did any PII/sensitive-data check miss an obvious case?
+- Did any guardrail depend on live credentials unintentionally?
+- Did the guardrail change route distribution or retrieval behavior? If yes, was that intended?
+- Did the Week 4 inventory reveal a true HER-269 blocker?
+
+### What improved
+
+_TODO: Fill in._
+
+Expected answer shape:
+
+- What unsafe input/output is now blocked/redacted/flagged?
+- What behavior is now testable instead of only documented?
+- How does this reduce blast radius compared with Day 19?
+- What can a reviewer verify from code/tests/docs without trusting prose?
+
+### What remains weak / confusing
+
+_TODO: Fill in._
+
+Candidate caveats to confirm or remove:
+
+- Structured output still guarantees shape, not truth.
+- Citation validation still proves source existence, not correct scope/application.
+- NLI/hallucination guardrails may be deferred if no real NLI check is implemented.
+- Regex PII checks are a baseline, not enterprise DLP.
+- `generation.main()` and `regression_suite.py` may still be single-pass / not graph-aware.
+- `report_gap` policy may still need a separate diagnostic day.
+
+### What I can now explain in an interview
+
+_Draft answers; answer without notes before the Hermes review._
+
+**1. Guardrail vs unit test vs eval vs trace vs schema.**
+- _TODO: Explain in ProcureRAG terms._
+
+**2. Prompt injection entry points in RAG.**
+- _TODO: Include user prompt, retrieved context, tool output, memory/state._
+
+**3. What HITL protects against, and what it does not.**
+- _TODO: Mention excessive agency for recursive retrieval, but not answer correctness._
+
+**4. Why PII regex is useful but insufficient.**
+- _TODO: Mention deterministic baseline vs DLP limitations._
+
+**5. OWASP `LLM01`, `LLM02`, `LLM06` mapping.**
+- _TODO: Map to prompt injection, sensitive disclosure, excessive agency._
+
+**6. Why structured output is not enough for safety.**
+- _TODO: Cite Day 19 wrong Band 4 / wrong-scope supplier contract examples._
+
+**7. What must be true before HER-269 closes.**
+- _TODO: List Week 4 artifact/evidence requirements and caveats._
+
+### Next step
+
+1. **Juan:** complete the DeepLearning.AI guardrails course and OWASP mapping in the sections above.
+2. **Juan:** design the smallest deterministic guardrail contract before coding: prompt injection, PII/sensitive data, excessive agency/HITL, and structured-output/output-handling behavior.
+3. **Juan:** implement and test the guardrail artifact, keeping standard tests CI-safe and documenting any dependency fallback honestly.
+4. **Juan:** update `docs/eval-report.md` with the Week 4 gate inventory and real command outputs.
+5. **Juan:** ask Hermes to review HER-287 and HER-269 with the route doc’s review prompt.
+6. **After a clean review:** close HER-287 and, if the inventory is clean, run the HER-269 weekly parent gate closure before starting Week 5 serving/deployment.
