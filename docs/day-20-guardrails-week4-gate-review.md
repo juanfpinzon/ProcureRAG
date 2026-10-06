@@ -27,6 +27,8 @@ Primary source:
   - `Conclusion`.
   - `Quiz` / self-check if available.
 
+  Short Course Completed on 06-10-26
+
 Security companion:
 
 - **OWASP Top 10 for LLMs and GenAI Apps — 2025**: <https://genai.owasp.org/llm-top-10/?cat=44>
@@ -38,6 +40,8 @@ Security companion:
   - `LLM08:2025 Vector and Embedding Weaknesses`.
   - `LLM09:2025 Misinformation`.
   - `LLM10:2025 Unbounded Consumption`.
+
+  Companion docs read 06-10-26
 
 Project companion sources:
 
