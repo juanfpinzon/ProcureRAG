@@ -303,7 +303,9 @@ def generate_structured_answer(query, sources, client):
     instead of guessing.
 
     Returns `generate_answer`'s dict plus `answerable_from_sources`, the
-    model's own verdict, now readable without parsing the answer text.
+    model's own verdict, now readable without parsing the answer text. It is
+    `None` when the model was never called (empty context): no call, no
+    verdict.
     """
     if not sources:
         # Same grounding rule as `generate_answer`: never send an empty context to the model.
@@ -312,7 +314,9 @@ def generate_structured_answer(query, sources, client):
             "answer": INSUFFICIENT_EVIDENCE_ANSWER,
             "sources": [],
             "citations": validate_citations(INSUFFICIENT_EVIDENCE_ANSWER, []),
-            "answerable_from_sources": False,
+            # None, not False: False would claim the MODEL declined, but no
+            # model was asked. This fixed refusal is our code's, not the model's.
+            "answerable_from_sources": None,
         }
 
     generated = GeneratedAnswer.model_validate_json(client(build_prompt(query, sources)))

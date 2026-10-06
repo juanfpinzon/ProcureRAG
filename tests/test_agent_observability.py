@@ -242,6 +242,44 @@ def test_model_that_declines_on_complete_evidence_is_model_declined_not_answered
     assert any("MODEL DECLINED" in line for line in row.trace_lines)
 
 
+def test_empty_context_with_a_client_is_not_generated_because_no_model_was_called():
+    """Regression test for the 2026-10-06 review. Gold labels that require
+    nothing make the evidence "complete" even when retrieval returns nothing.
+    No model may be called on an empty context, so there is no model verdict,
+    and v2 was wrong to label this `model_declined`. The client raises if
+    called, which proves no call happens."""
+    module = _load_observability_module()
+
+    def client_that_must_not_be_called(prompt):
+        raise AssertionError("no model may be called on an empty context")
+
+    query_row = _query_row("Q900", "conceptual", {})  # no gold labels: nothing can be missing
+    graph = module.build_observed_graph(_fake_retrieve_fn({query_row["query"]: []}), client=client_that_must_not_be_called)
+    row = module.run_and_trace(graph, query_row, case_overrides={})
+
+    assert row.route_history == ["generate"]
+    assert row.retrieval_passes[-1].context_size_after == 0
+    assert row.result.evidence_status == "complete"
+    assert row.result.status == "not_generated"  # not "model_declined": no model was asked
+    assert row.result.citations is None
+    assert row.result.caveats == ["no LLM was called because the retrieved context was empty"]
+    assert "no LLM call" in row.trace_lines[-1] and "DECLINED" not in row.trace_lines[-1]
+
+
+def test_llm_written_result_on_an_empty_context_is_rejected():
+    """The contract-level guard for the same bug: a result with a citation
+    report claims an LLM wrote it, which can't be true on an empty context.
+    If a node ever mislabels this case again, the row fails to build."""
+    module = _load_observability_module()
+    data = _q091_shaped_row(module, client=_structured_client("Band 3 [1].", answerable_from_sources=True)).model_dump(
+        mode="json"
+    )
+    data["retrieval_passes"][-1]["context_size_after"] = 0
+
+    with pytest.raises(ValidationError, match="final context is empty"):
+        module.AgentRunTrace.model_validate(data)
+
+
 def test_trace_rows_round_trip_through_jsonl(tmp_path):
     """Write -> read gives back equal, re-validated rows, one JSON object per line."""
     module = _load_observability_module()
@@ -305,7 +343,7 @@ def test_missing_required_fields_are_rejected_by_name():
         (lambda data: data["approval"].update(decision="aprove"), ("approval", "decision")),  # typo
         (lambda data: data.update(stop_reson="fixed_after_second_pass"), ("stop_reson",)),  # unknown key
         (lambda data: data.update(created_at="2026-10-05T12:00:00"), ("created_at",)),  # no timezone
-        (lambda data: data.update(schema_version=3), ("schema_version",)),  # a version this reader doesn't know
+        (lambda data: data.update(schema_version=4), ("schema_version",)),  # a version this reader doesn't know
     ],
 )
 def test_invalid_values_and_unknown_keys_are_rejected_at_the_exact_field(break_row, error_location):
@@ -424,14 +462,24 @@ def test_schema_vocabularies_match_the_graph_constants():
     }
 
 
-def test_new_rows_are_v2_and_v1_rows_still_read():
-    """Schema evolution: v2 only ADDED a status value, so every v1 row is
-    still a valid v2 row. Writers always write the current version; the
-    reader accepts both, which keeps the committed v1 evidence files
-    readable."""
+def test_new_rows_are_v3_and_older_rows_are_read_under_their_own_vocabulary():
+    """Schema evolution, both halves:
+    - writers always write the current version, and the reader still accepts
+      v1 and v2 rows, which keeps the committed evidence files readable;
+    - an old row is checked against ITS version's vocabulary, so a v1 row
+      may not carry `model_declined`, which v1 did not have."""
     module = _load_observability_module()
     row = _q014_shaped_row(module)
-    assert row.schema_version == module.TRACE_SCHEMA_VERSION == 2
+    assert row.schema_version == module.TRACE_SCHEMA_VERSION == 3
 
-    v1_data = {**row.model_dump(mode="json"), "schema_version": 1}
-    assert module.AgentRunTrace.model_validate(v1_data).schema_version == 1
+    for old_version in (1, 2):
+        old_data = {**row.model_dump(mode="json"), "schema_version": old_version}
+        assert module.AgentRunTrace.model_validate(old_data).schema_version == old_version
+
+    decline = "The sources do not contain enough information."
+    declined = _q091_shaped_row(module, client=_structured_client(decline, answerable_from_sources=False))
+    declined_data = declined.model_dump(mode="json")
+    assert module.AgentRunTrace.model_validate({**declined_data, "schema_version": 2}).result.status == "model_declined"
+
+    with pytest.raises(ValidationError, match="added in schema_version 2"):
+        module.AgentRunTrace.model_validate({**declined_data, "schema_version": 1})

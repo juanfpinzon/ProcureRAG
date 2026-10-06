@@ -395,7 +395,9 @@ def test_generate_structured_answer_with_empty_sources_never_calls_the_client():
     result = generation.generate_structured_answer("Any question", [], client_that_must_not_be_called)
 
     assert result["answer"] == generation.INSUFFICIENT_EVIDENCE_ANSWER
-    assert result["answerable_from_sources"] is False
+    # None, not False: no model was asked, so there is no model verdict.
+    # False would read as "the model declined" downstream.
+    assert result["answerable_from_sources"] is None
 
 
 def test_make_openrouter_client_sends_a_strict_json_schema_only_when_asked():

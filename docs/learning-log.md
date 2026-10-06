@@ -4150,14 +4150,6 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
   - OpenAI Structured Outputs guide.
   - Pydantic model docs (`BaseModel`, validation, serialization, JSON Schema).
 
-Completion status:
-
-- _TODO (Juan): which HF Bonus Unit 2 pages were completed._
-- _TODO (Juan): which LangGraph/LangSmith companion lessons/docs were completed._
-- _TODO (Juan): which structured-output docs were completed._
-
-(Left for Juan: the build can't verify what was read.)
-
 Verified on the installed versions while building (langsmith 0.12.5, langgraph 1.2.11, langchain-core 1.6.3, pydantic 2.12.5, openai 3.13.0):
 
 - **`run_id` → root run id.** A `run_id` in a LangGraph invoke config becomes the id of the root run, which is the LangSmith trace id. LangGraph also adds `thread_id` to that run's metadata. Checked in memory with `langchain_core.tracers.context.collect_runs()`.
@@ -4220,7 +4212,7 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
   - Langfuse would need an extra package and callback handler for the same tree. It was not tried.
 - **Why JSONL as well:** review must not depend on a SaaS login, and CI must not need credentials.
 - **CI-safe evidence boundary (no credentials):**
-  - `pytest`: the 29 new tests are 21 in `test_agent_observability.py` (which check the LangSmith run-id link in memory with `collect_runs()`) and 8 in `test_generation.py` (which check the strict `response_format` request against a fake `openai.OpenAI`). Plus `compileall`, `ruff`, `regression_suite.py --verify-retrieval`;
+  - `pytest`: the 31 new tests are 23 in `test_agent_observability.py` (which check the LangSmith run-id link in memory with `collect_runs()`) and 8 in `test_generation.py` (which check the strict `response_format` request against a fake `openai.OpenAI`). Plus `compileall`, `ruff`, `regression_suite.py --verify-retrieval`;
   - `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_observability.py` (local models only).
 - **Live/SaaS evidence boundary:**
   - `./.venv/bin/python src/agent_observability.py --query-ids Q091 Q014 --output docs/traces/day19-langsmith-q091-q014.jsonl` needs `LANGSMITH_API_KEY`.
@@ -4233,8 +4225,9 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
 Schema versions:
 - **v1:** the first version.
 - **v2:** added the status `model_declined`.
+- **v3 (2026-10-06, after review):** `not_generated` now means "no LLM call was made" (no client, or an empty context). v2 had called an empty context `model_declined`.
 
-New rows are written as v2. v2 only *added* a value, so every v1 row is still valid, and the reader accepts both. The committed v1 evidence files still validate.
+New rows are written as v3. The reader accepts v1, v2, and v3, and checks each row against the vocabulary of its own version: a v1 row with `model_declined` is rejected. All committed evidence files (one v1, two v2) still validate.
 
 - **Run metadata:** `run_id` (UUID), `thread_id` (`<query_id>-<8 hex>`, the checkpointer key), `created_at` (timezone required), `code_version` (`git describe --always --dirty`), `query_id`, `query_type`, `query`.
 - **Route:** `route_history`, `stop_reason`, and `approval` (`decision`, `proposed_followup_query`, `approved_followup_query`, `message`), or `null` if the run never paused.
@@ -4267,9 +4260,9 @@ Sample run handle/path:
   - `answered`: the LLM answered from complete evidence.
   - `model_declined`: complete evidence, but the LLM said the sources weren't enough.
   - `gap_report`: evidence missing; the graph refused and named the gap.
-  - `not_generated`: evidence complete, no LLM wired in.
+  - `not_generated`: evidence complete, but no LLM call was made (no client wired in, or an empty context; the empty case carries a caveat).
 
-  There are two refusals, kept apart on purpose: the *graph* refusing (`gap_report`) and the *model* refusing (`model_declined`).
+  There are two refusals, kept apart on purpose: the *graph* refusing (`gap_report`) and the *model* refusing (`model_declined`). `model_declined` requires a real model call.
 - **Evidence status fields:** `evidence_status`, one of `complete` / `missing_docs` / `missing_chunks`, plus `missing_doc_ids` and `missing_chunk_ids` from the final diagnosis. A reviewer rejection is a stop reason, not an evidence status.
 - **Citation/source fields:** `citations` is a `CitationCheck` (`cited_ids`, `valid_ids`, `orphan_ids`, `uncited_ids`, `passed`) whenever an LLM wrote the text (`answered`/`model_declined`), otherwise `null`. `passed` means at least one valid citation and no orphans (Day 10's contract).
 - **Trace handle/path fields:** `result.run_id` points at the row; `row.langsmith.root_run_ids` points at the SaaS traces; `row.thread_id` points at the checkpointer thread.
@@ -4287,7 +4280,9 @@ Sample run handle/path:
     - `gap_report` with complete evidence;
     - citations present without an LLM, or absent with one;
     - `result.run_id` ≠ row `run_id`;
-    - a route not ending on `generate`/`report_gap`.
+    - a route not ending on `generate`/`report_gap`;
+    - an LLM-written result on an empty final context (no model is ever called on one);
+    - `schema_version=1` with `status="model_declined"` (that value arrived in v2).
   - **Rejected at generation:** an LLM reply that is prose, lacks the verdict, or adds a key. The run fails loudly instead of guessing.
   - **Normalized:** citation id `"3"` → `3`, while `"three"` is rejected.
   - **Recorded, not rejected:** an orphan citation in a real answer (`passed=false` plus a caveat). The schema enforces shape; quality is the eval's job.
@@ -4409,7 +4404,34 @@ Juan's structured run 2 (same code, tracing on, default output path):
 # 6 LangSmith root runs read back, all success; generate span 2.46-3.34 s
 ```
 
-Two more mutations, in a scratch copy, each turned exactly `test_model_that_declines_on_complete_evidence_is_model_declined_not_answered` red:
+After the external review (2026-10-06), fixing `model_declined` without a model call and making the reader check each row against its own version's vocabulary:
+
+```bash
+# reviewer's repro, before the fix (gold labels require nothing, empty retriever, client raises if called):
+# ['generate'] no_missing_evidence model_declined   <- no model was called
+# and a v1 row with status "model_declined" validated
+
+./.venv/bin/pytest -q
+# 275 passed   (+2: the empty-context run, the empty-context row rule; the version test now covers v1 vocabulary)
+
+./.venv/bin/python -m compileall -q src tests      # clean, no output
+./.venv/bin/python -m ruff check src tests         # All checks passed!
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# The current retrieval pipeline still matches every case's expectation.
+
+# the same repro after the fix:
+# ['generate'] no_missing_evidence not_generated ['no LLM was called because the retrieved context was empty']
+# a v1 row with "model_declined" -> ValidationError: added in schema_version 2
+# all three trace files re-read and re-validated: 4 rows {v2}, 4 rows {v2}, 2 rows {v1}
+
+# mutation check in a scratch copy: each turned exactly its own test red
+# node empty-context branch removed   -> test_empty_context_with_a_client_is_not_generated_because_no_model_was_called
+# empty-context row rule removed      -> test_llm_written_result_on_an_empty_context_is_rejected
+# v1 vocabulary rule removed          -> test_new_rows_are_v3_and_older_rows_are_read_under_their_own_vocabulary
+# guard verdict back to False         -> test_generate_structured_answer_with_empty_sources_never_calls_the_client
+```
+
+Two more mutations (from the option-3 fix, before the review), in a scratch copy, each turned exactly `test_model_that_declines_on_complete_evidence_is_model_declined_not_answered` red:
 - the `model_declined` branch removed from `build_result`;
 - the `answerable_from_sources` field removed from the state schema. LangGraph then silently drops the model's `false`, and the row reverts to `answered`.
 
@@ -4431,6 +4453,10 @@ Two more mutations, in a scratch copy, each turned exactly `test_model_that_decl
 - **LangGraph dropped the new field without a word.** A node returning `answerable_from_sources` loses it unless the state schema declares it (measured: no error). Hence the `NotRequired[bool]` in Day 18's state. A mutation test proves the row reverts to `answered` without it.
 - **The "safe" OpenRouter flag broke the request.** `provider.require_parameters=true` (route only to providers that support `response_format`) failed with a 404 before any model ran, because it requires *every* parameter, including the `reasoning` flag gpt-4o's endpoints don't list. Removed; our own `model_validate_json` is the safety net.
 - **The IDE flagged my `Literal[CONSTANT]` types.** They are valid at runtime and invalid by the typing spec. The values are now plain strings, pinned to the constants by a test.
+- **An external review found two holes in my own failure-ownership story.**
+  - **"No verdict" had been encoded as "the model said no".** The empty-context guard (Day 10's "never send an empty context to a model") returned `answerable_from_sources=False`, so a run where no model was called came out `model_declined`, with a trace line saying `MODEL DECLINED`. Retrieval returned nothing, and the row blamed the model. Now: no call means no verdict (`None`), the node writes `citations=None`, the status is `not_generated` with a caveat, and the row contract rejects any LLM-written result on an empty context.
+  - **"Version-aware" only meant "accepts old version numbers".** A v1 row with the v2-only `model_declined` passed. Now each row is checked against its own version's vocabulary.
+  - Lesson: a missing value and a negative value are different facts (`None` ≠ `False`). And schema evolution has two halves: reading old rows, and refusing old rows that use new words. Widening `not_generated` was a change of meaning, so I bumped to v3 even though no field changed.
 - **Did structured output validate deterministic graph state or live model output?** Both, now. Pydantic validates the graph's state (`AgentResult`), and the provider plus Pydantic validate the model's reply (`GeneratedAnswer`).
   - The first structured live run showed the limit: Q091's answer was schema-valid, cited real sources, passed every check, and named the **wrong approval band** (Band 4 instead of Band 3, misreading `POL-001::chunk-6`).
   - The second showed a quieter version: Q092 cited a real chunk from the **wrong supplier's contract** (Cobalt, contingent labour) as a rule for a cleaning contractor, and `citations.passed` stayed `true`. The citation check proves the source exists in the context, not that it applies.
@@ -4475,7 +4501,7 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
 - **Logs** are textual events: Day 18's printed lines.
 - **A trace** is the structured execution tree of one run. In LangSmith, a root run with one span per node and router (Q091's resume trace: `approve_followup → route_after_approval → recursive_retrieve → diagnose → route_after_diagnosis → generate`). Locally, it is the flat `AgentRunTrace` row.
 - **Metrics** aggregate across runs: route distribution 76 / 2 / 15, P@1/nDCG, and latency/cost later.
-- **Tests** assert deterministic code contracts in CI: 273 pytest tests, none needing credentials.
+- **Tests** assert deterministic code contracts in CI: 275 pytest tests, none needing credentials.
 - **Evals** judge task quality against labeled examples: the 93-query corpus, the regression suite, DeepEval/RAGAS.
 
 Each answers a different question. A trace row tells me *why* Q091 needed a second pass. It does not tell me whether the answer was good. I measured that today: structured run 1's Q091 trace row was complete, valid, and green on citations, and its answer named the wrong approval band.
@@ -4502,6 +4528,8 @@ Day 19 adds stable, versioned, validated fields, a JSONL artifact, and LangSmith
 **4. Why structured output beats parsing prose.** `status` is an enum. Scraping `"[not generated"` breaks silently the day someone rewords a string. A schema violation is loud: a `ValidationError` names the exact field (`('result', 'status')`). Validators enforce invariants the prose never could ("never `answered` on missing evidence", "`passed` agrees with the orphan list"). Tests, evals, and a UI read the same fields, and the same model exports a JSON Schema a provider can enforce. The prose still exists, in `text`, for humans.
 
 Q092 is the concrete case. The model's "the sources do not contain enough information" was prose, so my first schema called it `answered`. Making the model fill `answerable_from_sources` turned that refusal into data (`model_declined`), with no sentence-matching.
+
+The schema also has to keep "no answer" apart from "the model said no". An empty context never reaches the model, so it is `not_generated`, not `model_declined`: a missing verdict is `None`, not `False`. A review caught my first version getting this wrong.
 
 The limit is just as concrete: structured output guarantees shape, not truth. In one structured run, Q091's schema-valid answer said Band 4. In another, Q092 cited a real chunk from the wrong supplier's contract, and the citation check passed.
 

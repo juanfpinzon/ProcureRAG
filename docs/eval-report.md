@@ -3848,7 +3848,7 @@ Re-run the CI-safe command to get a no-LLM file back at the default path.
 
 | Evidence | Credentials? | Command | What it proves |
 |---|---|---|---|
-| Schema and trace tests | none | `pytest tests/test_agent_observability.py` | Row shape, validation rules, JSONL round trip, v1 rows still readable, and that the row's root run ids are the ones LangChain actually created (checked in memory with `collect_runs()`, nothing sent) |
+| Schema and trace tests | none | `pytest tests/test_agent_observability.py` | Row shape, validation rules, JSONL round trip, v1/v2 rows still readable under their own vocabulary, and that the row's root run ids are the ones LangChain actually created (checked in memory with `collect_runs()`, nothing sent) |
 | Structured generation tests | none | `pytest tests/test_generation.py` | `GeneratedAnswer` is strict-mode ready; the verdict is read from a field; prose, missing, or extra fields are rejected; the request carries a strict `json_schema` only when asked (checked with a fake `openai.OpenAI`, no network) |
 | Local trace artifact | none (local models) | `LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ... agent_observability.py` | Real routes on the real corpus; every row validates on write and again on re-read |
 | LangSmith traces | `LANGSMITH_API_KEY` | `... agent_observability.py --query-ids Q091 Q014 --output ...` | The span tree in the SaaS UI, linked to the local rows |
@@ -3856,15 +3856,20 @@ Re-run the CI-safe command to get a no-LLM file back at the default path.
 
 The standard gates (`pytest`, `compileall`, `ruff`, `regression_suite.py --verify-retrieval`) need no credentials.
 
-### Trace row contract (`AgentRunTrace`, `schema_version = 2`)
+### Trace row contract (`AgentRunTrace`, `schema_version = 3`)
 
 One JSONL line = one **finished** run.
 
 **Versions:**
 - **v1** was the first contract.
 - **v2** added the status value `model_declined` (the Q092 fix).
+- **v3** (2026-10-06, after review) widened the meaning of `not_generated` from "no LLM client wired in" to "no LLM call was made" (no client, **or** an empty context). v2 had labeled an empty context `model_declined`, although no model was asked. No field or value was added.
 
-Writers always write the current version. v2 only *added* a value, so every v1 row is still a valid v2 row, and the reader accepts both (`READABLE_SCHEMA_VERSIONS = Literal[1, 2]`; `test_new_rows_are_v2_and_v1_rows_still_read`). That keeps the committed v1 evidence files readable. A change that removed or renamed a field would instead need a migration step, or a reader that rejects v1.
+Writers always write the current version. The reader is version-aware in two ways (`test_new_rows_are_v3_and_older_rows_are_read_under_their_own_vocabulary`):
+- **It accepts every version it understands** (`READABLE_SCHEMA_VERSIONS = Literal[1, 2, 3]`), so the committed v1 and v2 evidence files stay readable.
+- **It checks each row against the vocabulary of the version the row claims.** A v1 row carrying `model_declined` is rejected, because v1 did not have that value. Before the review, the reader only checked the version number, so a v1 row with a v2 status passed.
+
+v3's change is a change of meaning, which no row-level check can see. A reader that cares reads `not_generated` on a v1/v2 row as "no client". A change that removed or renamed a field would instead need a migration step, or a reader that rejects the old version.
 
 | Contract piece | Fields | Source in the graph | Why it matters |
 |---|---|---|---|
@@ -3882,12 +3887,12 @@ The per-pass "before" context comes from Day 18's checkpointer: the final state 
 
 | Field | Values | Meaning |
 |---|---|---|
-| `status` | `answered` / `model_declined` / `gap_report` / `not_generated` | What the run produced. Downstream code switches on this, never on `text` |
+| `status` | `answered` / `model_declined` / `gap_report` / `not_generated` | What the run produced. Downstream code switches on this, never on `text`. `model_declined` requires a real model call; `not_generated` means no call was made (no client, or an empty context) |
 | `evidence_status` | `complete` / `missing_docs` / `missing_chunks` | State of the final context (Day 16 priority: a missing doc outranks a missing chunk) |
 | `text` | string | For humans: the answer, the model's decline, the gap report, or the not-generated marker |
 | `missing_doc_ids`, `missing_chunk_ids` | lists | The missing evidence by name, from the final diagnosis |
 | `citations` | `CitationCheck` or `null` | `validate_citations`' four lists plus `passed` (≥1 valid citation and 0 orphans: Day 10's citation contract). Present only when an LLM wrote `text` (`answered` / `model_declined`) |
-| `caveats` | list of strings | Reviewer edit or reject (with its reason), orphan citations |
+| `caveats` | list of strings | Reviewer edit or reject (with its reason), orphan citations, and "no LLM was called because the retrieved context was empty" |
 | `run_id` | UUID | Audit handle: the trace row that explains this result |
 
 A reviewer rejection is a **stop reason** (`followup_rejected_by_reviewer`), not an evidence status: the evidence is still "missing chunks" or "missing docs". Keeping the two fields orthogonal means neither has to encode the other.
@@ -3937,6 +3942,8 @@ Design choices:
 | An LLM reply that is prose, lacks `answerable_from_sources`, or adds a key | Rejected in `generate_structured_answer` (`ValidationError`), so the run fails loudly | `test_generate_structured_answer_rejects_a_reply_outside_the_schema` |
 | A `Literal` value drifting from the graph's constants (e.g. a renamed stop reason) | Caught by a test, not at runtime. The `Literal`s are written as plain strings because the typing spec doesn't allow constants inside `Literal` (Pylance flagged the first version) | `test_schema_vocabularies_match_the_graph_constants` |
 | `result.run_id` ≠ row `run_id`; route not ending on `generate`/`report_gap` | Rejected | `test_trace_row_must_point_at_its_own_result_and_describe_a_finished_run` |
+| An LLM-written result (`answered`/`model_declined`, i.e. a citation report) with an empty final context (`context_size_after = 0`) | Rejected: no model is ever called on an empty context (Day 10's grounding rule) | `test_llm_written_result_on_an_empty_context_is_rejected` |
+| `schema_version = 1` with `status = "model_declined"` | Rejected: the value was added in v2 | `test_new_rows_are_v3_and_older_rows_are_read_under_their_own_vocabulary` |
 
 An orphan citation in a real answer is **recorded**, not rejected (`passed=false` plus a caveat). Validation enforces the shape of the contract. Judging answer quality is the eval's job, and a trace has to keep a bad answer as evidence.
 
@@ -4154,6 +4161,36 @@ Today's structured runs show the limit of what schemas can prove:
 - in run 2, Q092 cites a real chunk from the **wrong supplier's contract** (Cobalt, contingent labour) as a requirement for a cleaning contractor, and Q091 states Meridian's own certifications as the general rule. `citations.passed` checks that `[n]` exists in the context, not that the source applies to the question.
 
 Structured output guarantees the **shape** of an answer (fields, types, allowed values). It says nothing about whether the content is true. That still takes evals against `expected_answer`, which is the Day 19 interview distinction between traces/contracts and evals, now measured on this repo.
+
+### Review findings fixed (2026-10-06)
+
+An external review of the uncommitted Day 19 code found two problems. Both reproduced exactly as described, and both are fixed.
+
+**1. `model_declined` without any model call.**
+- **Repro:** gold labels that require nothing, an empty retriever, and a client that raises if called. Result: route `generate`, `status="model_declined"`, and a trace line saying `MODEL DECLINED (sources insufficient)`. The client was never called.
+- **Cause:** `generate_structured_answer` never sends an empty context to a model (Day 10's grounding rule). But its guard returned `answerable_from_sources=False`, which `build_result` reads as "the model declined".
+- **Why it matters:** the point of the status field is to say who owns a failure. Here retrieval returned nothing, and the row blamed the model.
+- **Reachability:** the live retriever always returns sources, and every labeled query has gold docs. So this needs a fake or broken retriever, but the label still has to be honest.
+- **Fix:**
+  - `structured_generate_node` checks for an empty context **before** any call. It then writes `citations=None` and no verdict, so the status becomes `not_generated`. The trace line now says "no LLM call".
+  - `build_result` adds the caveat "no LLM was called because the retrieved context was empty". That separates "retrieval came back empty" from "no client configured" without parsing text.
+  - `generate_structured_answer`'s guard returns `answerable_from_sources=None`: no call, no verdict.
+  - A new contract rule on `AgentRunTrace` rejects any LLM-written result on an empty final context. It also covers Day 17's plain-text node, which (with a client and an empty context) would otherwise have been labeled `answered`. Day 19 never runs that node with a client, so the row now fails loudly instead.
+- **Schema:** this widened what `not_generated` means, so the schema went to **v3**.
+
+**2. The reader accepted old rows under new vocabulary.**
+- **Repro:** a row with `schema_version=1` and `status="model_declined"` validated, although v1 never had that value.
+- **Cause:** `schema_version` was only checked as a number (`Literal[1, 2]`); `status` always used the newest enum.
+- **Fix:** a validator on `AgentRunTrace` rejects `model_declined` on a v1 row. So "the reader accepts v1" now also means "a v1 row must look like v1".
+
+**Proof:**
+- Two new tests, and two updated ones.
+- In a scratch copy, four mutations each turned exactly the intended test red:
+  - the node's empty-context branch removed;
+  - the empty-context row rule removed;
+  - the v1-vocabulary rule removed;
+  - the guard's verdict set back to `False`.
+- All three trace files still validate.
 
 ### Limits
 

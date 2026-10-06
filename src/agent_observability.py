@@ -116,7 +116,7 @@ from agentic_retrieval import (
     TRIGGER_MISSING_CHUNK,
     TRIGGER_MISSING_DOC,
 )
-from generation import generate_structured_answer
+from generation import INSUFFICIENT_EVIDENCE_ANSWER, generate_structured_answer
 from generation_eval import context_doc_ids
 
 # ---------------------------------------------------------------------------
@@ -165,7 +165,7 @@ ReviewerDecision = Literal["approve", "edit", "reject"]
 STATUS_ANSWERED = "answered"  # the LLM answered from complete evidence
 STATUS_MODEL_DECLINED = "model_declined"  # complete evidence, but the LLM said it could not answer from it
 STATUS_GAP_REPORT = "gap_report"  # evidence still missing: the graph refused and named the gap
-STATUS_NOT_GENERATED = "not_generated"  # evidence complete, but no LLM client was wired in
+STATUS_NOT_GENERATED = "not_generated"  # evidence complete, but no LLM call was made (no client, or an empty context)
 ResultStatus = Literal["answered", "model_declined", "gap_report", "not_generated"]
 
 # New in Day 19: the state of the evidence in the FINAL context. It mirrors
@@ -187,14 +187,21 @@ EvidenceStatus = Literal["complete", "missing_docs", "missing_chunks"]
 #
 #   v1 (2026-10-05): first version.
 #   v2 (2026-10-05): added status "model_declined" (the Q092 fix).
+#   v3 (2026-10-06): "not_generated" now means "no LLM call was made": no
+#       client wired in, OR an empty context. v2 labeled an empty context
+#       "model_declined", although no model had been asked. No field or
+#       value was added; one value's meaning widened.
 #
 # Writers always write the CURRENT version. Readers accept every version
-# they understand. v2 only ADDED a value, so every v1 row is still a valid
-# v2 row, and the reader accepts both (`READABLE_SCHEMA_VERSIONS`). A
-# change that removed or renamed a field would instead need a migration
-# step, or a reader that rejects v1.
-TRACE_SCHEMA_VERSION = 2
-READABLE_SCHEMA_VERSIONS = Literal[1, 2]
+# they understand (`READABLE_SCHEMA_VERSIONS`), and check each row against
+# the vocabulary of the version it CLAIMS: a v1 row may not use
+# "model_declined", which v1 did not have (see `AgentRunTrace`). A meaning
+# change like v3's can't be checked row by row. A reader that cares reads
+# "not_generated" on a v1/v2 row as "no client". A change that removed or
+# renamed a field would instead need a migration step, or a reader that
+# rejects the old version.
+TRACE_SCHEMA_VERSION = 3
+READABLE_SCHEMA_VERSIONS = Literal[1, 2, 3]
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +403,10 @@ class AgentRunTrace(ContractModel):
         - The route must end on an end node (`generate` or `report_gap`). A run
           still paused at the approval point has no outcome yet, so it is not
           a finished trace row.
+        - An LLM-written result (one with a citation report) needs a
+          non-empty final context. Day 10's grounding rule never sends an
+          empty context to a model, so an "answer" or a "decline" on zero
+          sources cannot have come from one.
         """
         if self.result.run_id != self.run_id:
             raise ValueError(f"result.run_id {self.result.run_id} does not match the row's run_id {self.run_id}")
@@ -404,6 +415,25 @@ class AgentRunTrace(ContractModel):
                 f"route_history {self.route_history} does not end on 'generate' or 'report_gap': "
                 "a trace row must describe a finished run"
             )
+        if self.result.citations is not None and self.retrieval_passes[-1].context_size_after == 0:
+            raise ValueError(
+                f"status {self.result.status!r} says an LLM wrote the text, but the final context is empty: "
+                "no model is ever called on an empty context"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _must_use_only_its_own_versions_vocabulary(self):
+        """Check the row against the contract of the version it CLAIMS.
+
+        Accepting old versions is only half of schema evolution. The other
+        half: an old row must not use a value its version did not have yet.
+        `model_declined` was added in v2, so a v1 row carrying it was not
+        written by v1 code. It was edited by hand or mislabeled, and it is
+        rejected instead of being read as if it were fine.
+        """
+        if self.schema_version < 2 and self.result.status == STATUS_MODEL_DECLINED:
+            raise ValueError("status 'model_declined' was added in schema_version 2: a v1 row cannot carry it")
         return self
 
 
@@ -425,10 +455,15 @@ def build_result(final_state, run_id):
 
     - `status`, checked in this order:
       1. The last route was `report_gap`: the graph refused (`gap_report`).
-      2. There is no citation report: no LLM ran (`not_generated`). Both
-         generate nodes write `citations=None` exactly when no client was
-         wired in. That is an implicit convention, and this field replaces it
-         with an explicit one.
+      2. There is no citation report: no LLM call was made
+         (`not_generated`). `structured_generate_node` writes
+         `citations=None` exactly when it makes no call: no client wired in,
+         or an empty context. That is an implicit convention, and this field
+         replaces it with an explicit one. (Day 17's plain node writes
+         `None` only for "no client". With a client and an empty context it
+         returns a citation report for its fixed refusal, and
+         `AgentRunTrace` then rejects the row instead of letting it pass as
+         `answered`. Day 19 never runs that node with a client.)
       3. The model's structured verdict `answerable_from_sources` is
          `False`: it declined (`model_declined`). This is read from a FIELD
          the model filled in, never from the wording of its answer. The key
@@ -436,8 +471,8 @@ def build_result(final_state, run_id):
          there is no verdict, and the run counts as `answered`, as in v1.
       4. Otherwise: `answered`.
     - `evidence_status` and the missing ids: the FINAL diagnosis.
-    - `caveats`: the Day 18 reviewer decision and orphan citations, i.e.
-      facts a reader should know before trusting `text`.
+    - `caveats`: the Day 18 reviewer decision, orphan citations, and an
+      empty context, i.e. facts a reader should know before trusting `text`.
     """
     final_diagnosis = final_state["diagnoses"][-1]
     approval = final_state.get("approval")  # absent unless the run paused (see Day 18's `NotRequired`)
@@ -472,6 +507,10 @@ def build_result(final_state, run_id):
         )
     if citations is not None and citations["orphan_ids"]:
         caveats.append(f"the answer cites source id(s) {citations['orphan_ids']} that were not in the retrieved context")
+    if status == STATUS_NOT_GENERATED and not final_state["sources"]:
+        # Says WHO stopped the run: retrieval came back empty, not "no client
+        # configured" and not the model refusing.
+        caveats.append("no LLM was called because the retrieved context was empty")
 
     citation_check = None
     if citations is not None:
@@ -572,6 +611,10 @@ def structured_generate_node(state, client):
 
     With no client (tests, the default demo), it delegates to Day 17's own
     node, so the "not generated" behavior is exactly the same as before.
+
+    Rule: `answerable_from_sources` is written ONLY after a real model call.
+    Every path without a call writes `citations=None` and no verdict, so
+    `build_result` labels it `not_generated`, never `model_declined`.
     """
     if client is None:
         return generate_node(state, client=None)
@@ -580,6 +623,24 @@ def structured_generate_node(state, client):
     # complete evidence, so the only question is "after one pass or two?".
     passes = state["retrieval_passes"]
     stop_reason = STOP_NO_MISSING_EVIDENCE if passes == 1 else STOP_FIXED_AFTER_SECOND_PASS
+
+    if not state["sources"]:
+        # Day 10's grounding rule: an empty context is never sent to a model.
+        # The evidence can still count as "complete" here when the gold labels
+        # require no document at all. The live retriever always returns
+        # sources, so this needs a fake or broken retriever, but it must
+        # still be labeled honestly: no call was made, so there is no model
+        # verdict (a 2026-10-06 review found v2 calling this "model_declined").
+        return {
+            "answer": INSUFFICIENT_EVIDENCE_ANSWER,
+            "citations": None,  # "no LLM wrote this text" -> `not_generated`
+            "stop_reason": stop_reason,
+            "route_history": [ROUTE_GENERATE],
+            "trace": [
+                f"generate (structured): evidence complete after {passes} pass(es), "
+                "but the context is empty -> no LLM call"
+            ],
+        }
 
     result = generate_structured_answer(state["query"], state["sources"], client)
     citations = result["citations"]
@@ -752,7 +813,7 @@ def read_trace_rows(path):
 # ---------------------------------------------------------------------------
 
 DEMO_QUERY_IDS = ["Q001", "Q091", "Q092", "Q014"]
-DEFAULT_TRACE_PATH = Path("docs/traces/day19-agent-traces.jsonl")
+DEFAULT_TRACE_PATH = Path("docs/traces/day19-agent-traces-V3.jsonl")
 
 
 def current_code_version():
