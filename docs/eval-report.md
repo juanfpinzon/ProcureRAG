@@ -4212,6 +4212,256 @@ An external review of the uncommitted Day 19 code found two problems. Both repro
   - no `error` status (a crash raises; it is not a row).
 - **Two runtime gotchas:** LangSmith caches environment lookups, so `.env` must be loaded before the first tracing check. And uploads happen on a background thread, so `main()` calls `wait_for_all_tracers()` before exiting.
 
+## Day 20: Guardrails and Week 4 gate review
+
+Linear: HER-287 (Day 20) and HER-269 (Week 4 gate). Route doc: `docs/day-20-guardrails-week4-gate-review.md` (Block 3A, the "Hybrid" route).
+
+Day 19 left the agent schema-checked and traceable, but nothing in the request path could stop a bad input or a bad output while a request was being served. Day 19's own "Limits" named three output gaps:
+- no caveat for an `answered` reply that cites nothing;
+- no flag for an answer that ignores the evidence the recursive pass recovered;
+- no check that a cited source applies to the question.
+
+`src/agent_guardrails.py` adds one guard per layer of the request path around the Day 19 graph. Each guard checks one thing, then **blocks**, **redacts**, **flags**, or **routes to a human**. No Day 16–19 file changed:
+- the input guard runs before `graph.invoke`;
+- the retrieved-context guard wraps the injected `retrieve_fn`;
+- the action guard reports Day 18's approval decision;
+- the output guard reads the finished `AgentRunTrace`.
+
+On the real corpus, no input, context, or output guard fires, and the route distribution is still 76 / 2 / 15.
+
+Implementation note: at Juan's explicit request (2026-10-06), Claude Code wrote `src/agent_guardrails.py` and `tests/test_agent_guardrails.py`, for Juan to read, review, and run line by line. This is a one-day exception to the project rule that Juan writes `src/` and `tests/` code.
+
+```bash
+./.venv/bin/pytest -q tests/test_agent_guardrails.py   # 27 tests, fakes only, no credentials
+
+# Scripted scenarios, one per guard behavior (no models, no network, about 1 s)
+./.venv/bin/python src/agent_guardrails.py
+
+# The 93 labeled queries through the guarded pipeline (live local retrieval, no LLM, about 20 s)
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_guardrails.py --all-queries
+
+# The action and output guards over Day 19's committed trace rows (real LLM answers, no new LLM call)
+./.venv/bin/python src/agent_guardrails.py --replay-traces docs/traces/day19-structured-generate.jsonl \
+    docs/traces/day19-agent-traces.jsonl docs/traces/day19-agent-traces-V3.jsonl docs/traces/day19-langsmith-q091-q014.jsonl
+```
+
+None of the three modes loads `.env`, so none of them calls OpenRouter. The `LANGSMITH_*=false` prefix only matters if a shell exports the tracing variables itself.
+
+### Decision: a hybrid guardrail layer
+
+The route doc's Block 0 answer was "Hybrid". Here, that means a library's detectors where one fits, and local rules where none does:
+
+| Part | Source | Why |
+|---|---|---|
+| Email and credit-card detection | LangChain 1.4's `PIIMiddleware` detectors (`detect_email`, `detect_credit_card`), public in `langchain.agents.middleware.pii` | Already installed. The card detector runs the Luhn checksum, so a 16-digit reference number is not taken for a card. The middleware itself only attaches to a `create_agent` loop, which this graph is not (Day 18's decision), so the detectors are called directly |
+| Phone detection | Local regex, international `+` format only | LangChain has no phone detector. The same pattern without the `+` matched 134 strings in 78 of the 570 corpus chunks, 127 of them plain ISO dates (`2027-01-01`) |
+| Prompt-injection detection | Local regexes, one per attack family, matching phrases | Legitimate policy sentences contain "instruction", "reveal", and "email … credentials", so single-word rules would block real traffic |
+| Output contract checks | Local, over Day 19's `AgentRunTrace` fields | They read `status`, `citations`, `retrieval_passes`, and `diagnoses`. No library knows this contract |
+| Human approval | Day 18's `interrupt()` | Already built and tested. Day 20 reports the decision and locks the wiring with a test |
+
+**Not used: Guardrails AI and Presidio**, the course's tools. Guardrails AI's hub validators are installed over the network with a hub token, and Presidio needs spaCy plus a language-model download. Neither runs in CI without credentials or downloads, and none of today's checks needed them. This was a scope decision, not a failed attempt: neither was installed.
+
+The course concepts map directly onto the module:
+- a Guardrails AI `Validator` is one of the `find_*` detectors;
+- a `Guard` is `GuardedPipeline`;
+- its on-fail actions map roughly onto ours: `exception`/`refrain` → block, `fix` → redact, `filter` → withhold one chunk, `noop` → flag.
+
+### Guardrail contract
+
+| Risk (OWASP 2025) | Layer | Check | Action | What happens | Test |
+|---|---|---|---|---|---|
+| Prompt injection, direct (LLM01) | input | an instruction-override phrase in the buyer's query | **block** | No retrieval, no LLM call, no trace row. The user gets a fixed block message | `test_injection_in_the_buyers_query_is_blocked_before_retrieval_or_the_llm` |
+| Prompt injection, indirect (LLM01; a poisoned document is also LLM08) | retrieved context | an instruction-override phrase in a retrieved chunk | **block** that chunk | The chunk is withheld from the prompt and the rest are renumbered 1..n. `diagnose` sees the cleaned context | `test_injection_in_a_retrieved_chunk_is_withheld_from_the_prompt`, `test_withholding_the_only_copy_of_required_evidence_ends_in_a_gap_report_not_an_answer` |
+| Sensitive data in the input (LLM02) | input | an email, phone, or card number in the query | **redact** | `[REDACTED_EMAIL]` etc., before retrieval, the LLM, and the trace row see it | `test_pii_in_the_buyers_query_is_redacted_before_retrieval_the_llm_and_the_trace` |
+| Excessive agency (LLM06) | action | the follow-up retrieval pass | **route_to_hitl** | Day 18's pause: approve / edit / reject. A reject ends in `gap_report` with no second pass | `test_followup_retrieval_goes_to_a_human_and_a_rejection_means_it_never_runs`, `test_the_only_way_into_the_followup_retrieval_is_through_the_human_approval_node`, plus Day 18's 12 tests |
+| Improper output handling (LLM05) | output | `answered` with no valid citation (nothing cited, or only orphans) | **block** | The user gets the withheld message. The trace row keeps the original answer | `test_answer_that_cites_no_retrieved_source_is_withheld` |
+| Misinformation risk (LLM09, partly) | output | `answered` after a recursive pass, citing none of the chunks that closed the gap | **flag** | The answer is shown, with a finding for a reviewer | `test_answer_that_ignores_the_evidence_the_followup_pass_recovered_is_flagged` |
+| Sensitive data in the output (LLM02) | output | an email, phone, or card number in the text | **redact** | The user sees the redacted `text`. The trace row keeps the original | `test_pii_in_the_answer_is_redacted_before_the_user_sees_it` |
+| Over-blocking (false positives) | all | every detector, over all corpus chunks, the 93 queries, and the 93 reference answers | must not fire | n/a | `test_guards_do_not_fire_on_the_real_corpus_queries_or_reference_answers` |
+| Wrong-scope or misread source (LLM09) | output / eval | Band 4 instead of Band 3; the Cobalt contract applied to a cleaning contractor | **not detected** | Needs an eval against `expected_answer`, an NLI check, or source-scope metadata | none (see Limits) |
+
+The pipeline returns a `GuardedResponse`:
+- `text`: the only field that is safe to show a user;
+- `findings`: one `GuardFinding` (`guard`, `layer`, `action`, `detail`) per guard that fired, every value `Literal`-checked like Day 19's vocabularies. A PII finding's `detail` names the type and count, never the value;
+- `trace`: the Day 19 row, or `None` when the input guard blocked before the graph ran;
+- `blocked`: a computed property, true only for an input or output block, so it cannot disagree with `findings`.
+
+Two design points:
+- **Guards compose with the graph's own rules.** The context guard runs before `diagnose`. If a withheld chunk was the only copy of required evidence, the graph's existing "never answer on missing evidence" rule turns the run into a `gap_report`. The guard needs no logic of its own for that.
+- **"Closed the gap", not "added by pass 2".** The flag looks for the chunks that close the first diagnosis's gap: a chunk id it listed as missing, or any chunk of a document it listed as missing. A simpler rule, "cites anything pass 2 added", would miss Day 19's real Q092 failure. That answer cited `[16]`, a POL-006 chunk that pass 2 did add, and none of the recovered POL-002 / CONTRACT-005 chunks.
+
+### Evidence: scripted scenarios (2026-10-06)
+
+`./.venv/bin/python src/agent_guardrails.py`, 1.3 s. Every scenario runs through the real Day 19 graph. Only the retriever and the LLM are scripted stand-ins, because the real corpus contains no attacks to show.
+
+| # | scenario | guards fired (layer: action) | graph status | user gets the agent's text? |
+|---|---|---|---|---|
+| 1 | allowed: clean question, cited answer | none | answered | yes |
+| 2 | prompt injection in the buyer's query | input: block | (never ran) | no, blocked |
+| 3 | PII in the buyer's query | input: redact | answered | yes |
+| 4 | indirect injection in a retrieved chunk | retrieved_context: block | answered | yes |
+| 5 | schema-valid answer that cites no source | output: block | answered | no, blocked |
+| 6 | PII in the answer | output: redact | answered | yes |
+| 7 | follow-up approved, but the answer ignores what it recovered | action: route_to_hitl, output: flag | answered | yes |
+| 8 | follow-up rejected by the reviewer | action: route_to_hitl | gap_report | yes |
+
+Detail lines from the same run:
+- [2] `[input] prompt_injection -> BLOCK: override_instructions: 'Ignore all previous instructions'; reveal_system_prompt: 'reveal your system prompt'`. The graph never ran.
+- [3] The graph ran on `"I'm [REDACTED_EMAIL], [REDACTED_PHONE]. What approval does a EUR 120,000 software renewal need?"`. The euro amount survives.
+- [4] `withheld chunk NOTE-099::chunk-1 from the prompt`. The answer cites the clean chunk, renumbered to `[1]`.
+- [7] `the follow-up pass recovered the missing evidence as source(s) [2], but the answer cites only [1]`.
+- [8] The user sees the gap report: `"... A reviewer rejected the follow-up retrieval pass (the band table is enough)."`
+
+### Evidence: the real corpus (no false positives, unchanged routes)
+
+- **Every detector over everything real** (`test_guards_do_not_fire_on_the_real_corpus_queries_or_reference_answers`): 0 hits in 570 corpus chunks, 93 queries, and 93 reference answers.
+- **The 93 labeled queries through the guarded pipeline** (`--all-queries`, live local retrieval, no LLM, 19.6 s):
+
+```text
+Guarded run over 93 labeled queries (live local retrieval, no LLM, follow-ups approved):
+  [action] excessive_agency -> route_to_hitl: 2 ['Q091', 'Q092']
+  responses blocked: 0
+
+| route | queries | query_ids |
+| generate | 76 | Q001, Q002, ... Q093 |
+| report_gap | 15 | Q012, Q014, Q015, Q023, Q032, Q039, Q045, Q057, Q061, Q067, Q073, Q075, Q082, Q086, Q090 |
+| recursive_retrieve -> generate | 2 | Q091, Q092 |
+```
+
+That is the same 76 / 15 / 2 as Day 17's `--all-queries-summary`, with the same 15 `report_gap` ids as Day 18's list. Only the action guard fired, on exactly the two queries that pause for approval.
+
+### Evidence: replaying Day 19's live-LLM answers
+
+The output guard only reads fields a trace row stores, so it can run over Day 19's committed rows: real `openai/gpt-4o` answers, with no new LLM call (`--replay-traces`). The input and context guards cannot be replayed, because they run before the graph.
+
+| Trace file | Q001 | Q091 | Q092 | Q014 |
+|---|---|---|---|---|
+| `day19-structured-generate.jsonl` (structured run 1, v2) | none | route_to_hitl | route_to_hitl + **flag**: recovered `[11, 13, 19]`, the answer cites only `[3, 16]` | none (`gap_report`) |
+| `day19-agent-traces.jsonl` (structured run 2, Juan, v2) | none | route_to_hitl | route_to_hitl | none (`gap_report`) |
+| `day19-agent-traces-V3.jsonl` (a third structured run: v3, written 2026-10-06 16:00 UTC by `cc97ea0-dirty`, not described in the Day 19 section above) | none | route_to_hitl | route_to_hitl + **flag**: recovered `[11, 13, 19]`, the answer cites only `[3, 16]` | none (`gap_report`) |
+
+The fourth file, `day19-langsmith-q091-q014.jsonl` (no LLM), gives route_to_hitl on Q091 and nothing on Q014.
+
+- The flag reproduces in code the failure the Day 19 section found by hand ("none of the recovered POL-002 / CONTRACT-005 chunks ([11], [13], [19]) cited"). It shows up in 2 of the 3 live structured runs.
+- None of the 14 replayed rows is an uncited `answered` or contains PII.
+- **What the guards miss, on the same rows:**
+  - run 1's Q091 (Band 4 instead of Band 3) cites the recovered Band 3 chunk `[11]` and misreads it;
+  - run 2's Q092 cites the right recovered chunks, plus `[7]`, the wrong supplier's contract (Cobalt).
+
+  Both pass every guard. Catching them takes an eval or an entailment check, not a guardrail on citations.
+
+### What the tests prove (mutation check)
+
+`tests/test_agent_guardrails.py` has 27 tests. In a scratch copy, ten mutations each broke one rule, and each turned the intended test(s) red:
+
+| Mutation | Tests turned red |
+|---|---|
+| The input guard never blocks injection | the query-injection test |
+| The context guard keeps poisoned chunks | both context-injection tests |
+| The context guard stops renumbering | the context-injection test (`[1] POL-001` in the prompt) |
+| Input PII is not redacted | the input-PII test |
+| Output PII is not redacted | the output-PII test |
+| An uncited answer is not blocked | the uncited-answer test |
+| The gap check counts ANY pass-2 chunk | only the Q092-shaped case of the recovered-evidence test |
+| The phone regex without the `+` | the real-corpus test, plus 3 PII tests (dates and amounts get redacted) |
+| A single-word injection rule (`instruction`, `reveal`) | the real-corpus test, plus all 3 real-policy-sentence tests |
+| HITL bypass (Day 18's path map sends the router's `recursive_retrieve` label straight to that node) | the wiring test, the reject test, and all 3 recovered-evidence cases |
+
+Two tests only became meaningful during this check:
+- The fake sources first all carried `source_id: 1`, so the renumbering assertion still passed with renumbering deleted. The fake retriever now numbers sources 1..n, as `build_sources` does.
+- The "any pass-2 chunk" mutation survived until the Q092-shaped case was added.
+
+### OWASP Top 10 for LLM Apps (2025): ProcureRAG mapping
+
+| Risk | ProcureRAG exposure | Control today | Gap / next step |
+|---|---|---|---|
+| LLM01 Prompt Injection | Buyer queries; retrieved chunks (future PDFs, emails, supplier notes) | The input guard blocks known phrasings; the context guard withholds poisoned chunks; the model has no tools; answers must cite | A deny-list only: paraphrases, other languages, and encodings get through. A trained injection classifier would be the next layer |
+| LLM02 Sensitive Information Disclosure | PII in queries and answers; 10 of the 34 documents are labeled `Confidential`; API keys | PII redaction on the way in and out (email, phone, card); keys only in the gitignored `.env`; findings never log values | No names, addresses, or IBANs. Trace rows keep raw model text. **Retrieval ignores the `confidentiality` label**, so anyone can retrieve chunks of confidential contracts |
+| LLM05 Improper Output Handling | Answers consumed by downstream code or a UI | Day 19's schema validation (`AgentResult`); an uncited `answered` is withheld; `text` is the one field to show | No HTML, SQL, or shell sink exists yet. Week 5's FastAPI surface must treat `text` as untrusted and escape it when rendering |
+| LLM06 Excessive Agency | One action: the follow-up retrieval pass | `interrupt()` approval (approve / edit / reject); `MAX_RETRIEVAL_PASSES = 2`; `GRAPH_RECURSION_LIMIT = 10`; no tool that writes, sends, or buys; the wiring test | The approval comes from a CLI flag, not a review queue, and `InMemorySaver` is not durable |
+| LLM07 System Prompt Leakage | `generation.PROMPT_INSTRUCTIONS` | The prompt holds no secrets and no access rules, so leaking it exposes nothing. "Reveal your system prompt" is blocked at the input | Keep it that way: no security control may depend on the prompt staying secret |
+| LLM08 Vector and Embedding Weaknesses | Indexes built over the whole corpus | The context guard catches poisoned chunks with known phrasings; the corpus is curated and versioned in git | No permission-aware retrieval (`confidentiality` is unused); no provenance check on ingested documents |
+| LLM09 Misinformation | Day 19: Band 4 instead of Band 3; the Cobalt contract applied to a cleaning contractor | Uncited answers withheld; the ignored-evidence flag; `gap_report` instead of answering on missing evidence | Misread or wrong-scope sources pass every guard. Needs the graph path in `regression_suite.py --live` (an eval against `expected_answer`), an NLI check, or source-scope metadata |
+| LLM10 Unbounded Consumption | The retrieval loop; LLM calls (paid `openai/gpt-4o`) | Pass budget 2, recursion limit 10, `MAX_ANSWER_TOKENS = 3000`, 60 s client timeout; `--all-queries-summary` refuses `--generate` | No input-length cap, rate limit, or per-user quota. Needed once Week 5 exposes an API |
+
+### Week 4 gate inventory (HER-269)
+
+The study plan says HER-269 passes only when:
+- LangGraph / LangChain 1.x `create_agent` patterns are understood and represented in the repo;
+- tool use, state, memory/HITL, or routing is implemented or clearly scoped;
+- observability/tracing evidence exists;
+- prompt-injection, PII, and structured-output guardrails are tested or documented.
+
+| Week 4 requirement | Artifact | Evidence | Status | Caveat |
+|---|---|---|---|---|
+| Recursive retrieval / agentic search (Day 16) | `src/agentic_retrieval.py` | 12 tests. One follow-up pass fixes Q091's chunk gap and Q092's doc gap (live run, "Day 16" above) | Done | The trigger reads gold labels, so it is eval-time only. Follow-up queries come from a hand-written table |
+| LangGraph state / routing (Day 17) | `src/agent_graph.py` | 14 tests. Route distribution over the 93 queries: 76 / 2 / 15, re-measured today through the guarded pipeline | Done | The router is deterministic code, not a model choosing tools |
+| Checkpointing / HITL / time travel (Day 18) | `src/agent_control_plane.py` | 12 tests. Approval before the only agent action; reject → `gap_report`; replay without re-running pass 1 | Done | `InMemorySaver` only; the reviewer's decision comes from a CLI flag |
+| `create_agent` patterns | Day 18's "Current-API decision: low-level `StateGraph` vs `create_agent`"; the `HumanInTheLoopMiddleware` decision vocabulary; today's reuse of `PIIMiddleware`'s detectors | Docs and design | Documented, not built | No `create_agent` code: there is no tool-calling model loop to wrap. Juan explains the trade-off in the review |
+| Observability / tracing (Day 19) | `src/agent_observability.py` | 23 tests. JSONL trace rows; LangSmith root runs linked to the local rows | Done | No local latency or cost fields; no LLM span |
+| Structured output (Day 19) | `AgentResult`, `AgentRunTrace` (v3), `generation.GeneratedAnswer` | A strict provider `json_schema` plus Pydantic re-validation; `model_declined` kept apart from `gap_report` | Done | It guarantees shape, not truth (Band 4, Cobalt) |
+| Guardrails (Day 20) | `src/agent_guardrails.py` | 27 tests; 10 of 10 mutations caught; 0 false positives on the real corpus; routes unchanged; the flag reproduces Day 19's Q092 failure on real LLM rows | Done (a baseline) | Regex and deny-list baseline; no NLI; confidentiality not enforced |
+| Gates | `pytest`, `compileall`, `ruff`, `regression_suite.py --verify-retrieval` | 302 passed; clean; clean; every case as expected | Green | `generation.main()` and `regression_suite.py` are still single-pass, not graph-aware |
+
+Unresolved caveats carried into Week 5:
+1. Answer quality under the graph path is unmeasured: `regression_suite.py --live` is still single-pass. Every live `answered` row in Day 19 was incomplete against `expected_answer`, and two were wrong.
+2. The trigger and `evidence_status` read gold labels, so the agentic path only runs on the 93 labeled queries.
+3. The 15 `report_gap` queries still have no policy beyond "refuse and report". Day 18's options (b) and (c) are open.
+4. Retrieval ignores `confidentiality`, and trace rows store raw model text.
+5. There is no `create_agent` code; the decision not to use it is documented.
+
+### Gate verdict
+
+**Ready for the HER-269 review, with the caveats above in plain view.** Every requirement in the study-plan gate has an artifact and evidence. The prompt-injection, PII, and structured-output guardrails are tested (27 tests, each one mutation-checked) and measured on real data.
+
+Two things are not code, and stay with the review:
+- Juan explains, without notes, `create_agent` vs graph/state patterns, offline vs online eval, and excessive-agency risk (the route doc's interview drill);
+- Hermes re-runs the gates independently.
+
+This write-up does not close HER-287 or HER-269.
+
+### Limits
+
+- **Regex detection is a baseline, not data-loss prevention.** It misses names, addresses, IBANs, national phone formats without a `+`, and personal data written out in words.
+- **Injection detection is a deny-list.** Paraphrases, other languages, and encoded payloads get through. The structural controls carry more of the safety than the phrase list: no tools, human-approved retrieval, and answers that must cite.
+- **No NLI / entailment check, no topic guard, and no supplier-scope guard.** These cover the course's hallucination, "on topic", and "competitor mentions" lessons. The graph only runs on the 93 labeled queries (gold-label diagnosis), so an off-topic guard has nowhere to sit yet. It belongs at Week 5's API entry point.
+- **Guard findings are not in the trace row.** `AgentRunTrace` is unchanged, and the findings live on `GuardedResponse`. Writing them to the JSONL would need a `schema_version` bump.
+- **The trace row keeps the unredacted model text.** Traces (local and LangSmith) are therefore sensitive data stores.
+- **One run at a time** per `GuardedPipeline`: the context findings are per-instance state.
+- **The attack evidence is synthetic, by necessity.** The real-data evidence covers false positives, unchanged routes, and Day 19's replayed answers.
+
+### Verification (2026-10-06, after the build)
+
+```bash
+./.venv/bin/pytest -q
+# 302 passed in 1.91s   (275 baseline + 27 in tests/test_agent_guardrails.py)
+
+./.venv/bin/pytest -q tests/test_agent_guardrails.py
+# 27 passed in 0.47s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
+# (Q091's frozen single-pass lane still prints: term-level gap OPEN: missing ['Band 3'])
+
+./.venv/bin/python src/agent_guardrails.py
+# 8 scenarios (table above); 1.3 s
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_guardrails.py --all-queries
+# only [action] excessive_agency -> route_to_hitl: 2 ['Q091', 'Q092']; responses blocked: 0
+# generate 76 | report_gap 15 | recursive_retrieve -> generate 2 (Q091, Q092); 19.6 s
+
+./.venv/bin/python src/agent_guardrails.py --replay-traces docs/traces/day19-*.jsonl
+# Q092 flagged (ignored recovered evidence [11, 13, 19]) in structured run 1 and in the V3 run;
+# Q091/Q092 route_to_hitl everywhere; nothing else fired
+```
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

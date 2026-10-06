@@ -27,7 +27,7 @@ Primary source:
   - `Conclusion`.
   - `Quiz` / self-check if available.
 
-  Short Course Completed on 06-10-26
+  Short Course Completed on 06-10-26 (including Quiz and Certification)
 
 Security companion:
 
@@ -211,7 +211,7 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
 
 Then decide the minimum artifact shape:
 
-1. Is today’s guardrail implementation local validators only, GuardrailsAI/Presidio, or a hybrid?
+1. Is today’s guardrail implementation local validators only, GuardrailsAI/Presidio, or a hybrid? - Hybrid.
 2. Which layer owns each check: input, retrieved context, action/HITL, output, or schema?
 3. Which examples will be the evidence anchors?
    - prompt injection: malicious user prompt or malicious retrieved-context snippet;
