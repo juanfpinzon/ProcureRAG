@@ -4150,6 +4150,12 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
   - OpenAI Structured Outputs guide.
   - Pydantic model docs (`BaseModel`, validation, serialization, JSON Schema).
 
+  All primary docs/courses done. 
+  LangGraph/Langsmith companion docs:
+    - Module 1 - Completed
+    - Module 6 - Completed.
+  Structured-output companion docs: done.
+
 Verified on the installed versions while building (langsmith 0.12.5, langgraph 1.2.11, langchain-core 1.6.3, pydantic 2.12.5, openai 3.13.0):
 
 - **`run_id` → root run id.** A `run_id` in a LangGraph invoke config becomes the id of the root run, which is the LangSmith trace id. LangGraph also adds `thread_id` to that run's metadata. Checked in memory with `langchain_core.tracers.context.collect_runs()`.
