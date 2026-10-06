@@ -4150,11 +4150,11 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
   - OpenAI Structured Outputs guide.
   - Pydantic model docs (`BaseModel`, validation, serialization, JSON Schema).
 
-  All primary docs/courses done. 
-  LangGraph/Langsmith companion docs:
-    - Module 1 - Completed
-    - Module 6 - Completed.
-  Structured-output companion docs: done.
+Completion status:
+
+- Hugging Face Agents Course — **Bonus Unit 2: Agent Observability and Evaluation**: all primary Day 19 pages completed (`Introduction`, `What is agent observability and evaluation?`, `Monitoring and evaluating agents` / notebook, and `Quiz: Evaluating AI Agents`).
+- LangGraph/LangSmith companion: LangChain Academy **Foundation: Introduction to LangGraph - Python** Module 1 `Lesson 3: LangSmith Studio` completed; Module 6 deployment preview/reference completed for `Deployment Concepts`, `Creating a Deployment`, `Connecting to a Deployment`, `Double Texting`, and `Assistants`; LangGraph deployment docs, LangSmith double-texting docs, and LangSmith tracing docs completed.
+- Structured-output companion: LangChain structured-output docs, `create_agent.response_format` reference, OpenAI Structured Outputs guide, and Pydantic model docs (`BaseModel`, validation, serialization, JSON Schema) completed.
 
 Verified on the installed versions while building (langsmith 0.12.5, langgraph 1.2.11, langchain-core 1.6.3, pydantic 2.12.5, openai 3.13.0):
 
@@ -4571,7 +4571,7 @@ Partial gaps might suit a caveated answer; total misses need retrieval fixes. Wi
    - the Day 19 parts of `src/generation.py` and `tests/test_generation.py`;
    - the two small hooks in `src/agent_control_plane.py`.
 
-   Then fill in the course-completion TODOs and answer the drill without notes.
+   Course/source completion is now recorded above; answer the drill without notes before the HER-286 closure review.
 2. **Measure answer quality, not just shape (paid):**
    - Repeat `--generate` 3–5 times per mode (plain vs structured) on Q091/Q092, writing to separate `--output` files.
    - Score each answer against `expected_answer`. Start with the "Band 3" term check from the regression suite.
