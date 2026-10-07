@@ -20,7 +20,9 @@ after a model/agent step and then does one of four things:
 - **block**: stop it. Nothing downstream sees it.
 - **redact**: remove the sensitive part, and let the rest through.
 - **flag**: let it through, but record the problem where a reviewer sees it.
-- **route_to_hitl**: hand the decision to a human before the action runs.
+- **route_to_hitl**: stop the action at an approval gate until an explicit
+  decision arrives. In production a person sends it; in this repo's demos
+  and tests it is scripted, and labeled as such (see `AUTO_APPROVE_FOR_DEMO`).
 
 **The guards, in request order.** Each check is labeled with the OWASP Top 10
 for LLM Apps (2025) entry it addresses:
@@ -64,7 +66,7 @@ needs them. The course concepts map directly onto this module:
 - a `Guard` is `GuardedPipeline`;
 - its on-fail actions map roughly onto ours: `exception`/`refrain` -> block,
   `fix` -> redact, `filter` -> withholding one chunk, `noop` -> flag.
-  Human approval has no built-in equivalent; here it is Day 18's `interrupt()`.
+  An approval gate has no built-in equivalent; here it is Day 18's `interrupt()`.
 
 **Wired in without changing Day 16-19 code.** Day 17 made retrieval and the
 LLM injected boundaries (`retrieve_fn`, `client`) so that tests could swap in
@@ -74,7 +76,9 @@ fakes. The same seam lets the guards sit in the request path:
 - the retrieved-context guard WRAPS `retrieve_fn`. It runs on every retrieval
   pass, so `diagnose` only ever sees the cleaned context;
 - the action guard is Day 18's approval node, already in the graph. This
-  module only reports what the reviewer decided;
+  module reports the decision the gate received, and `GuardedPipeline.run`
+  refuses to start a query that may pause unless the caller passes a
+  decision explicitly (no silent "approve" default);
 - the output guard runs AFTER the graph, on the validated `AgentRunTrace`.
 
 When nothing fires, every guard passes its input through unchanged. So on the
@@ -89,8 +93,14 @@ clean corpus, the route distribution stays 76 / 2 / 15 (`--all-queries`).
   another language, or an encoded payload gets past it. The STRUCTURAL
   controls matter more:
   - the model has no tools to hijack;
-  - the agent's only action (a second retrieval pass) needs human approval;
+  - the agent's only action (a second retrieval pass) cannot run without an
+    explicit approval decision;
   - an answer must cite retrieved sources.
+- The approval record says WHAT was decided, not WHO decided it. So far every
+  decision came from a CLI flag, a test, or `AUTO_APPROVE_FOR_DEMO`, chosen
+  before the approval request was seen. No person has yet reviewed a live
+  request. A production version needs a review queue, and the reviewer's
+  identity in the approval record (a Day 19 schema change).
 - There is no NLI / entailment check. The citation check proves that a cited
   source EXISTS, not that it SUPPORTS the claim. Day 19's wrong-band answer
   (Band 4 instead of Band 3) and its wrong-supplier answer (the Cobalt
@@ -111,8 +121,8 @@ from typing import Literal
 
 from langchain.agents.middleware.pii import detect_credit_card, detect_email
 
-from agent_control_plane import DECISION_EDIT, DECISION_REJECT
-from agent_graph import route_distribution
+from agent_control_plane import DECISION_APPROVE, DECISION_EDIT, DECISION_REJECT
+from agent_graph import make_initial_state, route_distribution
 from agent_observability import (
     STATUS_ANSWERED,
     AgentRunTrace,
@@ -385,13 +395,13 @@ def guard_retrieved_sources(sources):
 
 
 def guard_agent_actions(trace):
-    """Action guard (excessive agency, OWASP LLM06): report the Day 18 approval decision.
+    """Action guard (excessive agency, OWASP LLM06): report the decision Day 18's approval gate received.
 
     The agent can take exactly ONE action on its own initiative: a second
     retrieval pass. Day 18 already bounds it:
 
     - the only edge into `recursive_retrieve` comes from `approve_followup`,
-      which pauses the run with `interrupt()` until a reviewer decides;
+      which pauses the run with `interrupt()` until a decision arrives;
     - the router's pass budget (`MAX_RETRIEVAL_PASSES = 2`) allows the action
       at most once per run;
     - a rejection ends in `report_gap`, never in a hidden retry.
@@ -400,28 +410,52 @@ def guard_agent_actions(trace):
     worst a hijacked run could do is retrieve something and say something
     wrong.
 
-    So this guard enforces nothing new. It adds the human's decision to the
-    same report as the other guards, so a reviewer can see that a person,
-    not the model, approved the extra action. The wiring itself is checked
-    by `tests/test_agent_guardrails.py`.
+    So this guard enforces nothing new in the graph. It adds the gate's
+    decision to the same report as the other guards. The wiring itself is
+    checked by `tests/test_agent_guardrails.py`.
+
+    What this guard CANNOT know is WHO decided. The trace row records the
+    decision and its optional message, not the identity of whoever sent them.
+    So the finding repeats exactly those two facts, and never claims "a
+    reviewer approved it":
+
+    - the demo and CI modes pass `AUTO_APPROVE_FOR_DEMO`, whose message is
+      stored in the row, so their findings say "auto-approved for demo/CI
+      evidence";
+    - Day 19's committed rows were approved by its CLI flag
+      (`--decision approve`, the default) with no message, so their findings
+      say the row does not record who decided.
+
+    Making sure a decision exists at all is `GuardedPipeline.run`'s job.
     """
     if trace.approval is None:
         return []  # the run never proposed the follow-up action
 
     approval = trace.approval
     if approval.decision == DECISION_REJECT:
-        outcome = f"the reviewer rejected it ({approval.message or 'no reason given'}), so it never ran"
+        outcome = "rejected, so it never ran"
     elif approval.decision == DECISION_EDIT:
-        outcome = f"the reviewer edited it to {approval.approved_followup_query!r} before it ran"
+        outcome = f"edited to {approval.approved_followup_query!r} before it ran"
     else:
-        outcome = "the reviewer approved it before it ran"
+        outcome = "approved before it ran"
+
+    # Repeat the recorded message word for word: this guard reports the
+    # record, it does not interpret it. With no message, say so plainly
+    # instead of guessing who decided.
+    if approval.message:
+        recorded = f"message: {approval.message!r}"
+    else:
+        recorded = "no message recorded, so the row does not say who decided"
 
     return [
         GuardFinding(
             guard="excessive_agency",
             layer="action",
             action="route_to_hitl",
-            detail=f"follow-up retrieval {approval.proposed_followup_query!r} paused for human approval; {outcome}",
+            detail=(
+                f"follow-up retrieval {approval.proposed_followup_query!r} paused at the approval gate "
+                f"and was {outcome}; {recorded}"
+            ),
         )
     ]
 
@@ -531,6 +565,31 @@ def guard_result(trace):
 # The pipeline: the Day 19 graph with every guard in the request path.
 # ---------------------------------------------------------------------------
 
+# The ONLY way this module approves a follow-up pass with no person involved:
+# the caller has to pass this decision explicitly. Day 18 stores a decision's
+# `message` in the approval record, so this message ends up in the trace row
+# (`approval.message`). The saved row itself then says no human reviewed the
+# action, and the action guard's finding repeats it.
+AUTO_APPROVE_FOR_DEMO = {
+    "type": DECISION_APPROVE,
+    "message": "auto-approved for demo/CI evidence: no human reviewed this follow-up",
+}
+
+
+def may_pause_for_approval(query_row, case_overrides=None):
+    """True if this query has a follow-up retrieval pass it could ask approval for.
+
+    Day 17's router proposes the follow-up pass only when the query has a
+    `followup_query` (`route_after_diagnosis`). So a query without one can
+    never pause. A query with one pauses only if pass 1 leaves an evidence
+    gap, and that is only known after retrieval. So this answers "MAY it
+    pause?", not "WILL it?", and errs on the safe side.
+
+    `make_initial_state` is the same function the graph starts from, so this
+    reads the follow-up query exactly as the router will see it.
+    """
+    return make_initial_state(query_row, case_overrides)["followup_query"] is not None
+
 
 class GuardedPipeline:
     """The Day 19 graph, with a guard at every layer of the request path.
@@ -562,9 +621,37 @@ class GuardedPipeline:
     def run(self, query_row, decision=None, *, case_overrides=None):
         """Run one labeled query through every guard and the graph, and return a `GuardedResponse`.
 
-        `decision` is the reviewer's answer if the run pauses for approval
-        (default: approve), exactly as in `agent_observability.run_and_trace`.
+        `decision` answers Day 18's approval request if the run pauses before
+        the follow-up retrieval pass. It can be:
+
+        - a decision from a reviewer, e.g. `{"type": "approve"}`, or
+          `{"type": "reject", "message": "out of scope"}`;
+        - `AUTO_APPROVE_FOR_DEMO`: an explicit, labeled stand-in for demos and
+          CI;
+        - None (the default): no decision is available.
+
+        With None, a query that may pause is REFUSED with a `ValueError`
+        before anything runs. This wrapper never approves on anyone's behalf.
+
+        Why the check is needed: Day 19's `run_and_trace` turns a missing
+        decision into "approve". That is convenient for its tests and CLI, but
+        inside a guardrail layer it would quietly turn the human-approval gate
+        into an automatic one. So `run` checks first, and only passes None on
+        for a query that can never pause, where the decision is never used.
+
+        A real service would return "pending approval" at this point, and
+        resume later from the checkpointer (Day 18). This wrapper has no
+        review queue, so it refuses instead.
         """
+        # 0. The caller's side of the approval contract, checked before any
+        #    retrieval (fail closed).
+        if decision is None and may_pause_for_approval(query_row, case_overrides):
+            raise ValueError(
+                f"{query_row['query_id']} may pause for approval of a follow-up retrieval pass, but no approval "
+                "decision was given. Pass a reviewer's decision, or AUTO_APPROVE_FOR_DEMO to approve explicitly "
+                "without a human."
+            )
+
         # 1. Input guard. A blocked query never reaches the graph: no
         #    retrieval, no LLM call, and so no trace row.
         query_to_run, findings = guard_user_query(query_row["query"])
@@ -581,7 +668,7 @@ class GuardedPipeline:
         trace = run_and_trace(self.graph, safe_row, decision, case_overrides=case_overrides)
         findings += self._context_findings
 
-        # 3. Action guard: report the human decision, if the run asked for one.
+        # 3. Action guard: report the approval decision, if the run asked for one.
         findings += guard_agent_actions(trace)
 
         # 4. Output guard: decide what the user may see.
@@ -597,12 +684,14 @@ class GuardedPipeline:
 #
 # 1. Default: eight scripted scenarios, one per guard behavior. The real
 #    corpus is clean (see mode 2), so an attack cannot be shown on it. Here
-#    the retriever and the LLM are scripted stand-ins, the same idea as the
-#    test fakes. It runs in about a second, with no models loaded.
+#    the retriever, the LLM, and the approval decisions are scripted
+#    stand-ins, the same idea as the test fakes. It runs in about a second,
+#    with no models loaded.
 # 2. `--all-queries`: the 93 labeled queries through the guarded pipeline,
-#    with live LOCAL retrieval and no LLM. This is the evidence that the
-#    guards do not fire on clean traffic and the route distribution is
-#    unchanged.
+#    with live LOCAL retrieval and no LLM. Q091/Q092 are approved with
+#    `AUTO_APPROVE_FOR_DEMO`, so no human reviews them. This is the evidence
+#    that the guards do not fire on clean traffic and the route distribution
+#    is unchanged; it is not evidence of human review.
 # 3. `--replay-traces FILE...`: the action and output guards over trace rows
 #    already on disk, such as Day 19's live-LLM runs. Real model answers, and
 #    no new LLM call.
@@ -656,7 +745,8 @@ def _run_demo_scenario(
       schema, as the live structured client would.
     - The gold label "POL-001 is required" drives `diagnose`, exactly as on
       the real corpus. With `with_followup`, the Band 3 chunk is required too
-      (as for Q091), so a first pass without it pauses for approval.
+      (as for Q091), so a first pass without it pauses for approval. Such a
+      scenario must then pass a `decision`, or `run` refuses it.
     """
 
     def retrieve_fn(query_text, config):
@@ -698,19 +788,20 @@ DEMO_SCENARIOS = [
         {"answer": "Band 3: VP Procurement approval [1]. Ask jane.doe@example.com to sign it off."},
     ),
     (
-        "follow-up approved, but the answer ignores what it recovered",
+        "follow-up auto-approved (demo), but the answer ignores what it recovered",
         {
             "first_pass_sources": (OVERVIEW_CHUNK,),
             "with_followup": True,
+            "decision": AUTO_APPROVE_FOR_DEMO,
             "answer": "Approval depends on the band table [1].",
         },
     ),
     (
-        "follow-up rejected by the reviewer",
+        "follow-up rejected (scripted reviewer decision)",
         {
             "first_pass_sources": (OVERVIEW_CHUNK,),
             "with_followup": True,
-            "decision": {"type": DECISION_REJECT, "message": "the band table is enough"},
+            "decision": {"type": DECISION_REJECT, "message": "scripted demo rejection: the band table is enough"},
         },
     ),
 ]
@@ -734,7 +825,10 @@ def _print_scenario(number, title, question, response):
 
 
 def _run_demo_scenarios():
-    print("Day 20 guardrail scenarios (scripted retriever and LLM, real Day 19 graph, no models, no network)")
+    print(
+        "Day 20 guardrail scenarios (scripted retriever, LLM, and approval decisions; real Day 19 graph; "
+        "no models, no network, no human reviewer)"
+    )
 
     rows = []
     for number, (title, overrides) in enumerate(DEMO_SCENARIOS, start=1):
@@ -769,11 +863,16 @@ def _run_all_queries():
     retrieve_fn = make_live_retrieve_fn(chunk_lexical_index, chunk_semantic_index, embedding_model, cross_encoder_model)
 
     # No LLM client, so every complete-evidence run ends `not_generated`.
-    # Q091/Q092 pause for approval and are approved (the `run` default).
+    # Q091/Q092 pause for approval. Nobody is there to review them, so they
+    # are approved with the explicit, labeled AUTO_APPROVE_FOR_DEMO. Without
+    # it, `run` would refuse them.
     pipeline = GuardedPipeline(retrieve_fn)
-    responses = [pipeline.run(query_row) for query_row in load_example_queries()]
+    responses = [pipeline.run(query_row, AUTO_APPROVE_FOR_DEMO) for query_row in load_example_queries()]
 
-    print(f"\nGuarded run over {len(responses)} labeled queries (live local retrieval, no LLM, follow-ups approved):")
+    print(
+        f"\nGuarded run over {len(responses)} labeled queries (live local retrieval, no LLM; "
+        "follow-ups AUTO-APPROVED for demo evidence, no human review):"
+    )
     query_ids_by_finding = {}
     for response in responses:
         for finding in response.findings:

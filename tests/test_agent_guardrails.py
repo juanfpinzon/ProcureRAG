@@ -72,6 +72,11 @@ POISONED_NOTE = _source(
 # pauses for approval before the follow-up pass.
 FOLLOWUP_OVERRIDES = {"Q900": {"followup_query": FOLLOWUP, "acceptable_chunk_ids": ("POL-001::chunk-6",)}}
 
+# A plain "approve", as a caller would pass it to `run` once a reviewer has
+# answered the approval request. In a test nobody has, of course: this stands
+# in for that person, just as the fakes stand in for retrieval and the LLM.
+REVIEWER_APPROVES = {"type": "approve"}
+
 
 class _RecordingRetrieveFn:
     """Fake `retrieve_fn`: returns `followup` for the follow-up query and
@@ -284,8 +289,11 @@ def test_answer_that_ignores_the_evidence_the_followup_pass_recovered_is_flagged
     answer for a reviewer. It does not withhold it."""
     module = _load_guardrails_module()
     retrieve_fn = _RecordingRetrieveFn([OVERVIEW], followup=followup_sources)
+    client = _RecordingClient(answer)
 
-    response = _run(module, QUESTION, retrieve_fn, _RecordingClient(answer), case_overrides=FOLLOWUP_OVERRIDES)
+    response = _run(
+        module, QUESTION, retrieve_fn, client, case_overrides=FOLLOWUP_OVERRIDES, decision=REVIEWER_APPROVES
+    )
 
     assert response.trace.route_history == ["recursive_retrieve", "generate"]
     expected = [("excessive_agency", "action", "route_to_hitl")]
@@ -297,11 +305,13 @@ def test_answer_that_ignores_the_evidence_the_followup_pass_recovered_is_flagged
 
 
 # ---------------------------------------------------------------------------
-# Excessive agency (OWASP LLM06): the agent's one action is gated by a human.
+# Excessive agency (OWASP LLM06): the agent's one action waits for an
+# explicit approval decision, and the evidence never claims more than the
+# trace row records about who made that decision.
 # ---------------------------------------------------------------------------
 
 
-def test_followup_retrieval_goes_to_a_human_and_a_rejection_means_it_never_runs():
+def test_followup_retrieval_waits_for_a_decision_and_a_rejection_means_it_never_runs():
     module = _load_guardrails_module()
     retrieve_fn = _RecordingRetrieveFn([OVERVIEW], followup=[BAND_3])
     client = _RecordingClient()
@@ -318,12 +328,53 @@ def test_followup_retrieval_goes_to_a_human_and_a_rejection_means_it_never_runs(
     assert response.trace.stop_reason == "followup_rejected_by_reviewer"
 
 
-def test_the_only_way_into_the_followup_retrieval_is_through_the_human_approval_node():
+def test_a_query_that_may_pause_is_refused_without_an_explicit_decision():
+    """Fail closed. Day 19's `run_and_trace` treats a missing decision as
+    "approve". Inherited silently, that default would turn the approval gate
+    into an automatic one. So `run` refuses the query instead, before any
+    retrieval or model call."""
+    module = _load_guardrails_module()
+    retrieve_fn = _RecordingRetrieveFn([OVERVIEW], followup=[BAND_3])
+    client = _RecordingClient()
+
+    with pytest.raises(ValueError, match="no approval decision was given"):
+        _run(module, QUESTION, retrieve_fn, client, case_overrides=FOLLOWUP_OVERRIDES)  # decision=None
+
+    assert retrieve_fn.queries_received == []
+    assert client.prompts == []
+
+
+def test_the_approval_finding_repeats_what_the_row_recorded_and_never_claims_who_decided():
+    """The trace row records a decision and an optional message, not who
+    sent them. So the finding repeats what was recorded:
+
+    - `AUTO_APPROVE_FOR_DEMO` (the demo/CI stand-in) labels itself, both in
+      the finding and in the saved trace row;
+    - a bare "approve" says the row does not record who decided, instead of
+      claiming that a reviewer approved."""
+    module = _load_guardrails_module()
+
+    def approve_with(decision):
+        retrieve_fn = _RecordingRetrieveFn([OVERVIEW], followup=[BAND_3])
+        client = _RecordingClient("Band 3 needs VP Procurement approval [2].")
+        return _run(module, QUESTION, retrieve_fn, client, case_overrides=FOLLOWUP_OVERRIDES, decision=decision)
+
+    auto = approve_with(module.AUTO_APPROVE_FOR_DEMO)
+    assert _fired(auto) == [("excessive_agency", "action", "route_to_hitl")]
+    assert "auto-approved for demo/CI evidence" in auto.findings[0].detail
+    assert auto.trace.approval.message == module.AUTO_APPROVE_FOR_DEMO["message"]  # the saved row says so too
+
+    bare = approve_with(REVIEWER_APPROVES)
+    assert "the row does not say who decided" in bare.findings[0].detail
+    assert "reviewer" not in bare.findings[0].detail
+
+
+def test_the_only_way_into_the_followup_retrieval_is_through_the_approval_node():
     """The excessive-agency guard, as a wiring check. This fails if someone
     later connects `diagnose` straight to `recursive_retrieve` (skipping the
-    human), or adds a node the agent could act through (say, a tool that
-    emails a supplier). The rest of the contract (at most one approval per
-    run, malformed decisions re-asked, time travel) is pinned by
+    approval gate), or adds a node the agent could act through (say, a tool
+    that emails a supplier). The rest of the contract (at most one approval
+    per run, malformed decisions re-asked, time travel) is pinned by
     `tests/test_agent_control_plane.py`."""
     module = _load_guardrails_module()
     drawable = module.GuardedPipeline(_RecordingRetrieveFn([])).graph.get_graph()
