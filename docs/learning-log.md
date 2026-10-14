@@ -4958,9 +4958,9 @@ How each section maps onto what was built. This is my mapping by section title o
 |---|---|
 | `Production Hosting` | Uvicorn on `127.0.0.1:8000`. The models load in FastAPI's `lifespan`, before the first request is accepted. `/health` never touches the pipeline |
 | `Production Project` | One new module (`src/api.py`) over the unchanged Day 16–20 modules. One service object is built at startup, and a dependency-injection seam (`get_service`) lets tests swap in fakes |
-| `Set up the Security Layer` | Entry checks in request order: schema (length, role, decision), labeled `query_id`, Day 20 injection/PII, scope, approval boundary, then the role filter on retrieval |
+| `Set up the Security Layer` | Entry checks in request order: rate limit (429), schema (lengths, role, decision), labeled `query_id` with its own exact text, Day 20 injection/PII and scope on EVERY caller text (the decision's follow-up and message included), approval boundary, then the role filter on retrieval |
 | `Set up the LangGraph Agent and the FastAPI API - Testing and LangSmith Observability Dashboard` | The API calls Day 20's `GuardedPipeline` (the Day 19 graph inside). Tests use `TestClient`. The live LLM is opt-in (`PROCURERAG_LIVE_LLM=1`, on the command line or in `.env`), using Day 19's structured OpenRouter client. LangSmith stays off for the API (`.env` is never loaded into the environment). Trace rows are built and validated, but not persisted |
-| `Test the Security Layer` | `tests/test_api.py`: 42 HTTP-level and startup test cases, mutation-checked |
+| `Test the Security Layer` | `tests/test_api.py`: 53 HTTP-level and startup test cases, mutation-checked (47 of 47 mutations caught) |
 | `Security Checklist` | "Serving-readiness checklist" below: real vs. prototype vs. missing |
 | FastAPI `Server-Sent Events (SSE)` | `POST /query/stream` with `response_class=EventSourceResponse`, yielding `ServerSentEvent(event=..., data=<Pydantic model>, id=<sequence>)`. Native SSE worked, so no fallback was needed |
 | FastAPI `Custom Response` | `EventSourceResponse` is a `StreamingResponse`. The OpenAPI caveat is real: `/docs` shows only the generic SSE frame (`data` as a string), not the payload models, so the event payloads are documented in code and below |
@@ -5004,8 +5004,8 @@ Git status at kickoff was clean on `main` before this Day 21 route/log scaffold 
 | Endpoint / component | Purpose | Request schema | Response / event schema | CI-safe proof |
 |---|---|---|---|---|
 | `GET /health` | Liveness. Never builds or calls the pipeline, and contacts no provider | none | `HealthResponse {status: "ok", app, version, live_llm}`; `live_llm` reports whether THIS running server was built with an LLM client (what startup built, not what `.env` says now; never a provider call) | `test_health_answers_without_building_the_pipeline_or_calling_a_provider` (the pipeline builder, the service dependency, and the OpenRouter factory are all made to raise; the switch is on, but no startup ran, so `live_llm` is false); the startup test checks the true case |
-| `POST /query` | One question in, one typed result out | `QueryRequest {query: 1–500 chars, role: "requester" \| "buyer", query_id?: labeled id, decision?: {type, followup_query?, message?}}`; unknown keys are a 422 | `QueryResponse {status, query_id, text, sources: [{source_id, doc_id, chunk_id, cited}], findings: [GuardFinding], approval_request?, run_id?, caveats}` | fake retriever + fake LLM through the real graph; e.g. `test_a_requester_never_gets_a_confidential_chunk_and_a_buyer_does` |
-| `POST /query/stream` | The same request, as Server-Sent Events | same `QueryRequest` | events `request_validated` → `guard_finding`* → `retrieval_started` → `guard_finding`* → `result`. `result` is always last and carries the same `QueryResponse` | `test_the_stream_emits_typed_events_in_request_order` (5 scenarios), `test_the_last_stream_event_is_the_same_response_as_post_query` |
+| `POST /query` | One question in, one typed result out | `QueryRequest {query: 1–500 chars, role: "requester" \| "buyer", query_id?: a labeled id, sent ONLY with that question's exact text, decision?: {type, followup_query?: ≤ 500 chars, message?: ≤ 200 chars}}`; unknown keys are a 422. Past 30 requests in 60 s from one client: 429 + `Retry-After` | `QueryResponse {status, query_id, text, sources: [{source_id, doc_id, chunk_id, cited}], findings: [GuardFinding], approval_request?, run_id?, caveats}` | fake retriever + fake LLM through the real graph; e.g. `test_a_requester_never_gets_a_confidential_chunk_and_a_buyer_does` |
+| `POST /query/stream` | The same request, as Server-Sent Events | same `QueryRequest`, same 422/429 before the stream starts | events `request_validated` → `guard_finding`* → `retrieval_started` → `guard_finding`* → `result`. `result` is always last and carries the same `QueryResponse` | `test_the_stream_emits_typed_events_in_request_order` (6 scenarios), `test_the_last_stream_event_is_the_same_response_as_post_query` |
 | Approval / pending state | Q091/Q092 without a decision | `decision` omitted | `status: "pending_approval"` + `approval_request {query_id, query (redacted), proposed_action, proposed_followup_query, allowed_decisions, note}`. Nothing is retrieved | `test_real_q091_and_q092_return_pending_approval_and_run_nothing_without_a_decision` (the REAL labeled rows and Day 16's REAL follow-up table) |
 | Optional `POST /approvals/{id}` | Resume path | — | — | **Deferred.** Approval is a stateless re-submission: the caller sends the same request again, with a `decision` |
 
@@ -5020,7 +5020,7 @@ Status vocabulary (`ApiStatus`):
 | `blocked` | The user did not get the agent's text: an entry guard refused the request, or Day 20's output guard withheld an uncited answer (the trace row still says `answered`) | the API |
 | `pending_approval` | The query may need the follow-up pass, and no decision came with it. Nothing ran | the API |
 
-There is no `error` status. A malformed request is an HTTP 422, and a real failure stays an HTTP 500.
+There is no `error` status. A malformed request is an HTTP 422, a request past the rate limit is an HTTP 429, and a real failure stays an HTTP 500.
 
 One pipeline, two transports: `run_query_events` is a generator that yields one `(event_name, payload)` per stage. `/query/stream` sends each one as it is produced, and `/query` keeps only the last (the `result`). The two endpoints cannot drift apart, and a test pins that.
 
@@ -5032,13 +5032,18 @@ Serving dependency decision:
 
 ### Entry-boundary behavior
 
+- **Rate limit (added after review, 2026-10-15):** `SlidingWindowRateLimiter`, at most 30 requests in any 60 s per client address, on `/query` and `/query/stream` together. Past it → HTTP 429 with `Retry-After` (whole seconds, rounded up), before validation, retrieval, or a stream starts. `/health` is never limited. Learning-grade: in one process's memory (see the checklist and "Review fixes").
 - **Input-length cap:** `MAX_QUERY_CHARS = 500` in the Pydantic schema. The longest labeled query is 97 characters. 501 characters → HTTP 422 with `loc ["body", "query"]`; an empty query → 422; exactly 500 → runs. The endpoint never runs on a 422, so neither does retrieval (tested). Live: 501 characters → 422.
+  - The decision's texts have caps too (added after review): `followup_query` ≤ 500 (it is a retrieval query), `message` ≤ 200 (`MAX_DECISION_MESSAGE_CHARS`; a reason, not a document).
 - **Malformed requests:** these are a 422 on BOTH endpoints, before a stream starts, with nothing run:
   - a missing or unknown role;
   - a misspelled key (`decison`);
   - an `edit` without a `followup_query` (Day 18's own `decision_error` is the validator);
   - `{"type": "aprove"}`;
-  - an unknown `query_id`.
+  - an unknown `query_id`;
+  - a labeled `query_id` with any text other than its own question's (added after review).
+- **Free text vs labeled (added after review):** a request without `query_id` is free text, the production path. No gold labels apply, so the graph cannot see a gap, and the response carries `UNLABELED_CAVEAT`. A request with `query_id` replays that labeled question, and only with its exact text. Gold labels describe one question, so the API never lets a caller attach them to another.
+- **Reviewer decision text (added after review):** an edited `followup_query` gets the question's checks (injection blocks, PII is redacted, off-topic blocks), because it becomes the second retrieval query. A `message` gets injection and PII checks (it never reaches retrieval or the model, but it is copied into the trace row, the `excessive_agency` finding, and a rejection's caveat and gap text). Both are guarded before the graph runs, so every downstream copy holds the redacted text. A block in either one blocks the whole request, and the finding's detail names the field (`decision.followup_query: ...`).
 - **On-topic / procurement scope:** `guard_procurement_scope`, a keyword allow-list regex in the same style as Day 20's `INJECTION_PATTERNS`. It covers procurement terms, the KB's spend categories, and its six supplier names. No term → `off_topic` / `input` / `block`, `OFF_TOPIC_MESSAGE`, and no retrieval.
   - Measured: 0 of the 93 labeled queries are refused. That is a regression check, not proof that it generalizes: the list was written with those queries in view. 0 of 8 off-topic probes get through (weather, poem, World Cup, capital of France, paella, joke, bike, movie).
   - Known leak: any off-topic text that contains a listed term.
@@ -5049,7 +5054,7 @@ Serving dependency decision:
   - A gap caused by a restricted document gets `RESTRICTED_GAP_MESSAGE`. Day 17's gap text names the missing document ids, which would reveal that a confidential document exists.
   - The role is caller-asserted. There is no authentication.
 - **Q091/Q092-shaped `pending_approval` behavior:** without a `decision`, both real queries return `pending_approval` with the proposed follow-up query from Day 16's table, `run_id: null`, and zero retrieval or LLM calls, on both endpoints.
-  - The entry guards run first, so a Q091-shaped injection is `blocked`, not pending (tested).
+  - The entry guards run first, so an injection is `blocked`, not pending. Since the review fix, an injection with a labeled id but a different text is a 422 before that point. So the order is tested with a synthetic labeled row whose own text carries the injection: labels are data, and get no exemption.
   - With a `decision`, the run goes through Day 18's gate. Day 20's `excessive_agency` finding repeats the recorded decision, and never claims a reviewer.
 - **Streaming/event behavior:** native SSE. Each event has `event:` (name), `data:` (the payload model as JSON), and `id:` (sequence 1..n). Input findings are streamed before `retrieval_started`. Context, action, and output findings follow it, each streamed once. `result` is always last, so a stream that ends without one is a failure the client can detect.
 
@@ -5057,16 +5062,17 @@ Serving-readiness checklist (my application of the freeCodeCamp `Security Checkl
 
 | Control | Status today |
 |---|---|
-| Request schema validation (types, unknown keys, length) | **Real**: Pydantic → 422 |
-| Prompt injection: query and retrieved chunks | **Real**, deny-list (Day 20) |
-| PII redaction | **Real**, regex baseline (Day 20) |
-| Off-topic refusal | **Real**, keyword allow-list |
+| Request schema validation (types, unknown keys, lengths of the query AND the decision's texts) | **Real**: Pydantic → 422 |
+| Gold labels only on their own question | **Real**: a labeled `query_id` with another text → 422; free text runs unlabeled, with a caveat |
+| Prompt injection: query, decision texts, and retrieved chunks | **Real**, deny-list (Day 20) |
+| PII redaction: query and decision texts | **Real**, regex baseline (Day 20) |
+| Off-topic refusal: query and edited follow-up | **Real**, keyword allow-list |
 | Authorization by `confidentiality` | **Prototype**: enforced and tested, but a post-filter, and the role is caller-asserted |
 | Authentication | **Missing** |
-| Rate limit / quota | **Missing**, not even a stub. It belongs at the ingress (Day 22/23) or in a shared store |
+| Rate limit / quota | **Learning-grade** (added after review): a sliding-window limiter, 30 requests per 60 s per client address, 429 + `Retry-After`, deterministic tests with a fake clock. In-process memory only: it resets on restart, counts per worker, and sees one address behind a proxy. The production limit belongs at the ingress (Day 22/23) or in a shared store. No cost quota (spend per day) |
 | HITL approval | **Real gate**, as a stateless re-submission. The decision is caller-asserted, with no reviewer identity, no review queue, and no durable checkpointer |
 | Output handling | Day 20 output guard. `text` is plain text, so a web client must still escape it |
-| Secrets / providers | LLM off by default. Exactly two values are read from `.env`: the switch `PROCURERAG_LIVE_LLM` and `OPENROUTER_API_KEY`. Each comes from the environment first, else from `.env` via `dotenv_values`, so nothing else from `.env` enters the process (tested). `PROCURERAG_LIVE_LLM=0` on the command line overrides a `"1"` in `.env` (tested). No key → startup fails before the models load (tested). Tests never read the developer's real `.env` |
+| Secrets / providers | LLM off by default. Exactly two values are read from `.env`: the switch `PROCURERAG_LIVE_LLM` and `OPENROUTER_API_KEY`. Each comes from the environment first, else from `.env` via `dotenv_values`, so nothing else from `.env` enters the process (tested). "First" means PRESENT, even if empty: `PROCURERAG_LIVE_LLM=0` or `PROCURERAG_LIVE_LLM=` on the command line overrides a `"1"` in `.env` (both tested; the empty case was a review finding). No key → startup fails before the models load (tested). Tests never read the developer's real `.env` |
 | LLM failure | **Real, but blunt**: a provider error is an HTTP 500 on `/query`. The stream stops before its `result` event (tested). No retry, no fallback |
 | Audit trail | Trace rows are built and validated per run, but **not persisted**. `run_id` is returned, with nothing on disk behind it yet |
 | Network binding | `127.0.0.1` locally; `0.0.0.0` only inside a container (Day 22) |
@@ -5074,7 +5080,7 @@ Serving-readiness checklist (my application of the freeCodeCamp `Security Checkl
 
 ### Verification after build
 
-Run on 2026-10-14:
+Run on 2026-10-14, before the review fixes. The 2026-10-15 re-run (357 tests, 47 mutations, a new smoke) is in "Review fixes" below. Requests here that the fixes now refuse are marked.
 
 ```bash
 ./.venv/bin/pytest -q
@@ -5150,7 +5156,9 @@ curl -s -N -X POST http://127.0.0.1:8000/query/stream -H 'content-type: applicat
 # data: {"status":"gap_report","query_id":"Q001","text":"Not answered: the retrieved context is still missing required
 #        evidence (primary document(s) ['POL-001']) after 1 retrieval pass(es).", ...}
 # id: 4
-#   (that gap is a real finding, not a role effect: see "What failed or was confusing")
+#   (2026-10-15: this request is now a 422. Its text is not Q001's exact text, so Q001's labels did not
+#    describe it: the gap above was judged by another question's labels. See "Review fixes" for the
+#    same text sent as free text.)
 ```
 
 Whole-corpus view per role, all 93 labeled queries, against the same running server (no decision sent):
@@ -5243,7 +5251,7 @@ What the three live answers show. These are not scored: this is a smoke test, no
 - **Q091:** **Band 3 is right this time** (Day 19's structured run 1 said Band 4). It cites [11] `POL-001::chunk-6`, the chunk the approved follow-up pass recovered, so the ignored-evidence flag stays quiet. But it also cites [7] `CONTRACT-004::chunk-9`, Meridian's own cloud contract, as if its certification list were the general SaaS rule. That is Day 19's wrong-scope class (the Cobalt case) again, and it passes every guard. A requester would not have seen CONTRACT-004 (Confidential) at all.
 - **Free text (Q003's question, with no `query_id`):** correct, citing the segregation-of-duties chunk, and flagged as unchecked.
 
-Mutation check, in a scratch copy: 27 mutations of `src/api.py` each turned at least one test red. They include:
+Mutation check, in a scratch copy (2026-10-14; the 2026-10-15 re-run is 47 of 47, in "Review fixes"): 27 mutations of `src/api.py` each turned at least one test red. They include:
 
 - removing the role filter, or making an unknown label visible (fail open);
 - dropping the restricted-gap rewording;
@@ -5261,16 +5269,111 @@ If any live/SaaS/provider/deployment dependency blocks, record:
 
 - **Exact command tried:** none blocked. `uv add fastapi uvicorn` and `uv add --dev httpx` succeeded. Three bounded live LLM calls were made (see "Live LLM wiring"). No LangSmith, Azure, or Docker call was made today.
 - **Exact error/blocker:** n/a. (`uvicorn src.api:app`, the form in the original stub, fails with `ModuleNotFoundError: No module named 'agent_control_plane'`, because the modules use flat imports. `--app-dir src` is the working form.)
-- **Local CI-safe fallback evidence:** the 42 API tests (fake retriever and LLM, real graph; the startup tests run the real lifespan with the model loading and the OpenRouter factory replaced), and the live-retrieval smoke above (local models only).
+- **Local CI-safe fallback evidence:** the API tests (42 on 2026-10-14, 53 after the review fixes; fake retriever and LLM, real graph; the startup tests run the real lifespan with the model loading and the OpenRouter factory replaced), and the live-retrieval smoke above (local models only).
 - **Next retry path:** n/a. The live LLM path is wired and was smoke-tested (3 calls).
+
+### Review fixes (2026-10-15)
+
+An external review of the Day 21 artifact found four gaps. Each one was first reproduced on the unchanged code, then fixed, then tested.
+
+| # | Finding | Reproduced on the old code | Fix | Tests |
+|---|---|---|---|---|
+| 1 | The reviewer decision bypassed the entry protections. Only `query` was bounded and guarded | A 2,053-character edited `followup_query` with an email and "Ignore all previous instructions." reached the retriever unchanged. A reject `message` with `jane.doe@example.com` came back raw, in `findings` and `caveats` | Caps: `followup_query` ≤ 500, `message` ≤ 200 → 422. `run_entry_guards(body)` checks every caller text before the graph runs: the follow-up gets injection + PII + scope (it becomes the second retrieval query); the message gets injection + PII. The graph only ever receives the redacted decision, so every copy it makes (trace row, action finding, caveats, gap text) is redacted too. Findings name the field (`decision.followup_query: ...`) | `test_the_decision_texts_have_length_limits_too`; `test_a_decision_text_that_fails_the_entry_guards_blocks_the_whole_request` (injection or off-topic follow-up, injection in a message); `test_pii_in_an_edited_followup_is_redacted_before_the_second_retrieval_pass`; `test_a_reviewer_message_comes_back_only_after_redaction`; a 6th stream scenario |
+| 2 | Any text could be paired with any labeled `query_id`, and run against that id's gold labels | The cleaning-contractor question with synthetic Q900 (gold: POL-001) → `gap_report`, "POL-001 missing", although retrieval had found the cleaning contract | Two kinds of request. Free text (no id) is the production path: unlabeled, with `UNLABELED_CAVEAT`. A labeled id replays its own question only: any other text → 422 (`check_query_request`) | `test_a_labeled_query_id_only_replays_its_own_question` (the review's case, refused, and the same text run as free text with no invented gap); a 422 case on both endpoints |
+| 3 | An empty environment value fell through to `.env` | Environment `PROCURERAG_LIVE_LLM=""`, `.env` `"1"` → `read_setting` returned `"1"`, `live_llm_enabled()` True: paid calls ON | `read_setting` tests presence (`name in os.environ`), not truthiness. The same rule covers the key: an empty key in the environment means "no key", and startup stops | `test_a_setting_that_is_present_but_empty_in_the_environment_still_beats_dotenv` |
+| 4 | HER-289 asks for "a safe rate-limit stub or local deterministic rate limiter". There was none, only a note saying so | — | `SlidingWindowRateLimiter`: at most 30 requests in any 60 s per client address, on both query endpoints; past it, 429 + `Retry-After` (whole seconds, rounded up), before validation, retrieval, or a stream. `/health` is exempt. Injected clock, thread lock | `test_the_rate_limit_refuses_with_429_before_anything_runs_and_lets_the_client_back_in_later` (fake clock: both endpoints share one budget, `Retry-After` 39.5 s → "40", `/health` stays 200, another address has its own budget, the window slides open at t = 60 s) |
+
+Two choices, and why:
+
+- **Finding 2: free text kept separate, plus a text check on labeled ids.** The review offered three routes: an eval-only id whose text must match; a server-owned id that runs its canonical text; or free-text requests kept apart from the labels. Free text kept apart was the preferred route. But on its own it does not close the hole, because a caller can still attach any id to any text. So a labeled id must also come with its own question's exact text. The id stays explicit and opt-in: a production caller who types Q091's exact words without the id gets a free-text run, never eval-mode behavior by accident.
+- **Finding 4: a learning-grade limiter, not a deferral.** For this single-process local service, an in-process limit is real protection, and with the live LLM on it caps one client's paid calls at 30 a minute. Its deployment limits are stated in the code and in the checklist above: it resets on restart, counts per worker, and sees one address behind a proxy. The production limit (ingress or shared store) stays a Day 22/23 item.
+
+Verification, run on 2026-10-15:
+
+```bash
+./.venv/bin/pytest -q
+# 357 passed in 3.09s   (304 baseline + 53 in tests/test_api.py: 30 test functions)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# The current retrieval pipeline still matches every case's expectation.
+```
+
+Mutation check, in a scratch copy: **47 of 47 mutations caught.** That is the 27 above, rebased on the changed code, plus 20 new ones:
+
+- finding 1: no cap on `followup_query` or `message`; the follow-up not guarded, or guarded without the scope check; the message not guarded; the redacted follow-up or message not used; the graph given the raw decision; the decision's findings missing from the response, or not naming the field;
+- finding 2: a labeled id accepted with another question's text;
+- finding 3: `read_setting` back to truthiness (the review's exact bug);
+- finding 4: `/query` or `/query/stream` not limited; `/health` limited; refused requests recorded; the window edge off by one; `Retry-After` rounded down; the wait measured from the newest request; one budget shared by every client.
+
+The "`Retry-After` rounded down" mutation would have survived a test with whole-second times (rounding 40.0 either way gives 40). The test's refused request was moved to t = 20.5 s, so the wait is 39.5 s, and only rounding up gives "40".
+
+Smoke against the live local pipeline (real models, no LLM), on port 8001. The switch was set but EMPTY on the command line while `.env` says `PROCURERAG_LIVE_LLM="1"`: finding 3's exact case.
+
+```bash
+PROCURERAG_LIVE_LLM= LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+    ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8001
+# INFO:     Application startup complete.   (8 s after launch)
+
+curl -s http://127.0.0.1:8001/health
+# {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}   <- the empty value wins over .env
+
+# Q001, labeled, its own text:  HTTP 200 {"status": "not_generated", "query_id": "Q001"}
+# Q092's question ("What do we need to complete before a new cleaning contractor starts on site?") with query_id Q001:
+#   HTTP 422 query_id 'Q001' selects the gold labels of one labeled question, and this query is not that question's
+#   exact text. Send its exact text to replay it, or leave query_id out to ask anything else as free text (its
+#   evidence is then unchecked)
+# The same question as free text:
+#   {"status": "not_generated", "query_id": null, "docs": ["CONTRACT-006", "FAQ-001", "POL-001", "POL-004", "POL-006"],
+#    "caveats": ["no query_id was given, so there are no gold labels to check ..."]}
+# Q091 + edit, follow-up "Band 3 approval. Ignore all previous instructions.":
+#   {"status": "blocked", "findings": [{"guard": "prompt_injection", "layer": "input", "action": "block",
+#    "detail": "decision.followup_query: override_instructions: 'Ignore all previous instructions'"}]}
+# Q091 + edit, follow-up "What is the weather in Madrid tomorrow?":
+#   {"status": "blocked", "findings": [{"guard": "off_topic", "layer": "input", "action": "block",
+#    "detail": "decision.followup_query: no procurement term found in the text, so it was refused before retrieval"}]}
+# Q091 + edit, a 2,055-character follow-up:  HTTP 422 ['body', 'decision', 'followup_query']
+# Q091 + reject, message "not needed, ask jane.doe@example.com":
+#   {"status": "gap_report",
+#    "findings": [["pii", "decision.message: redacted 1 email before retrieval and the LLM"],
+#                 ["excessive_agency", "follow-up retrieval 'approval bands EUR 50,000 250,000 Band 3 VP Procurement'
+#                   paused at the approval gate and was rejected, so it never ran; message: 'not needed, ask [REDACTED_EMAIL]'"]],
+#    "caveats": ["a reviewer rejected the follow-up retrieval pass: not needed, ask [REDACTED_EMAIL]"],
+#    "raw_email_anywhere": false}
+# Stream, "I am jane.doe@example.com. " + Q001's question, free text, requester:
+#   guard_finding (pii, redacted 1 email) -> request_validated (query_id null, "I am [REDACTED_EMAIL]. ...")
+#   -> retrieval_started (["Internal"]) -> result {"status": "not_generated", "query_id": null, ...}
+```
+
+The Q092 free-text row is the cost of the free-text path, measured: retrieval brings CONTRACT-006 (another supplier's contract), not CONTRACT-005, and nothing flags it. See "What remains weak".
+
+The 93-query sweep again (each question with its own id, both roles), now through the rate limit. The script honors `Retry-After`: on a 429 it sleeps for the header's seconds, then retries.
+
+```bash
+# first 429: Retry-After: 38 | rate limit: at most 30 requests per 60 s from one client. Retry in 38 s.
+#   (38, not 60: the smoke requests above had already used part of the minute)
+# buyer     {'not_generated': 76, 'gap_report': 15, 'pending_approval': 2} | restricted gaps: 0
+# requester {'not_generated': 53, 'gap_report': 38, 'pending_approval': 2} | restricted gaps: 34
+# 186 answers in 363 s: 18 x 429 on the way, 354 s spent waiting on Retry-After
+```
+
+The same counts as on 2026-10-14, for both roles: the review fixes change no labeled question's outcome. The rate limit held the sweep to 30 requests a minute (186 answers in about 6 minutes; about 9 s of that was actual work). Server log for the whole smoke: 199 × `200`, 2 × `422` (the deliberate mismatch and the 2,055-character follow-up), 18 × `429`, and no tracebacks.
+
+The 2026-10-14 live-LLM evidence still stands: its three paid requests (Q001 with its own text, Q091 with its own text and an approve decision whose message has no PII or injection, and a free-text stream) pass every new check unchanged. No paid call was made for the review fixes.
 
 ### What failed or was confusing
 
 - **SSE worked directly.** FastAPI 0.143.1 has `fastapi.sse`, so there is no `StreamingResponse` fallback. What was confusing was *when* errors can still be reported. Once a stream has started, "200 OK" has already been sent. So the unknown-`query_id` check had to move into a dependency, which FastAPI solves before the stream begins. A test now checks that both endpoints answer 422 before streaming.
 - **FastAPI validated the body twice.** With `body: QueryRequest` declared both in the endpoint and in the `query_id` dependency, every 422 listed each error twice. A cached "identity" dependency did not fix it: FastAPI collects errors from every branch of the dependency tree. The fix was for the endpoints to receive the body ONLY through the dependency (`CheckedQuery`).
 - **`pending_approval` and `blocked` needed API-specific statuses.** Day 19's four statuses describe what the graph/model did. "The user got nothing because a guard refused" and "nothing ran because no decision came" are facts only the API knows. A Day 20 detail made this visible: an uncited answer is `answered` in the trace row but `blocked` for the user.
-- **Order matters, and the tests had to prove it.** A Q091-shaped injection must be `blocked`, not parked for a reviewer, so the entry guards run before the approval boundary (a mutation moving the check first was caught). An off-topic injection must be reported as an injection. That ordering was NOT tested at first: its mutation survived until the bare-injection case was added.
-- **The PII placeholder changes retrieval.** Q001 with "I am jane.doe@example.com." in front ends in `gap_report` (POL-001 missing), for both roles. The email is redacted to `[REDACTED_EMAIL]` before retrieval, and that placeholder is text the retriever embeds: the same prefix typed as `[REDACTED_EMAIL]` gives the same gap, while "Hi team." keeps POL-001. Day 20's redaction protects the data, but the placeholder perturbs retrieval. The graph's gap rule turned it into an honest gap report rather than a wrong answer.
+- **Order matters, and the tests had to prove it.** A Q091-shaped injection must be `blocked`, not parked for a reviewer, so the entry guards run before the approval boundary (a mutation moving the check first was caught). An off-topic injection must be reported as an injection. That ordering was NOT tested at first: its mutation survived until the bare-injection case was added. (Since the review fixes, an injection sent with a labeled id is a 422 at the id check, so this order is now tested with a poisoned labeled row.)
+- **The PII placeholder changes retrieval.** With "I am jane.doe@example.com." in front of Q001's question, the email is redacted to `[REDACTED_EMAIL]` before retrieval, and that placeholder is text the retriever embeds. Re-measured on 2026-10-15, as free text, for both roles: `POL-001::chunk-4` (Q001's primary-graded document) drops out of the top 5, and `SOP-001::chunk-12` comes in. "Hi team." keeps it. Day 20's redaction protects the data, but the placeholder perturbs retrieval.
+  - **Correction (review, 2026-10-15).** The first version of this note said the graph turned this into "an honest gap report". That gap report came from Q001's gold labels applied to a text that is NOT Q001's question: the label/query mismatch the review flagged (finding 2 below). The API now refuses that pairing. As free text, nothing flags the missing chunk: the status is `not_generated`, with the "unchecked" caveat.
 - **A gap report can leak what it lacks.** Day 17's gap text names the missing documents. After the role filter removed CONTRACT-005, the requester's gap report would have said "missing … CONTRACT-005": no content, but still a disclosure that a confidential supplier contract exists and is relevant. The API rewords those gaps.
 - **Two corrections found in review of my own draft.**
   - The role filter renumbered sources, but Day 20's context guard (which runs right after it) already does. Planning the mutations exposed the dead line, and it was removed.
@@ -5285,15 +5388,20 @@ If any live/SaaS/provider/deployment dependency blocks, record:
 - **`PROCURERAG_LIVE_LLM="1"` in `.env` did nothing at first (2026-10-14).** The switch was read only from the process environment, while the key already fell back to `.env`: two settings, two rules. Both now go through `read_setting` (the environment first, else `.env`, and never the rest of `.env`). Two follow-ups:
   - the change immediately broke 3 tests on this machine, because they had cleared the environment variable and so fell back to the real `.env`. Tests now never read a developer's `.env`;
   - `/health` used to read the switch on every probe. With the switch in an editable file, it could claim `live_llm: true` for a server that was started with it off. It now reports the client startup actually built.
+- **The external review (2026-10-15) found four more gaps.** Details, fixes, and evidence are in "Review fixes" above. The lessons:
+  - guarding "the query" is not guarding "the request". The reviewer decision carried two more caller-written texts, and an edited follow-up became a second, unguarded retrieval query;
+  - gold labels describe one question's text, not an id. Pairing an id with other text produced confident, false gap reports;
+  - "is it set?" is not "is it truthy?". An empty environment value fell through to `.env` and turned the paid LLM on;
+  - "documented as missing" does not meet an acceptance criterion that asks for a stub or a limiter.
 - **What is real vs. stubbed:**
-  - rate limiting: missing, not stubbed;
+  - rate limiting: learning-grade (in-process sliding window, 429 + `Retry-After`), since the review fixes;
   - role/confidentiality: enforced and tested, but caller-asserted and a post-filter;
   - approval persistence: none, because approval is a stateless re-submission, not a resume.
 
 ### What improved
 
 - **A client can call ProcureRAG over HTTP**, with a typed contract that `/docs` publishes, instead of running a CLI and reading its output.
-- **Unsafe or useless requests are rejected before retrieval:** malformed or too-long bodies (422), injection attempts, off-topic questions, and Q091/Q092 without a decision.
+- **Unsafe or useless requests are rejected before retrieval:** malformed or too-long bodies (422), a labeled id paired with another question (422), too many requests (429), injection attempts and off-topic text in the question OR in the reviewer decision, and Q091/Q092 without a decision.
 - **The user-visible response is smaller than the trace.** The caller gets `status`, user-safe `text`, source ids, findings (which never hold a sensitive value), and caveats. The trace row, with the model's unredacted text, stays on the server.
 - **Confidentiality labels are enforced for the first time.** Day 20 recorded "retrieval ignores `confidentiality`" as an open LLM02/LLM08 gap. Now a requester never receives a Confidential chunk, nor the id of a restricted missing document. The cost is measured: 34 of 93 labeled queries.
 - **The approval gate survives the move to a service.** Q091/Q092 return `pending_approval` with what a reviewer needs, run nothing without a decision, and never auto-approve.
@@ -5306,7 +5414,7 @@ If any live/SaaS/provider/deployment dependency blocks, record:
   - The live LLM works (3 of 3 calls answered with valid citations), but nothing scores those answers.
   - Today's Q091 answer got Band 3 right, yet cited Meridian's own contract (CONTRACT-004) as a general SaaS rule: Day 19's wrong-scope class, which passes every guard.
   - Q001's answer omitted that approvals are cumulative.
-- **The live LLM is a cost exposure while there is no rate limit.** It is off by default, bound to 127.0.0.1, and one call per complete-evidence request. Provider errors are a bare HTTP 500, with no retry and no fallback answer.
+- **The live LLM is still a cost exposure.** It is off by default, bound to 127.0.0.1, and one call per complete-evidence request. The rate limit caps one client address at 30 requests a minute, but there is no spend quota (per day or per caller). Provider errors are a bare HTTP 500, with no retry and no fallback answer.
 - **Authorization is a prototype.**
   - There is no authentication; the role comes from the request body.
   - The filter runs after ranking, so a requester's context is smaller than `top_k`.
@@ -5315,11 +5423,12 @@ If any live/SaaS/provider/deployment dependency blocks, record:
   - The reviewer does not see the measured gap, because the decision comes before pass 1.
   - The decision is caller-asserted, and the record has no reviewer identity.
   - There is no review queue and no durable checkpointer.
-- **There is no rate limit or quota.**
+- **The rate limit is learning-grade.** It lives in one process's memory: it resets on restart, each Uvicorn worker counts on its own, and behind a proxy every caller shares one address (one busy caller would block everyone). It also never forgets an address it has seen. The production version belongs at the ingress or in a shared store.
 - **Trace rows are not persisted**, so `run_id` has nothing on disk behind it. Guard findings are also still not in the row (that needs a `schema_version` bump).
-- **The gold-label diagnosis still bounds the service.** Without a `query_id`, the graph cannot see a gap, and the response says the result is unchecked.
+- **The gold-label diagnosis still bounds the service, and free text is where it bites.** Every production request is free text, so the graph never sees a gap there, and the response says the result is unchecked. Measured on 2026-10-15: Q092's question asked as free text retrieves CONTRACT-006 (another supplier's contract), not CONTRACT-005, and ends `not_generated` (evidence treated as complete). With the live LLM on, the model would answer from the wrong contract, and only the caveat warns. Replayed as labeled Q092, the same question pauses for approval, and the follow-up pass recovers CONTRACT-005. A label-free completeness check (e.g. an LLM or NLI judge of "do these sources answer this question?") is the open problem.
 - **The scope guard is a keyword allow-list**, fitted to this corpus.
-- **The PII placeholder perturbs retrieval** (the Q001 case above).
+- **The decision's texts get the same deny-list and regex checks as the question**, with the same blind spots: a paraphrased injection, or PII without a recognizable pattern, gets through.
+- **The PII placeholder perturbs retrieval** (the Q001 case above), and as free text nothing flags it.
 - **Stream events mark stage boundaries, not node-level or token progress.** `GuardedPipeline.run` is one blocking call.
 - **OpenAPI documents only the generic SSE frame**, not the event payload models.
 - **Startup contacts the Hugging Face Hub** unless `HF_HUB_OFFLINE=1` is set.
@@ -5333,8 +5442,8 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
 
 - A script trusts its operator: the person running it picks the query ids, the approval decision, and the flags, and reads the logs.
 - A service has untrusted callers, so the edge has to state the contract:
-  - a request schema (`QueryRequest`: question ≤ 500 characters, role, optional labeled id, optional decision);
-  - what is refused before retrieval (422s, injection, off-topic, a missing decision);
+  - a request schema (`QueryRequest`: question ≤ 500 characters, role, optional labeled id with its own question's text only, optional decision with bounded texts);
+  - what is refused before retrieval (422s, 429s, injection or off-topic text in ANY caller-written field, a missing decision);
   - what this caller may see (role vs. `confidentiality`);
   - a typed result (`status`, user-safe `text`, sources, findings, caveats) instead of a printed trace.
 - The service doesn't make ProcureRAG smarter. It makes the policy explicit, and enforces it on every request.
@@ -5365,10 +5474,12 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
 
 **5. CI-safe API tests vs optional live smoke.**
 
-- CI-safe tests: 42 cases over HTTP (`TestClient`), against the real FastAPI app, the real Day 19 graph, and Day 20's guards, with a fake retriever and a fake LLM that record what they received. No real model is loaded, and there is no network.
+- CI-safe tests: 53 cases over HTTP (`TestClient`), against the real FastAPI app, the real Day 19 graph, and Day 20's guards, with a fake retriever and a fake LLM that record what they received. No real model is loaded, and there is no network.
   - They prove the schemas, the 422s, guard order, the role filter, pending approval, and the stream structure.
-  - They also prove the LLM switch: off unless exactly "1"; only the switch and the key read from `.env`, with the environment winning; no key → startup stops before the models load; an LLM failure is a 500.
-  - 27 mutations each break at least one of them.
+  - They prove that the reviewer decision is no side door (its texts are capped, guarded, and redacted before the graph), and that a labeled id only replays its own question.
+  - They prove the LLM switch: off unless exactly "1"; only the switch and the key read from `.env`, with the environment winning whenever a value is PRESENT, even empty; no key → startup stops before the models load; an LLM failure is a 500.
+  - They prove the rate limit with a fake clock: 429 + `Retry-After` on both endpoints, per client, `/health` exempt, and the window sliding open again.
+  - 47 mutations each break at least one of them.
 - Live smoke is opt-in, in two tiers:
   - free: Uvicorn with the real local models (12 s startup), curl, and a 93-query sweep per role. It shows real latency (about 38 ms per request) and the real route distribution;
   - paid: `PROCURERAG_LIVE_LLM=1`, bounded to 3 `openai/gpt-4o` calls (1.5–3.6 s each), recorded below with what the answers got right and wrong.
@@ -5385,19 +5496,28 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
 - The local API starts, and `/health` works without touching the pipeline.
 - `/query` and `/query/stream` are tested, and the entry guards (length, scope, injection/PII, role) are represented by tests.
 - Q091/Q092 cannot silently auto-approve.
-- The gates are green: 346 tests, compileall, ruff, and the regression suite.
-- This log holds real smoke evidence (retrieval-only and live LLM) and honest caveats (caller-asserted role, no rate limit, stateless approval, rows not persisted, live answers unevaluated).
+- The gates are green: 357 tests, compileall, ruff, and the regression suite.
+- The four review findings (2026-10-15) are fixed and tested. The HER-289 rate-limit criterion ("a safe rate-limit stub or local deterministic rate limiter") is met by the learning-grade limiter, not by documenting its absence. Hermes confirms that this is acceptable.
+- This log holds real smoke evidence (retrieval-only and live LLM) and honest caveats (caller-asserted role, learning-grade rate limit, stateless approval, rows not persisted, free text unchecked, live answers unevaluated).
 - I can explain the lifecycle from request validation to the streamed result without notes, and Hermes re-runs the gates.
+
+**8. Why a labeled `query_id` must come with its own question's text (from the review).**
+
+- Gold labels say which documents ONE question needs. They describe that question's text. They are not a setting that can be attached to any text.
+- Paired with another question, they still "work": the graph measures the new question's evidence against the old question's needs. The result is a confident, internally consistent, and false answer: the cleaning-contractor question sent with an approval question's id reported POL-001 "missing".
+- So there are two kinds of request. Free text (no id) is the production path: no labels, no gap detection, and the response says so. A labeled id replays an evaluation question, and only with its exact text (otherwise 422).
+- The honest consequence: in production nothing measures completeness. Q092's question as free text retrieves the wrong supplier's contract, and only the caveat warns. Closing that gap needs a label-free check, which is an open problem here.
 
 ### Next step
 
-1. **Juan:** read and run every line of `src/api.py` and `tests/test_api.py`. Re-run "Verification after build", start the server, and try your own requests in `/docs` (Swagger UI at `http://127.0.0.1:8000/docs`). Then try a requester question about a supplier contract, and a paraphrased off-topic question that contains a procurement word, to see the scope guard's leak for yourself. Then restart it with `PROCURERAG_LIVE_LLM=1` (paid) and ask a few questions as a requester and as a buyer. Read the cited chunks, and judge the answers yourself.
+1. **Juan:** read and run every line of `src/api.py` and `tests/test_api.py`. Re-run "Verification after build", start the server, and try your own requests in `/docs` (Swagger UI at `http://127.0.0.1:8000/docs`). Then try a requester question about a supplier contract, and a paraphrased off-topic question that contains a procurement word, to see the scope guard's leak for yourself. Try the review's attacks too: Q091 with an `edit` decision whose `followup_query` holds an injection or an email, a labeled `query_id` with another question, and 31 quick requests in a row (the 31st gets a 429). Then restart it with `PROCURERAG_LIVE_LLM=1` (paid) and ask a few questions as a requester and as a buyer. Read the cited chunks, and judge the answers yourself.
 2. **Juan:** confirm the FastAPI docs and Week 5 preview reading in "Completion status", and answer the interview drill without notes.
 3. **Ask Hermes to review HER-289** with the route doc's review prompt.
 4. **Carry into Day 22 after a clean review:** a Dockerized local production runbook (`Dockerfile`, `.dockerignore`, health/API smoke, a config/secrets note, and actual Docker evidence or the exact daemon blocker). Bind `0.0.0.0` inside the container only. Decide whether the image bakes in the models or sets `HF_HUB_OFFLINE=1` over a cache, so startup does not depend on the Hub. Pass `OPENROUTER_API_KEY` and `PROCURERAG_LIVE_LLM` as container environment variables: no `.env` file in the image.
 5. **Week 5 backlog for the service (small):**
    - strip redaction placeholders before retrieval, and measure the effect on the Q001 case;
    - persist trace rows plus guard findings (`schema_version` 4);
-   - a rate limit at the ingress;
+   - a production rate limit at the ingress (or in a shared store), replacing the in-process one, plus a spend quota for the live LLM;
+   - a label-free evidence check for free-text requests (the Q092 free-text case above);
    - a real approval path (`POST /approvals/{id}`, a durable checkpointer, reviewer identity);
    - the role from an authenticated identity, and a pre-filter in retrieval.
