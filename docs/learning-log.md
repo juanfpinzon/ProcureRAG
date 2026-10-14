@@ -4914,3 +4914,205 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
    - an on-topic guard at the API entry point (the graph's gold-label diagnosis cannot run on free text);
    - a real approval path: the API returns "pending approval", a reviewer answers from a queue, the run resumes from a durable checkpointer, and the approval record carries the reviewer's identity.
 6. **Answer quality (paid):** make `regression_suite.py --live` graph-aware and score its answers against `expected_answer`. That is the only check that would catch the Band 4 / Cobalt class of errors.
+
+## 2026-10-07 — Day 21: FastAPI Async/Streaming Serving Surface
+
+Route doc: `docs/day-21-fastapi-async-streaming-serving-surface.md`.
+
+Linear: HER-289 — Day 21 loop: FastAPI async/streaming serving surface.
+
+Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
+
+Project rule: Juan owns implementation. Hermes scaffolded this route/log only and must not write `src/*.py` or `tests/test_*.py` for this day.
+
+### Course / docs target
+
+- No new Boot.dev chapter today. Day 21 starts Week 5 by turning the local ProcureRAG graph/guardrail pipeline into a small production-shaped HTTP service boundary.
+- Primary: freeCodeCamp — **Production RAG with LangChain & Vector Databases**:
+  - `Production Hosting`.
+  - `Production Project`.
+  - `Set up the Security Layer`.
+  - `Set up the LangGraph Agent and the FastAPI API - Testing and LangSmith Observability Dashboard`.
+  - `Test the Security Layer`.
+  - `Security Checklist`.
+- FastAPI docs:
+  - `Server-Sent Events (SSE)` → `What Are Server-Sent Events?`, `Streaming SSE with FastAPI`, `Return Type Annotations`, `ServerSentEvent`.
+  - `Custom Response - HTML, Stream, File, Others` → `StreamingResponse` / response-class behavior and OpenAPI caveats.
+  - `Testing` / `TestClient` for deterministic API tests.
+- Week 5 preview sources, read lightly only for context:
+  - Microsoft Learn — `Deploy a Flask or FastAPI web app as a container in Azure Container Apps`.
+  - Hugging Face MCP Course — Unit 1 `Introduction to Model Context Protocol (MCP)` and Unit 3 `Advanced MCP Development: Building Custom Workflow Servers for Claude Code`.
+
+Completion status:
+
+- freeCodeCamp source sections: _TODO: Fill in with exact sections completed and notes._
+- FastAPI SSE/custom response/testing docs: _TODO: Fill in._
+- Microsoft Learn / MCP preview reading, if used: _TODO: Fill in or mark not used today._
+
+### Objective
+
+Expose ProcureRAG through a minimal FastAPI service boundary that wraps the Week 4 guarded graph path:
+
+- typed request/response models for buyer queries, role/confidentiality context, status vocabulary, sources/citations, guard findings, and approval-required states;
+- `/health` that does not initialize live provider credentials;
+- one non-streaming query endpoint;
+- one streaming/SSE-style endpoint or tested event-iterator equivalent;
+- entry protections for input length, on-topic scope, role/confidentiality, and approval behavior;
+- default tests that are local and CI-safe.
+
+### Baseline verification at kickoff
+
+Run on 2026-10-07 before this route/log scaffold:
+
+```bash
+./.venv/bin/pytest -q
+# 304 passed in 4.54s
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
+```
+
+Git status at kickoff was clean on `main` before this Day 21 route/log scaffold was added.
+
+### API contract / artifact
+
+_TODO: Fill in after build._
+
+Suggested table to complete:
+
+| Endpoint / component | Purpose | Request schema | Response / event schema | CI-safe proof |
+|---|---|---|---|---|
+| `GET /health` | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| `POST /query` | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Streaming/SSE/equivalent path | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Approval / pending state | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+
+Serving dependency decision:
+
+- Packages added / lockfile changed: _TODO: Fill in exact packages, or mark no dependency change._
+- If dependency setup blocked: _TODO: exact command and error._
+
+### Entry-boundary behavior
+
+_TODO: Fill in after build._
+
+Expected evidence:
+
+- Input-length cap: _TODO._
+- On-topic/procurement scope behavior: _TODO._
+- PII / Day 20 guardrail reuse: _TODO._
+- Role/confidentiality behavior: _TODO._
+- Q091/Q092-shaped `pending_approval` behavior: _TODO._
+- Streaming/event behavior: _TODO._
+
+### Verification after build
+
+_TODO: Fill in exact command output after implementation._
+
+```bash
+./.venv/bin/pytest -q
+# _TODO_
+
+./.venv/bin/python -m compileall -q src tests
+# _TODO_
+
+./.venv/bin/python -m ruff check src tests
+# _TODO_
+
+./.venv/bin/python src/regression_suite.py --verify-retrieval
+# _TODO_
+
+# chosen API smoke command(s), for example:
+./.venv/bin/python -m uvicorn src.api:app --host 127.0.0.1 --port 8000
+# _TODO: /health response, one query response, one streaming/SSE or event-iterator response_
+```
+
+If any live/SaaS/provider/deployment dependency blocks, record:
+
+- **Exact command tried:** _TODO._
+- **Exact error/blocker:** _TODO._
+- **Local CI-safe fallback evidence:** _TODO._
+- **Next retry path:** _TODO._
+
+### What failed or was confusing
+
+_TODO: Fill in after build._
+
+Prompts to answer:
+
+- Did SSE work directly, or did the route use `StreamingResponse` / event-iterator fallback?
+- Did FastAPI/TestClient require an additional dependency such as `httpx`?
+- Did the API accidentally initialize live credentials during tests?
+- Did `pending_approval` require an API-specific status instead of reusing Day 19 status values?
+- What exactly is real vs stubbed for rate limiting, role/confidentiality, and approval persistence?
+
+### What improved
+
+_TODO: Fill in after build._
+
+Prompts to answer:
+
+- What can a client now call that previously required a CLI?
+- Which unsafe requests are rejected before retrieval?
+- How does the user-visible response differ from raw trace internals?
+- What structured events can a UI/client observe?
+
+### What remains weak / confusing
+
+_TODO: Fill in after build._
+
+Expected caveats to consider:
+
+- Graph-path answer quality remains a separate eval problem.
+- Rate limiting may be a stub.
+- Approval persistence may still be in-memory.
+- Role/confidentiality filtering may be prototype-level.
+- Streaming may be an event iterator rather than browser-ready SSE.
+- Docker/Azure/CI/CD/MCP are Week 5 follow-up days, not Day 21 closure requirements.
+
+### What I can now explain in an interview
+
+_Draft answers built from today's evidence. Answer the drill without notes before the Hermes review._
+
+**1. Script-shaped RAG demo vs service boundary.**
+
+- _TODO: Fill in with Juan's explanation._
+
+**2. Why Q091/Q092 should return `pending_approval` instead of auto-approving.**
+
+- _TODO: Fill in._
+
+**3. What stream events represent in ProcureRAG.**
+
+- _TODO: Fill in._
+
+**4. Role/confidentiality enforcement vs PII redaction.**
+
+- _TODO: Fill in._
+
+**5. CI-safe API tests vs optional live smoke.**
+
+- _TODO: Fill in._
+
+**6. How FastAPI response models help a RAG service.**
+
+- _TODO: Fill in._
+
+**7. What must be true before HER-289 closes.**
+
+- _TODO: Fill in._
+
+### Next step
+
+1. **Juan:** read `docs/day-21-fastapi-async-streaming-serving-surface.md`, complete the named freeCodeCamp/FastAPI source sections, and design the API contract table before coding.
+2. **Juan:** implement the Day 21 serving artifact yourself (`src/*.py` and `tests/test_*.py` remain Juan-owned), keeping default tests local and credential-free.
+3. **Juan:** fill this learning-log entry with real endpoint, test, smoke, and caveat evidence.
+4. **Ask Hermes to review HER-289** with the route doc's review prompt.
+5. **Carry into Day 22 after a clean review:** Dockerized local production runbook (`Dockerfile`, `.dockerignore`, health/API smoke, config/secrets note, and actual Docker evidence or exact daemon blocker).
