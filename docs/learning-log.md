@@ -4945,9 +4945,25 @@ Project rule: Juan owns implementation. Hermes scaffolded this route/log only an
 
 Completion status:
 
-- freeCodeCamp source sections: _TODO: Fill in with exact sections completed and notes._
-- FastAPI SSE/custom response/testing docs: _TODO: Fill in._
-- Microsoft Learn / MCP preview reading, if used: _TODO: Fill in or mark not used today._
+- **freeCodeCamp source sections:** the route doc records "Completed full course", and marks each of the six sections above "Completed" (Juan's note in `docs/day-21-fastapi-async-streaming-serving-surface.md`).
+- **FastAPI SSE / custom response / testing docs:** Read.
+- **Package source used for the build:** FastAPI 0.143.1, read in the installed package:
+  - `fastapi/sse.py`: `EventSourceResponse` is a marker subclass of `StreamingResponse` (media type `text/event-stream`). `ServerSentEvent` has `data` / `raw_data` / `event` / `id` / `retry` / `comment`.
+  - `fastapi/routing.py`: a route streams SSE when its endpoint is a generator and its `response_class` is `EventSourceResponse`. A sync (`def`) generator is iterated in the thread pool. Dependencies are solved BEFORE the stream starts. A `: ping` keep-alive comment is sent after 15 s of silence.
+- **Microsoft Learn / MCP preview reading:** Quick read.
+
+How each section maps onto what was built. This is my mapping by section title onto ProcureRAG, not the course's wording:
+
+| Source section | ProcureRAG today |
+|---|---|
+| `Production Hosting` | Uvicorn on `127.0.0.1:8000`. The models load in FastAPI's `lifespan`, before the first request is accepted. `/health` never touches the pipeline |
+| `Production Project` | One new module (`src/api.py`) over the unchanged Day 16–20 modules. One service object is built at startup, and a dependency-injection seam (`get_service`) lets tests swap in fakes |
+| `Set up the Security Layer` | Entry checks in request order: schema (length, role, decision), labeled `query_id`, Day 20 injection/PII, scope, approval boundary, then the role filter on retrieval |
+| `Set up the LangGraph Agent and the FastAPI API - Testing and LangSmith Observability Dashboard` | The API calls Day 20's `GuardedPipeline` (the Day 19 graph inside). Tests use `TestClient`. The live LLM is opt-in (`PROCURERAG_LIVE_LLM=1`, on the command line or in `.env`), using Day 19's structured OpenRouter client. LangSmith stays off for the API (`.env` is never loaded into the environment). Trace rows are built and validated, but not persisted |
+| `Test the Security Layer` | `tests/test_api.py`: 42 HTTP-level and startup test cases, mutation-checked |
+| `Security Checklist` | "Serving-readiness checklist" below: real vs. prototype vs. missing |
+| FastAPI `Server-Sent Events (SSE)` | `POST /query/stream` with `response_class=EventSourceResponse`, yielding `ServerSentEvent(event=..., data=<Pydantic model>, id=<sequence>)`. Native SSE worked, so no fallback was needed |
+| FastAPI `Custom Response` | `EventSourceResponse` is a `StreamingResponse`. The OpenAPI caveat is real: `/docs` shows only the generic SSE frame (`data` as a string), not the payload models, so the event payloads are documented in code and below |
 
 ### Objective
 
@@ -4983,99 +4999,331 @@ Git status at kickoff was clean on `main` before this Day 21 route/log scaffold 
 
 ### API contract / artifact
 
-_TODO: Fill in after build._
-
-Suggested table to complete:
+`src/api.py`: a FastAPI app around Day 20's `GuardedPipeline`. The only Day 16–20 change is one new value in Day 20's `GuardName` vocabulary (`"off_topic"`), so the scope guard can report through the same `GuardFinding` contract.
 
 | Endpoint / component | Purpose | Request schema | Response / event schema | CI-safe proof |
 |---|---|---|---|---|
-| `GET /health` | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| `POST /query` | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Streaming/SSE/equivalent path | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Approval / pending state | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| `GET /health` | Liveness. Never builds or calls the pipeline, and contacts no provider | none | `HealthResponse {status: "ok", app, version, live_llm}`; `live_llm` reports whether THIS running server was built with an LLM client (what startup built, not what `.env` says now; never a provider call) | `test_health_answers_without_building_the_pipeline_or_calling_a_provider` (the pipeline builder, the service dependency, and the OpenRouter factory are all made to raise; the switch is on, but no startup ran, so `live_llm` is false); the startup test checks the true case |
+| `POST /query` | One question in, one typed result out | `QueryRequest {query: 1–500 chars, role: "requester" \| "buyer", query_id?: labeled id, decision?: {type, followup_query?, message?}}`; unknown keys are a 422 | `QueryResponse {status, query_id, text, sources: [{source_id, doc_id, chunk_id, cited}], findings: [GuardFinding], approval_request?, run_id?, caveats}` | fake retriever + fake LLM through the real graph; e.g. `test_a_requester_never_gets_a_confidential_chunk_and_a_buyer_does` |
+| `POST /query/stream` | The same request, as Server-Sent Events | same `QueryRequest` | events `request_validated` → `guard_finding`* → `retrieval_started` → `guard_finding`* → `result`. `result` is always last and carries the same `QueryResponse` | `test_the_stream_emits_typed_events_in_request_order` (5 scenarios), `test_the_last_stream_event_is_the_same_response_as_post_query` |
+| Approval / pending state | Q091/Q092 without a decision | `decision` omitted | `status: "pending_approval"` + `approval_request {query_id, query (redacted), proposed_action, proposed_followup_query, allowed_decisions, note}`. Nothing is retrieved | `test_real_q091_and_q092_return_pending_approval_and_run_nothing_without_a_decision` (the REAL labeled rows and Day 16's REAL follow-up table) |
+| Optional `POST /approvals/{id}` | Resume path | — | — | **Deferred.** Approval is a stateless re-submission: the caller sends the same request again, with a `decision` |
+
+Status vocabulary (`ApiStatus`):
+
+| status | Meaning | Set by |
+|---|---|---|
+| `answered` | The LLM answered, with at least one valid citation | Day 19 result. Served app: only with `PROCURERAG_LIVE_LLM=1` (live smoke: 3 of 3 calls) |
+| `model_declined` | Complete evidence, but the model said it was not enough | Day 19 result. Possible with the live LLM; not seen in today's 3 live calls |
+| `gap_report` | Required evidence is missing. For a requester, the text is reworded when the missing document is restricted | the graph |
+| `not_generated` | Evidence complete, and the live LLM is switched off | the served app's default outcome |
+| `blocked` | The user did not get the agent's text: an entry guard refused the request, or Day 20's output guard withheld an uncited answer (the trace row still says `answered`) | the API |
+| `pending_approval` | The query may need the follow-up pass, and no decision came with it. Nothing ran | the API |
+
+There is no `error` status. A malformed request is an HTTP 422, and a real failure stays an HTTP 500.
+
+One pipeline, two transports: `run_query_events` is a generator that yields one `(event_name, payload)` per stage. `/query/stream` sends each one as it is produced, and `/query` keeps only the last (the `result`). The two endpoints cannot drift apart, and a test pins that.
 
 Serving dependency decision:
 
-- Packages added / lockfile changed: _TODO: Fill in exact packages, or mark no dependency change._
-- If dependency setup blocked: _TODO: exact command and error._
+- Packages added: `uv add fastapi uvicorn` installed `fastapi==0.143.1` (with `starlette==1.8.0`) and `uvicorn==0.54.0`, both in `[project] dependencies`. `uv add --dev httpx` declared `httpx>=0.28.1` in the dev group: `TestClient` imports it. It was already installed transitively, and is now declared explicitly.
+- Lockfile: `uv.lock` changed (+49 lines); `pyproject.toml` +3 lines.
+- Blocker: none. FastAPI ≥ 0.135 ships native SSE (`fastapi.sse`), so the `StreamingResponse` fallback was not needed.
 
 ### Entry-boundary behavior
 
-_TODO: Fill in after build._
+- **Input-length cap:** `MAX_QUERY_CHARS = 500` in the Pydantic schema. The longest labeled query is 97 characters. 501 characters → HTTP 422 with `loc ["body", "query"]`; an empty query → 422; exactly 500 → runs. The endpoint never runs on a 422, so neither does retrieval (tested). Live: 501 characters → 422.
+- **Malformed requests:** these are a 422 on BOTH endpoints, before a stream starts, with nothing run:
+  - a missing or unknown role;
+  - a misspelled key (`decison`);
+  - an `edit` without a `followup_query` (Day 18's own `decision_error` is the validator);
+  - `{"type": "aprove"}`;
+  - an unknown `query_id`.
+- **On-topic / procurement scope:** `guard_procurement_scope`, a keyword allow-list regex in the same style as Day 20's `INJECTION_PATTERNS`. It covers procurement terms, the KB's spend categories, and its six supplier names. No term → `off_topic` / `input` / `block`, `OFF_TOPIC_MESSAGE`, and no retrieval.
+  - Measured: 0 of the 93 labeled queries are refused. That is a regression check, not proof that it generalizes: the list was written with those queries in view. 0 of 8 off-topic probes get through (weather, poem, World Cup, capital of France, paella, joke, bike, movie).
+  - Known leak: any off-topic text that contains a listed term.
+- **PII / Day 20 guardrail reuse:** Day 20's input guard runs first, unchanged. Injection → `blocked`, and an injection with no procurement word is still reported as `prompt_injection`, not `off_topic` (tested). PII → redacted before retrieval, and never returned in the response (tested: the raw email and phone appear nowhere in the JSON).
+- **Role/confidentiality behavior:**
+  - `ROLE_CLEARANCE`: a `requester` sees `Internal`; a `buyer` sees `Internal` and `Confidential`. A document with no known label is hidden from every role (fail closed).
+  - The filter wraps `retrieve_fn` per request, inside Day 20's context guard. A confidential chunk therefore never reaches the injection guard, the diagnosis, the LLM, the trace row, or the response.
+  - A gap caused by a restricted document gets `RESTRICTED_GAP_MESSAGE`. Day 17's gap text names the missing document ids, which would reveal that a confidential document exists.
+  - The role is caller-asserted. There is no authentication.
+- **Q091/Q092-shaped `pending_approval` behavior:** without a `decision`, both real queries return `pending_approval` with the proposed follow-up query from Day 16's table, `run_id: null`, and zero retrieval or LLM calls, on both endpoints.
+  - The entry guards run first, so a Q091-shaped injection is `blocked`, not pending (tested).
+  - With a `decision`, the run goes through Day 18's gate. Day 20's `excessive_agency` finding repeats the recorded decision, and never claims a reviewer.
+- **Streaming/event behavior:** native SSE. Each event has `event:` (name), `data:` (the payload model as JSON), and `id:` (sequence 1..n). Input findings are streamed before `retrieval_started`. Context, action, and output findings follow it, each streamed once. `result` is always last, so a stream that ends without one is a failure the client can detect.
 
-Expected evidence:
+Serving-readiness checklist (my application of the freeCodeCamp `Security Checklist` idea to this service):
 
-- Input-length cap: _TODO._
-- On-topic/procurement scope behavior: _TODO._
-- PII / Day 20 guardrail reuse: _TODO._
-- Role/confidentiality behavior: _TODO._
-- Q091/Q092-shaped `pending_approval` behavior: _TODO._
-- Streaming/event behavior: _TODO._
+| Control | Status today |
+|---|---|
+| Request schema validation (types, unknown keys, length) | **Real**: Pydantic → 422 |
+| Prompt injection: query and retrieved chunks | **Real**, deny-list (Day 20) |
+| PII redaction | **Real**, regex baseline (Day 20) |
+| Off-topic refusal | **Real**, keyword allow-list |
+| Authorization by `confidentiality` | **Prototype**: enforced and tested, but a post-filter, and the role is caller-asserted |
+| Authentication | **Missing** |
+| Rate limit / quota | **Missing**, not even a stub. It belongs at the ingress (Day 22/23) or in a shared store |
+| HITL approval | **Real gate**, as a stateless re-submission. The decision is caller-asserted, with no reviewer identity, no review queue, and no durable checkpointer |
+| Output handling | Day 20 output guard. `text` is plain text, so a web client must still escape it |
+| Secrets / providers | LLM off by default. Exactly two values are read from `.env`: the switch `PROCURERAG_LIVE_LLM` and `OPENROUTER_API_KEY`. Each comes from the environment first, else from `.env` via `dotenv_values`, so nothing else from `.env` enters the process (tested). `PROCURERAG_LIVE_LLM=0` on the command line overrides a `"1"` in `.env` (tested). No key → startup fails before the models load (tested). Tests never read the developer's real `.env` |
+| LLM failure | **Real, but blunt**: a provider error is an HTTP 500 on `/query`. The stream stops before its `result` event (tested). No retry, no fallback |
+| Audit trail | Trace rows are built and validated per run, but **not persisted**. `run_id` is returned, with nothing on disk behind it yet |
+| Network binding | `127.0.0.1` locally; `0.0.0.0` only inside a container (Day 22) |
+| Startup network access | Model loading contacts the Hugging Face Hub (startup prints an "unauthenticated requests to the HF Hub" warning). With the models cached, `HF_HUB_OFFLINE=1` loads both without the Hub (checked) |
 
 ### Verification after build
 
-_TODO: Fill in exact command output after implementation._
+Run on 2026-10-14:
 
 ```bash
 ./.venv/bin/pytest -q
-# _TODO_
+# 346 passed in 2.22s   (304 baseline + 42 new in tests/test_api.py: 23 test functions)
 
 ./.venv/bin/python -m compileall -q src tests
-# _TODO_
+# clean, no output
 
 ./.venv/bin/python -m ruff check src tests
-# _TODO_
+# All checks passed!
 
 ./.venv/bin/python src/regression_suite.py --verify-retrieval
-# _TODO_
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
 
-# chosen API smoke command(s), for example:
-./.venv/bin/python -m uvicorn src.api:app --host 127.0.0.1 --port 8000
-# _TODO: /health response, one query response, one streaming/SSE or event-iterator response_
+./.venv/bin/python src/agent_guardrails.py
+# The Day 20 scenario table is unchanged (8 scenarios, same guards, same statuses).
 ```
+
+API smoke against the live local pipeline, live LLM switched OFF (the default: no LLM call, no `.env` read, no LangSmith):
+
+```bash
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+    ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+# INFO:     Waiting for application startup.
+# Warning: You are sending unauthenticated requests to the HF Hub. ...
+# INFO:     Application startup complete.          (12 s after launch: model loading)
+# INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+
+curl -s http://127.0.0.1:8000/health
+# {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}
+
+curl -s -X POST http://127.0.0.1:8000/query -H 'content-type: application/json' \
+    -d '{"query": "What approval is required for a EUR 60,000 purchase order?", "role": "buyer", "query_id": "Q001"}'
+# {"status":"not_generated","query_id":"Q001",
+#  "text":"[not generated: evidence was complete, but no LLM client was passed to build_graph]",
+#  "sources":[{"source_id":1,"doc_id":"FAQ-001","chunk_id":"FAQ-001::chunk-12","cited":false}, ...
+#             {"source_id":3,"doc_id":"POL-001","chunk_id":"POL-001::chunk-4","cited":false}, ...],   (5 sources)
+#  "findings":[],"approval_request":null,"run_id":"276b5fe7-318d-4d1c-867f-854848eabeb6","caveats":[]}
+# HTTP 200 in 0.12 s
+
+# The rest are jq projections of each response (shortened):
+# Q091, buyer, no decision:
+# {"status":"pending_approval","approval_request":"approval bands EUR 50,000 250,000 Band 3 VP Procurement","run_id":null}
+# Q091, buyer, decision {"type": "approve", "message": "smoke test: approved from curl, not a human review"}:
+# {"status":"not_generated","findings":[{"guard":"excessive_agency","action":"route_to_hitl","detail":"follow-up retrieval
+#  'approval bands EUR 50,000 250,000 Band 3 VP Procurement' paused at the approval gate and was approved before it ran;
+#  message: 'smoke test: approved from curl, not a human review'"}],"added_by_pass2":["POL-001::chunk-6"],"n_sources":19}
+# Q092, requester, approve:
+# {"status":"gap_report","text":"Not answered: some of the evidence this question needs is in documents your role is not
+#  cleared to see, ...","docs":[FAQ-001, GLOSSARY-001, GUIDE-005, POL-001, POL-002, POL-004, POL-005, POL-006, POL-008, SOP-006],
+#  "mentions_contract_005":false}
+# Q092, buyer, approve:
+# {"status":"not_generated", "docs":[CONTRACT-005, CONTRACT-006, FAQ-001, ...], "mentions_contract_005":true}
+# "What is the capital of France?":  {"status":"blocked","findings":[["off_topic","input","block"]]}
+# 501 characters:                    422
+
+curl -s -N -X POST http://127.0.0.1:8000/query/stream -H 'content-type: application/json' \
+    -d '{"query": "I am jane.doe@example.com. What approval is required for a EUR 60,000 purchase order?", "role": "requester", "query_id": "Q001"}'
+# event: guard_finding
+# data: {"guard":"pii","layer":"input","action":"redact","detail":"redacted 1 email before retrieval and the LLM"}
+# id: 1
+#
+# event: request_validated
+# data: {"query_id":"Q001","role":"requester","query":"I am [REDACTED_EMAIL]. What approval is required for a EUR 60,000 purchase order?"}
+# id: 2
+#
+# event: retrieval_started
+# data: {"role":"requester","visible_confidentiality":["Internal"]}
+# id: 3
+#
+# event: result
+# data: {"status":"gap_report","query_id":"Q001","text":"Not answered: the retrieved context is still missing required
+#        evidence (primary document(s) ['POL-001']) after 1 retrieval pass(es).", ...}
+# id: 4
+#   (that gap is a real finding, not a role effect: see "What failed or was confusing")
+```
+
+Whole-corpus view per role, all 93 labeled queries, against the same running server (no decision sent):
+
+```bash
+./.venv/bin/python - <<'EOF'
+import collections, json
+import httpx
+rows = [json.loads(line) for line in open("data/corpus_v1/example_queries.jsonl")]
+for role in ("buyer", "requester"):
+    statuses, restricted = collections.Counter(), []
+    for row in rows:
+        body = httpx.post("http://127.0.0.1:8000/query", json={"query": row["query"], "role": role, "query_id": row["query_id"]}, timeout=60).json()
+        statuses[body["status"]] += 1
+        if body["text"].startswith("Not answered: some of the evidence"):
+            restricted.append(row["query_id"])
+    print(f"{role:9} {dict(statuses)} | restricted gaps: {len(restricted)} {restricted}")
+EOF
+# buyer     {'not_generated': 76, 'gap_report': 15, 'pending_approval': 2} | restricted gaps: 0 []
+# requester {'not_generated': 53, 'gap_report': 38, 'pending_approval': 2} | restricted gaps: 34 ['Q012', 'Q013', 'Q014',
+#   'Q020', 'Q023', 'Q045', 'Q053', ..., 'Q069', 'Q071', 'Q073', 'Q075', 'Q082', ..., 'Q088', 'Q093']
+# 186 requests in 7.0 s (about 38 ms each, live local retrieval)
+```
+
+The buyer view reproduces Day 17–20's route distribution through HTTP: 76 `generate` (`not_generated`: this sweep ran with the LLM switch off), 15 `report_gap`, and Q091/Q092 (now `pending_approval` instead of being auto-approved). The requester view is the measured cost of enforcing `confidentiality`. 34 of 93 labeled queries need a Confidential document, so a requester gets a reworded gap instead of an answer built from partial evidence. Server log: 202 × `200` and one `422` (the deliberate 501-character request), with no tracebacks.
+
+Live LLM wiring (`PROCURERAG_LIVE_LLM=1`). The same server, with the switch on. Three bounded, paid calls to OpenRouter's default `openai/gpt-4o`. The key came from `.env` via `dotenv_values` (it was not in the shell environment), and LangSmith was off:
+
+```bash
+PROCURERAG_LIVE_LLM=1 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+    ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+# INFO:     Application startup complete.
+
+curl -s http://127.0.0.1:8000/health
+# {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":true}
+
+# [paid call 1] Q001, buyer
+curl -s -X POST http://127.0.0.1:8000/query -H 'content-type: application/json' \
+    -d '{"query": "What approval is required for a EUR 60,000 purchase order?", "role": "buyer", "query_id": "Q001"}'
+# {"status":"answered","query_id":"Q001","text":"For a EUR 60,000 purchase order, VP Procurement approval is required
+#  along with a Finance review. This is because the total committed value over the full term of the commitment
+#  determines the approval level, not the invoice amount or the amount falling in a specific financial year [4][5].",
+#  "sources":[... {"source_id":4,"chunk_id":"FAQ-001::chunk-5","cited":true}, {"source_id":5,"chunk_id":"FAQ-001::chunk-6","cited":true}],
+#  "findings":[], "run_id":"7b061b0e-a003-436f-924f-595072dbbb5d", "caveats":[]}
+# HTTP 200 in 3.6 s
+
+# Q091 without a decision -> {"status":"pending_approval","run_id":null}   (no LLM call)
+# "What is the capital of France?" -> {"status":"blocked","findings":["off_topic"]}   (no LLM call)
+
+# [paid call 2] Q091, buyer, decision approve ("smoke test: approved from curl, not a human review")
+# {"status":"answered","text":"... The renewal falls within Band 3, which is for amounts above €50,000 up to and including
+#  €250,000. This requires approval by the VP Procurement, supported by a documented Finance review ... [11]. ...
+#  The supplier must maintain ISO 27001, SOC 2 Type II, and ISO 27018 certifications, with evidence refreshed annually [7].
+#  ... a lapsed certificate is treated as a control failure ... [5].",
+#  "cited":["5 POL-003::chunk-13","7 CONTRACT-004::chunk-9","11 POL-001::chunk-6"],
+#  "findings":[["excessive_agency","route_to_hitl"]],"n_sources":19}
+# HTTP 200 in 2.4 s
+
+# [paid call 3] stream, no query_id, requester
+curl -s -N -X POST http://127.0.0.1:8000/query/stream -H 'content-type: application/json' \
+    -d '{"query": "Can I approve a purchase requisition that I raised myself?", "role": "requester"}'
+# event: request_validated   (id 1)
+# event: retrieval_started   data: {"role":"requester","visible_confidentiality":["Internal"]}   (id 2)
+# event: result              data: {"status":"answered","query_id":null,"text":"No, you cannot approve a purchase
+#   requisition that you raised yourself. According to the Global Procurement Policy, the segregation of duties principle
+#   states that the person who raises a requisition may not approve it, regardless of their delegated authority [1].",
+#   "sources":[{"source_id":1,"doc_id":"POL-001","chunk_id":"POL-001::chunk-9","cited":true}, ...],
+#   "caveats":["no query_id was given, so there are no gold labels ... Treat this result as unchecked."]}   (id 3)
+# HTTP 200 in 1.5 s
+# Server log: 6 x 200, no tracebacks.
+```
+
+The switch from `.env` (checked after the `read_setting` change; `/health` only, so no paid call). `.env` holds `PROCURERAG_LIVE_LLM="1"`, and the shell environment has no `PROCURERAG_LIVE_LLM`:
+
+```bash
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+    ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+curl -s http://127.0.0.1:8000/health
+# {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":true}     <- the switch came from .env
+
+PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+    ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+curl -s http://127.0.0.1:8000/health
+# {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}    <- the command line overrides .env
+```
+
+What the three live answers show. These are not scored: this is a smoke test, not an eval.
+
+- **Q001:** VP Procurement plus a Finance review is right, but the answer leaves out that approvals are cumulative (the Budget Owner and Category Manager approve first). It cites the FAQ chunks [4] and [5], not POL-001.
+- **Q091:** **Band 3 is right this time** (Day 19's structured run 1 said Band 4). It cites [11] `POL-001::chunk-6`, the chunk the approved follow-up pass recovered, so the ignored-evidence flag stays quiet. But it also cites [7] `CONTRACT-004::chunk-9`, Meridian's own cloud contract, as if its certification list were the general SaaS rule. That is Day 19's wrong-scope class (the Cobalt case) again, and it passes every guard. A requester would not have seen CONTRACT-004 (Confidential) at all.
+- **Free text (Q003's question, with no `query_id`):** correct, citing the segregation-of-duties chunk, and flagged as unchecked.
+
+Mutation check, in a scratch copy: 27 mutations of `src/api.py` each turned at least one test red. They include:
+
+- removing the role filter, or making an unknown label visible (fail open);
+- dropping the restricted-gap rewording;
+- removing the pending-approval check, or moving it before the entry guards;
+- disabling the scope guard, or running it before the injection guard;
+- removing `max_length`, or the decision validator, or the unknown-`query_id` check, or `extra="forbid"`;
+- reporting the trace status even when the output guard withheld the answer;
+- streaming input findings twice, or not streaming post-run findings;
+- letting `/health` ask for the service;
+- the LLM wiring: `build_live_service` passing `client=None`, the switch accepting "true"/"yes", the switch ignoring `.env`, building the client while the switch is off, loading all of `.env` into the environment, letting `.env` beat the environment, `/health` hard-coding `live_llm`, reporting the switch instead of the built client, or building a client itself, and loading the models before the key check.
+
+The "scope before injection" mutation survived the first version of the tests. It was caught after adding a bare-injection case.
 
 If any live/SaaS/provider/deployment dependency blocks, record:
 
-- **Exact command tried:** _TODO._
-- **Exact error/blocker:** _TODO._
-- **Local CI-safe fallback evidence:** _TODO._
-- **Next retry path:** _TODO._
+- **Exact command tried:** none blocked. `uv add fastapi uvicorn` and `uv add --dev httpx` succeeded. Three bounded live LLM calls were made (see "Live LLM wiring"). No LangSmith, Azure, or Docker call was made today.
+- **Exact error/blocker:** n/a. (`uvicorn src.api:app`, the form in the original stub, fails with `ModuleNotFoundError: No module named 'agent_control_plane'`, because the modules use flat imports. `--app-dir src` is the working form.)
+- **Local CI-safe fallback evidence:** the 42 API tests (fake retriever and LLM, real graph; the startup tests run the real lifespan with the model loading and the OpenRouter factory replaced), and the live-retrieval smoke above (local models only).
+- **Next retry path:** n/a. The live LLM path is wired and was smoke-tested (3 calls).
 
 ### What failed or was confusing
 
-_TODO: Fill in after build._
-
-Prompts to answer:
-
-- Did SSE work directly, or did the route use `StreamingResponse` / event-iterator fallback?
-- Did FastAPI/TestClient require an additional dependency such as `httpx`?
-- Did the API accidentally initialize live credentials during tests?
-- Did `pending_approval` require an API-specific status instead of reusing Day 19 status values?
-- What exactly is real vs stubbed for rate limiting, role/confidentiality, and approval persistence?
+- **SSE worked directly.** FastAPI 0.143.1 has `fastapi.sse`, so there is no `StreamingResponse` fallback. What was confusing was *when* errors can still be reported. Once a stream has started, "200 OK" has already been sent. So the unknown-`query_id` check had to move into a dependency, which FastAPI solves before the stream begins. A test now checks that both endpoints answer 422 before streaming.
+- **FastAPI validated the body twice.** With `body: QueryRequest` declared both in the endpoint and in the `query_id` dependency, every 422 listed each error twice. A cached "identity" dependency did not fix it: FastAPI collects errors from every branch of the dependency tree. The fix was for the endpoints to receive the body ONLY through the dependency (`CheckedQuery`).
+- **`pending_approval` and `blocked` needed API-specific statuses.** Day 19's four statuses describe what the graph/model did. "The user got nothing because a guard refused" and "nothing ran because no decision came" are facts only the API knows. A Day 20 detail made this visible: an uncited answer is `answered` in the trace row but `blocked` for the user.
+- **Order matters, and the tests had to prove it.** A Q091-shaped injection must be `blocked`, not parked for a reviewer, so the entry guards run before the approval boundary (a mutation moving the check first was caught). An off-topic injection must be reported as an injection. That ordering was NOT tested at first: its mutation survived until the bare-injection case was added.
+- **The PII placeholder changes retrieval.** Q001 with "I am jane.doe@example.com." in front ends in `gap_report` (POL-001 missing), for both roles. The email is redacted to `[REDACTED_EMAIL]` before retrieval, and that placeholder is text the retriever embeds: the same prefix typed as `[REDACTED_EMAIL]` gives the same gap, while "Hi team." keeps POL-001. Day 20's redaction protects the data, but the placeholder perturbs retrieval. The graph's gap rule turned it into an honest gap report rather than a wrong answer.
+- **A gap report can leak what it lacks.** Day 17's gap text names the missing documents. After the role filter removed CONTRACT-005, the requester's gap report would have said "missing … CONTRACT-005": no content, but still a disclosure that a confidential supplier contract exists and is relevant. The API rewords those gaps.
+- **Two corrections found in review of my own draft.**
+  - The role filter renumbered sources, but Day 20's context guard (which runs right after it) already does. Planning the mutations exposed the dead line, and it was removed.
+  - A docstring said `run_id` "leads an auditor to the trace row", but the API never saves rows. The wording and the honest limits now say so.
+- **Did the API initialize live credentials during tests?** No.
+  - Most tests never run the lifespan (`TestClient` without `with`).
+  - The two startup tests do run it, with the model loading and the OpenRouter factory replaced. Their key is a fake environment variable.
+  - No test reads the developer's real `.env`: every test's `api` module points `DOTENV_PATH` at a missing file, and a test that needs a `.env` writes its own in `tmp_path`.
+  - The `/health` test makes the pipeline builder, the service dependency, and the client factory raise, and still passes.
+  - `api.py` never calls `load_dotenv()`.
+- **The first version shipped the LLM unwired (review finding, 2026-10-14).** `build_live_service` passed `client=None`, so the served app could never answer. Only the tests, with a fake client, ever reached `answered`. Wiring it in exposed a second gap: that one line had no test, because the function loaded the real models, so a revert to `client=None` would have passed every test. The slow loading moved into `load_live_pipeline`, so a test now runs the REAL startup path (`lifespan` → `build_live_service` → `make_llm_client`) with fakes, and proves that an HTTP request reaches the LLM only when the switch is on.
+- **`PROCURERAG_LIVE_LLM="1"` in `.env` did nothing at first (2026-10-14).** The switch was read only from the process environment, while the key already fell back to `.env`: two settings, two rules. Both now go through `read_setting` (the environment first, else `.env`, and never the rest of `.env`). Two follow-ups:
+  - the change immediately broke 3 tests on this machine, because they had cleared the environment variable and so fell back to the real `.env`. Tests now never read a developer's `.env`;
+  - `/health` used to read the switch on every probe. With the switch in an editable file, it could claim `live_llm: true` for a server that was started with it off. It now reports the client startup actually built.
+- **What is real vs. stubbed:**
+  - rate limiting: missing, not stubbed;
+  - role/confidentiality: enforced and tested, but caller-asserted and a post-filter;
+  - approval persistence: none, because approval is a stateless re-submission, not a resume.
 
 ### What improved
 
-_TODO: Fill in after build._
-
-Prompts to answer:
-
-- What can a client now call that previously required a CLI?
-- Which unsafe requests are rejected before retrieval?
-- How does the user-visible response differ from raw trace internals?
-- What structured events can a UI/client observe?
+- **A client can call ProcureRAG over HTTP**, with a typed contract that `/docs` publishes, instead of running a CLI and reading its output.
+- **Unsafe or useless requests are rejected before retrieval:** malformed or too-long bodies (422), injection attempts, off-topic questions, and Q091/Q092 without a decision.
+- **The user-visible response is smaller than the trace.** The caller gets `status`, user-safe `text`, source ids, findings (which never hold a sensitive value), and caveats. The trace row, with the model's unredacted text, stays on the server.
+- **Confidentiality labels are enforced for the first time.** Day 20 recorded "retrieval ignores `confidentiality`" as an open LLM02/LLM08 gap. Now a requester never receives a Confidential chunk, nor the id of a restricted missing document. The cost is measured: 34 of 93 labeled queries.
+- **The approval gate survives the move to a service.** Q091/Q092 return `pending_approval` with what a reviewer needs, run nothing without a decision, and never auto-approve.
+- **The service can answer, when asked to.** With `PROCURERAG_LIVE_LLM=1`, the same guarded path ends in a cited, schema-validated LLM answer: 3 of 3 live calls `answered`, in 1.5–3.6 s. With the switch off (the default), nothing paid ever runs.
+- **A UI can watch the request** through typed SSE events (validated, findings, retrieval started, result), and gets the same final contract as the JSON endpoint.
 
 ### What remains weak / confusing
 
-_TODO: Fill in after build._
-
-Expected caveats to consider:
-
-- Graph-path answer quality remains a separate eval problem.
-- Rate limiting may be a stub.
-- Approval persistence may still be in-memory.
-- Role/confidentiality filtering may be prototype-level.
-- Streaming may be an event iterator rather than browser-ready SSE.
-- Docker/Azure/CI/CD/MCP are Week 5 follow-up days, not Day 21 closure requirements.
+- **Graph-path answer quality is still unmeasured.**
+  - The live LLM works (3 of 3 calls answered with valid citations), but nothing scores those answers.
+  - Today's Q091 answer got Band 3 right, yet cited Meridian's own contract (CONTRACT-004) as a general SaaS rule: Day 19's wrong-scope class, which passes every guard.
+  - Q001's answer omitted that approvals are cumulative.
+- **The live LLM is a cost exposure while there is no rate limit.** It is off by default, bound to 127.0.0.1, and one call per complete-evidence request. Provider errors are a bare HTTP 500, with no retry and no fallback answer.
+- **Authorization is a prototype.**
+  - There is no authentication; the role comes from the request body.
+  - The filter runs after ranking, so a requester's context is smaller than `top_k`.
+  - The production version takes the role from a verified identity and pre-filters inside the index.
+- **Approval is a stateless re-submission.**
+  - The reviewer does not see the measured gap, because the decision comes before pass 1.
+  - The decision is caller-asserted, and the record has no reviewer identity.
+  - There is no review queue and no durable checkpointer.
+- **There is no rate limit or quota.**
+- **Trace rows are not persisted**, so `run_id` has nothing on disk behind it. Guard findings are also still not in the row (that needs a `schema_version` bump).
+- **The gold-label diagnosis still bounds the service.** Without a `query_id`, the graph cannot see a gap, and the response says the result is unchecked.
+- **The scope guard is a keyword allow-list**, fitted to this corpus.
+- **The PII placeholder perturbs retrieval** (the Q001 case above).
+- **Stream events mark stage boundaries, not node-level or token progress.** `GuardedPipeline.run` is one blocking call.
+- **OpenAPI documents only the generic SSE frame**, not the event payload models.
+- **Startup contacts the Hugging Face Hub** unless `HF_HUB_OFFLINE=1` is set.
+- **Docker/Azure/CI/CD/MCP are Week 5 follow-up days**, not Day 21 closure requirements.
 
 ### What I can now explain in an interview
 
@@ -5083,36 +5331,73 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
 
 **1. Script-shaped RAG demo vs service boundary.**
 
-- _TODO: Fill in with Juan's explanation._
+- A script trusts its operator: the person running it picks the query ids, the approval decision, and the flags, and reads the logs.
+- A service has untrusted callers, so the edge has to state the contract:
+  - a request schema (`QueryRequest`: question ≤ 500 characters, role, optional labeled id, optional decision);
+  - what is refused before retrieval (422s, injection, off-topic, a missing decision);
+  - what this caller may see (role vs. `confidentiality`);
+  - a typed result (`status`, user-safe `text`, sources, findings, caveats) instead of a printed trace.
+- The service doesn't make ProcureRAG smarter. It makes the policy explicit, and enforces it on every request.
 
 **2. Why Q091/Q092 should return `pending_approval` instead of auto-approving.**
 
-- _TODO: Fill in._
+- Day 18's gate protects the agent's only action, the follow-up retrieval pass.
+- An API that silently approves would remove the human control: Day 19's `run_and_trace` default did exactly that until Day 20 made `GuardedPipeline.run` refuse a missing decision.
+- At the API edge, that refusal becomes a product state: `pending_approval`, with the proposed follow-up query, zero retrieval calls, and no `run_id`. The caller re-submits with approve, edit, or reject.
+- The honest part: the decision is caller-asserted, comes before the gap is measured, and records no reviewer identity. A real review queue resumes a paused run from a durable checkpointer.
 
 **3. What stream events represent in ProcureRAG.**
 
-- _TODO: Fill in._
+- Stage boundaries and safety decisions, not tokens:
+  - `request_validated` (with the redacted text that will run);
+  - `guard_finding` (one per finding, at its stage);
+  - `retrieval_started` (with the role's visible labels);
+  - `result` (always last; the same `QueryResponse` as `/query`).
+- A client can show the redaction, the block, or the approval decision without scraping logs. A missing `result` means the stream failed.
+- Node-level progress would need `graph.stream()`, and token streaming would need a streaming LLM client.
 
 **4. Role/confidentiality enforcement vs PII redaction.**
 
-- _TODO: Fill in._
+- PII redaction finds patterns in text (an email, a card number, a `+` phone number) and removes them.
+- Authorization decides whether this caller may see a document at all. CONTRACT-005 contains no PII, so a regex lets it straight through. Yet a requester must not get it.
+- The API filters by the document's label before the context guard, the diagnosis, the LLM, or the response sees it, and rewords a gap report that would name it.
+- The measured cost: 34 of 93 labeled queries become restricted gaps for a requester.
 
 **5. CI-safe API tests vs optional live smoke.**
 
-- _TODO: Fill in._
+- CI-safe tests: 42 cases over HTTP (`TestClient`), against the real FastAPI app, the real Day 19 graph, and Day 20's guards, with a fake retriever and a fake LLM that record what they received. No real model is loaded, and there is no network.
+  - They prove the schemas, the 422s, guard order, the role filter, pending approval, and the stream structure.
+  - They also prove the LLM switch: off unless exactly "1"; only the switch and the key read from `.env`, with the environment winning; no key → startup stops before the models load; an LLM failure is a 500.
+  - 27 mutations each break at least one of them.
+- Live smoke is opt-in, in two tiers:
+  - free: Uvicorn with the real local models (12 s startup), curl, and a 93-query sweep per role. It shows real latency (about 38 ms per request) and the real route distribution;
+  - paid: `PROCURERAG_LIVE_LLM=1`, bounded to 3 `openai/gpt-4o` calls (1.5–3.6 s each), recorded below with what the answers got right and wrong.
 
 **6. How FastAPI response models help a RAG service.**
 
-- _TODO: Fill in._
+- The return annotation (`-> QueryResponse`) is the contract: FastAPI validates every response against it and publishes it in OpenAPI.
+- Clients switch on `status` and `approval_request` instead of parsing prose. `extra="forbid"` turns a misspelled request key into a named 422 instead of silent "pending_approval" confusion.
+- It complements the internal Day 19 models, not replaces them. `AgentRunTrace` is the full audit row; `QueryResponse` is the smaller, user-safe projection.
+- Caveat: for SSE, OpenAPI only shows the generic event frame.
 
 **7. What must be true before HER-289 closes.**
 
-- _TODO: Fill in._
+- The local API starts, and `/health` works without touching the pipeline.
+- `/query` and `/query/stream` are tested, and the entry guards (length, scope, injection/PII, role) are represented by tests.
+- Q091/Q092 cannot silently auto-approve.
+- The gates are green: 346 tests, compileall, ruff, and the regression suite.
+- This log holds real smoke evidence (retrieval-only and live LLM) and honest caveats (caller-asserted role, no rate limit, stateless approval, rows not persisted, live answers unevaluated).
+- I can explain the lifecycle from request validation to the streamed result without notes, and Hermes re-runs the gates.
 
 ### Next step
 
-1. **Juan:** read `docs/day-21-fastapi-async-streaming-serving-surface.md`, complete the named freeCodeCamp/FastAPI source sections, and design the API contract table before coding.
-2. **Juan:** implement the Day 21 serving artifact yourself (`src/*.py` and `tests/test_*.py` remain Juan-owned), keeping default tests local and credential-free.
-3. **Juan:** fill this learning-log entry with real endpoint, test, smoke, and caveat evidence.
-4. **Ask Hermes to review HER-289** with the route doc's review prompt.
-5. **Carry into Day 22 after a clean review:** Dockerized local production runbook (`Dockerfile`, `.dockerignore`, health/API smoke, config/secrets note, and actual Docker evidence or exact daemon blocker).
+1. **Juan:** read and run every line of `src/api.py` and `tests/test_api.py`. Re-run "Verification after build", start the server, and try your own requests in `/docs` (Swagger UI at `http://127.0.0.1:8000/docs`). Then try a requester question about a supplier contract, and a paraphrased off-topic question that contains a procurement word, to see the scope guard's leak for yourself. Then restart it with `PROCURERAG_LIVE_LLM=1` (paid) and ask a few questions as a requester and as a buyer. Read the cited chunks, and judge the answers yourself.
+2. **Juan:** confirm the FastAPI docs and Week 5 preview reading in "Completion status", and answer the interview drill without notes.
+3. **Ask Hermes to review HER-289** with the route doc's review prompt.
+4. **Carry into Day 22 after a clean review:** a Dockerized local production runbook (`Dockerfile`, `.dockerignore`, health/API smoke, a config/secrets note, and actual Docker evidence or the exact daemon blocker). Bind `0.0.0.0` inside the container only. Decide whether the image bakes in the models or sets `HF_HUB_OFFLINE=1` over a cache, so startup does not depend on the Hub. Pass `OPENROUTER_API_KEY` and `PROCURERAG_LIVE_LLM` as container environment variables: no `.env` file in the image.
+5. **Week 5 backlog for the service (small):**
+   - strip redaction placeholders before retrieval, and measure the effect on the Q001 case;
+   - persist trace rows plus guard findings (`schema_version` 4);
+   - a rate limit at the ingress;
+   - a real approval path (`POST /approvals/{id}`, a durable checkpointer, reviewer identity);
+   - the role from an authenticated identity, and a pre-filter in retrieval.

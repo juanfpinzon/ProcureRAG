@@ -148,6 +148,7 @@ GuardName = Literal[
     "excessive_agency",  # an agent action that needs a human first (LLM06)
     "uncited_answer",  # an "answer" not grounded in any retrieved source (LLM05)
     "ignored_recovered_evidence",  # the follow-up pass found the missing evidence, but the answer ignores it (LLM09)
+    "off_topic",  # Day 21: a request outside procurement, refused at the API entry point (`api.guard_procurement_scope`)
 ]
 
 GuardAction = Literal["block", "redact", "flag", "route_to_hitl"]
