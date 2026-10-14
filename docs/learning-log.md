@@ -5521,3 +5521,265 @@ _Draft answers built from today's evidence. Answer the drill without notes befor
    - a label-free evidence check for free-text requests (the Q092 free-text case above);
    - a real approval path (`POST /approvals/{id}`, a durable checkpointer, reviewer identity);
    - the role from an authenticated identity, and a pre-filter in retrieval.
+
+## 2026-10-15 — Day 22: Dockerized Local Production Runbook
+
+Route: [`docs/day-22-dockerized-local-production-runbook.md`](day-22-dockerized-local-production-runbook.md)
+
+Linear: HER-290 — Day 22 loop: Dockerized local production runbook.
+
+Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. This is a production-packaging bridge day after the Day 21 FastAPI service.
+
+Mark each exact source target when complete and add one ProcureRAG-specific takeaway:
+
+- [ ] FastAPI docs — `FastAPI in Containers - Docker`:
+  - [ ] `Containers and Docker`.
+  - [ ] `What is a Container Image` / `Container Images`.
+  - [ ] `Build a Docker Image for FastAPI`.
+  - [ ] `Docker Cache`.
+  - [ ] `Start the Docker Container` / `Check it`.
+  - [ ] `Deployment Concepts`.
+  - [ ] `One Process per Container` / `Multiple Processes - Workers`.
+  - [ ] `Base Docker Image` and the deprecated `tiangolo/uvicorn-gunicorn-fastapi` image warning.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Astral uv docs — `Using uv in Docker`:
+  - [ ] `Installing uv`.
+  - [ ] `Installing a project`.
+  - [ ] `Using the environment`.
+  - [ ] `Intermediate layers`.
+  - [ ] `Non-editable installs`.
+  - [ ] `.venv` in `.dockerignore`, uv version pinning, and `uv sync --locked`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Docker Docs — `Build context` → `.dockerignore` files / local filesystem context.
+  - ProcureRAG takeaway: _TODO: Explain why `.gitignore` alone cannot keep `.env` out of the Docker build context._
+- [ ] Docker Docs — `Dockerfile reference`:
+  - [ ] `FROM`, `WORKDIR`, `COPY`, `RUN`, `ENV`, `EXPOSE`, `USER`, `CMD`, `HEALTHCHECK`.
+  - [ ] Exec-form `CMD` and startup-aware health-check timing.
+  - [ ] Build-time vs runtime secret boundary.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only:
+  - [ ] `Scaling RAG Systems`.
+  - [ ] `The Real Costs of Vector Search`.
+  - [ ] `Production Hosting`.
+  - [ ] `Three Pillars of Production Visibility`.
+  - [ ] `Security Checklist`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-15:
+
+```text
+pytest: 357 passed in 6.94s
+compileall: clean
+Ruff: All checks passed!
+retrieval regression: all frozen cases matched; current pipeline matched every expected case
+git: clean main at a3f5dd9 before the Day 22 docs scaffold
+```
+
+The baseline test process emitted non-failing LangSmith HTTP 429 ingest warnings because tracing settings were available in the shell. Day 22's deterministic gates/container must set `LANGSMITH_TRACING=false` and `LANGSMITH_TRACING_V2=false` explicitly.
+
+Docker status on the Hermes VM at kickoff:
+
+```text
+docker --version
+bash: docker: command not found
+```
+
+This is a local tooling blocker only. It is not a successful Docker build/run and does not satisfy HER-290.
+
+### Container artifact contract
+
+Fill this before or while building:
+
+| Decision | Chosen value | Why | Evidence |
+|---|---|---|---|
+| Official Python base image + exact tag/digest policy | _TODO: Fill in._ | _TODO: Fill in._ | _TODO: image inspect._ |
+| Python version in image | _TODO: Fill in._ | Project requires Python `>=3.11` | _TODO: command/output._ |
+| uv source/version pin | _TODO: Fill in._ | Reproducible installer boundary | _TODO: command/output._ |
+| Locked dependency install | _TODO: Fill in._ | Preserve `uv.lock`; do not resolve fresh versions | _TODO: command/output._ |
+| Runtime vs dev dependency choice | _TODO: Fill in._ | _TODO: Fill in._ | _TODO: Fill in._ |
+| Dependency/source layer ordering | _TODO: Fill in._ | Reuse dependency layer when source changes | _TODO: cached rebuild evidence._ |
+| Runtime user | _TODO: Fill in._ | Avoid root if practical | _TODO: `id` output._ |
+| Uvicorn process/worker count | _TODO: Fill in._ | One worker while models/rate limit are process-local | _TODO: image config/log._ |
+| Container bind/port | _TODO: Fill in._ | `0.0.0.0` in container; host loopback by default | _TODO: run/inspect._ |
+| Health-check command/timing | _TODO: Fill in._ | Allow model initialization before failures count | _TODO: health inspect._ |
+| Model artifact/cache strategy | _TODO: bake, named cache, or explicit startup download fallback._ | _TODO: trade-off._ | _TODO: offline/startup probe._ |
+
+Juan-owned artifacts:
+
+- `Dockerfile`: _TODO: path and short structure summary._
+- `.dockerignore`: _TODO: path and excluded categories._
+- Runbook/config note: _TODO: path._
+- Optional safe `.env.example`: _TODO: created / deliberately not created. If created, confirm names and safe defaults only._
+- Optional compose file: _TODO: created / not needed, with reason._
+
+### Build-context and secret boundary
+
+Record the exact `.dockerignore` policy:
+
+- `.env` / `.env.*`: _TODO: Fill in; note any explicit safe exception such as `.env.example`._
+- `.venv`: _TODO: Fill in._
+- Python/test/lint caches: _TODO: Fill in._
+- `.git` / editor / OS files: _TODO: Fill in._
+- local traces/reports/model caches: _TODO: Fill in._
+- tests/docs included or excluded: _TODO: Fill in and explain runtime need._
+
+Runtime configuration table:
+
+| Variable | Default/no-key container value | Secret? | When required | How injected |
+|---|---|---:|---|---|
+| `PROCURERAG_LIVE_LLM` | `0` | No | Always set explicitly for deterministic smoke | _TODO: Fill in._ |
+| `LANGSMITH_TRACING` | `false` | No | Deterministic smoke/gates | _TODO: Fill in._ |
+| `LANGSMITH_TRACING_V2` | `false` | No | Deterministic smoke/gates | _TODO: Fill in._ |
+| `OPENROUTER_API_KEY` | absent | Yes | Optional bounded live-LLM smoke only | _TODO: Runtime secret/env mechanism; never image/build arg._ |
+| Hugging Face cache/offline settings | _TODO: Fill in._ | Usually no | Depends on model strategy | _TODO: Fill in._ |
+
+Secret verification:
+
+- Did the build context contain the real `.env`? _TODO: No + evidence._
+- Did image history/config contain a provider key or secret-like value? _TODO: No + safe inspection method; do not paste values._
+- Did logs print a key or `.env` content? _TODO: No + evidence._
+- Did any Dockerfile `ARG`, `ENV`, committed compose value, or `COPY` bake a secret? _TODO: No + evidence._
+
+### Model artifact/cache decision
+
+- Exact model identifiers used by the retrieval pipeline: _TODO: Fill in from the current code/config._
+- Selected strategy: _TODO: bake/prefetch, named cache warm-up, or startup download fallback._
+- Cache location in the image/container: _TODO: Fill in._
+- Which step requires network: _TODO: build / first warm-up / every fresh startup / none after preparation._
+- Fresh-container startup behavior: _TODO: Fill in._
+- Offline steady-state command/result, if claimed: _TODO: Fill in._
+- Image-size effect: _TODO: Fill in._
+- Day 23/Azure cold-start implication: _TODO: Fill in._
+
+### Actual Docker build evidence
+
+Do not fill this with expected output. Paste a concise summary from a real Docker-capable machine.
+
+- Docker client version: _TODO: Fill in._
+- Docker server/daemon version: _TODO: Fill in._
+- Build command: _TODO: Fill in._
+- Build result: _TODO: success / exact error._
+- Cold build duration: _TODO: Fill in._
+- Cached rebuild duration: _TODO: Fill in._
+- Image tag/id: _TODO: Fill in._
+- Image size: _TODO: Fill in._
+- Image platform/architecture: _TODO: Fill in._
+- Image default user: _TODO: Fill in._
+- Image command/entrypoint: _TODO: Fill in._
+- Exposed container port: _TODO: Fill in._
+
+If Docker remains unavailable:
+
+- Exact `docker --version` output: _TODO: Fill in._
+- Exact `docker info` output: _TODO: Fill in._
+- Classification: _TODO: CLI absent / daemon unavailable / permission / other._
+- Named retry route (machine or CI): _TODO: Fill in._
+- Reminder: static review is not a passing Docker gate.
+
+### Running-container smoke evidence
+
+Runtime command, with host-loopback publication and no provider key:
+
+```bash
+_TODO: Paste the exact `docker run` command. Do not paste a real key or use the real `.env`._
+```
+
+Record:
+
+- Container id/name: _TODO: Fill in._
+- Startup-to-healthy duration: _TODO: Fill in._
+- Health status from Docker: _TODO: Fill in._
+- `/health` command/result: _TODO: Fill in._
+- Deterministic `/query` command/result summary: _TODO: status, query id, source count/ids, latency._
+- Q091/Q092-shaped no-decision smoke: _TODO: confirm `pending_approval`, no `run_id`, no paid call._
+- Blocked/off-topic smoke: _TODO: confirm `blocked` before retrieval/model._
+- Container logs: _TODO: no traceback / exact blocker; no secret exposure._
+- Cleanup command/result: _TODO: Fill in._
+- Optional paid live smoke: _TODO: not run, or exact bounded evidence. Default is not run._
+
+### Latency and cost note
+
+Keep each layer separate:
+
+| Layer | Measurement / decision | Caveat |
+|---|---|---|
+| Cold image build | _TODO: Fill in._ | _TODO: cache/network state._ |
+| Warm cached rebuild | _TODO: Fill in._ | _TODO: which layer reused._ |
+| Image storage size | _TODO: Fill in._ | _TODO: model cache included or external._ |
+| Cold startup to healthy | _TODO: Fill in._ | _TODO: model cache/network state._ |
+| Warm `/health` | _TODO: Fill in._ | Liveness, not answer quality |
+| Warm deterministic `/query` | _TODO: Fill in._ | Local retrieval; live LLM off |
+| Optional live-model request | _TODO: Not run / bounded result._ | Paid provider, separate from local retrieval |
+| Local resource cost | _TODO: CPU/RAM/image storage summary._ | _TODO: Fill in._ |
+| Future Azure cost drivers | _TODO: image pulls, CPU/RAM, cold starts, logs, provider calls._ | Day 23 measures/estimates deployment path |
+
+### Verification after build
+
+```text
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/pytest -q
+_TODO: Fill in._
+
+./.venv/bin/python -m compileall -q src tests
+_TODO: Fill in._
+
+./.venv/bin/python -m ruff check src tests
+_TODO: Fill in._
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/regression_suite.py --verify-retrieval
+_TODO: Fill in._
+
+git diff --check
+_TODO: Fill in._
+
+git status --short
+_TODO: Fill in; only intentional Day 22 artifacts._
+```
+
+### What failed or was confusing
+
+- _TODO: Fill in. Include exact commands/errors and distinguish Docker CLI, daemon, dependency build, model download/cache, health check, application startup, and API smoke failures._
+
+### What improved
+
+- _TODO: Fill in._
+
+### What remains weak
+
+- _TODO: Fill in. Keep Day 21's open boundaries honest: authentication, distributed rate/spend control, durable HITL/checkpointing, trace persistence, free-text completeness, answer-quality eval, model cold starts, and Day 23 deployment._
+
+### What I can now explain in an interview
+
+Draft answers should cover these shapes, then be practiced without notes:
+
+1. **Why not copy `.venv`?**
+   - _TODO: Explain platform-specific wheels/paths/caches and rebuilding from the lockfile inside the image._
+2. **`.gitignore` vs `.dockerignore`.**
+   - _TODO: Explain source tracking vs build-context transmission/copying._
+3. **`0.0.0.0` in the container vs `127.0.0.1` on the host.**
+   - _TODO: Explain container reachability and local exposure._
+4. **Why one Uvicorn worker today.**
+   - _TODO: Explain per-worker model memory and in-process rate-limit counters._
+5. **Where model artifacts come from.**
+   - _TODO: Name the chosen cache strategy, network step, and offline claim/evidence._
+6. **What `/health` proves and does not prove.**
+   - _TODO: Separate liveness/startup from retrieval quality/provider/auth readiness._
+7. **Docker layers vs the uv lockfile.**
+   - _TODO: Explain filesystem/cache reuse vs dependency resolution._
+8. **Runtime secret injection.**
+   - _TODO: Explain why keys never belong in `ARG`, image `ENV`, copied `.env`, logs, or source control._
+9. **Measurements before Azure sizing.**
+   - _TODO: Image size, cold start, model memory, warm latency, concurrency, cache/network, optional LLM latency._
+
+### Next step
+
+1. **Juan:** complete the exact Day 22 source sections and write the container contract before copying a generic Dockerfile.
+2. **Juan:** create the `Dockerfile`, `.dockerignore`, and runbook/config note. Decide and prove the model artifact/cache strategy.
+3. **Juan:** on a Docker-capable machine, record a real build, healthy run, deterministic no-key API smoke, pending-approval smoke, blocked-input smoke, measurements, logs, and cleanup.
+4. **Ask Hermes to review HER-290** with the exact review prompt in `docs/day-22-dockerized-local-production-runbook.md`.
+5. **After a clean Day 22 review:** start Day 23 — Azure Container Apps deployment or an evidence-backed documented fallback, preserving the same image/config/health contract.
