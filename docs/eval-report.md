@@ -4490,6 +4490,238 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
 # nothing else fired
 ```
 
+## Day 22: Dockerized local production runbook
+
+What was measured: the Day 21 API (`src/api.py`), packaged by the new `Dockerfile` and `.dockerignore` as the image `procurerag-api:day22`, then built, run, and probed with the commands in [`docker-runbook.md`](docker-runbook.md).
+
+All numbers are from 2026-10-15, on one machine: Docker 29.7.2 (client and server), Docker Desktop on Apple Silicon, daemon `linux/aarch64`, 12 CPUs, 7.65 GiB memory. Only `linux/arm64` was built.
+
+Two images were built under the tag `procurerag-api:day22`, one after the other:
+
+- **First image (PyPI's CUDA `torch`)**, from the original `uv.lock`. It got two passes:
+  - an **exploratory pass**: the first build, the failure modes, and the extra probes;
+  - a **verbatim pass**: every runbook command executed exactly as written, against a fresh `git clone` of `57e091b` plus the two uncommitted Day 22 files (`Dockerfile`, `.dockerignore`).
+- **Current image (CPU-only `torch`)**, built after the first image's biggest finding was fixed (see "Fix: CPU-only `torch` on Linux"). The whole runbook was executed verbatim again, against a fresh clone plus the four changed files (`Dockerfile`, `.dockerignore`, `pyproject.toml`, `uv.lock`).
+
+Each image came out with the same id from the working copy and from the fresh clone. That shows the build does not depend on anything only present in the working copy (`.venv`, `.env`, `__pycache__`, `*.egg-info`). Unless a row or section says otherwise, the detailed probes below come from the first image. The behavior they test lives in `src/`, which did not change. The CPU-only re-run has its own section.
+
+### Image facts (`docker image inspect`)
+
+| Field | Current image (CPU-only `torch`) | First image (CUDA `torch`) |
+|---|---|---|
+| Tag / id | `procurerag-api:day22` / `sha256:03b9c758f98c2e1dd828ddfa55d0f72504b7af64a2935535805eb8fef4ec710a` | Re-tagged `procurerag-api:day22-cuda` / `sha256:0cf9a9262ba00af1111faf1b8c226de181fadabe8fbbde97eedc514d62caee84` |
+| Size | 1,873,016,867 bytes (1.87 GB) | 6,578,246,395 bytes (6.58 GB) |
+| `torch` inside | `2.14.0+cpu`; `torch.version.cuda`: `None` | `2.14.0+cu130`; `torch.version.cuda`: `13.0` |
+
+Everything else is identical in the two images:
+
+| Field | Value |
+|---|---|
+| Platform | `linux/arm64` |
+| Base | `python:3.11.17-slim-trixie` @ `sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce` (Debian 13; `python --version` in the container: 3.11.17) |
+| uv | 0.12.2 (`uv --version` in the container) |
+| Default user | `procurerag` (`id`: `uid=1000(procurerag) gid=1000(procurerag)`) |
+| Exposed port | `8000/tcp` |
+| CMD | `["python","-m","uvicorn","api:app","--app-dir","src","--host","0.0.0.0","--port","8000","--workers","1"]` |
+| Health check | `python -c "...urlopen('http://127.0.0.1:8000/health', timeout=4)"`; interval 30 s, timeout 5 s, start period 60 s, start interval 2 s, 3 retries |
+| Env names | `PATH LANG GPG_KEY PYTHON_VERSION PYTHON_SHA256` (from the base image; `GPG_KEY` is the public key that verifies the Python release), `UV_COMPILE_BYTECODE PROCURERAG_LIVE_LLM LANGSMITH_TRACING LANGSMITH_TRACING_V2 HF_HOME HF_HUB_OFFLINE` |
+
+### Build measurements
+
+| Build | Wall time | What ran |
+|---|---|---|
+| First build: empty layer cache, base images already pulled | 59 s | `uv sync` took 45.4 s: 152 packages (39 large wheels, 3.09 GiB) downloaded in 40.0 s, installed in 0.55 s, then about 4.6 s of bytecode compiling. Exporting the layers took 11.6 s |
+| Rebuild, nothing changed | about 1 s | Every step `CACHED`; same image id |
+| Rebuild after one appended comment line in `src/api.py` (a throwaway copy of the context) | under 1 s | Only `COPY src ./src` re-ran. `uv sync`, both user layers, and `COPY data` were `CACHED` |
+| Fresh clone (verbatim pass) | 0 s on the shell's whole-second clock | All 8 steps `CACHED` (the build cache is content-addressed); same image id |
+| Current image: `uv.lock` changed (CPU-only `torch`); base image and `uv` layers cached | 15 s | `uv sync` took 10.0 s: 133 packages (23 large wheels, 323 MiB) downloaded in 5.4 s, installed in 0.13 s, then bytecode compiling. Exporting took 3.9 s. Every layer after `uv sync` re-ran too, because each layer builds on the one before it |
+| Current image, fresh clone (verbatim pass) | 0 s on the shell's whole-second clock | All 8 steps `CACHED`; same image id (`03b9c758...`) |
+
+The layer order does what the Dockerfile comments claim: a code change never re-runs the dependency install (6.38 GB in the first image, 1.68 GB now). A `uv.lock` change does re-run it, as it should.
+
+Where the size goes (`docker history`, and `du` inside the image):
+
+| Part | First image (CUDA `torch`) | Current image (CPU-only `torch`) |
+|---|---|---|
+| Base image (Debian + Python) | about 150 MB | about 150 MB |
+| `uv` binary | 45.4 MB | 45.4 MB |
+| The `uv sync` layer (`/app/.venv`) | 6.38 GB layer; `du`: 6,235 MiB | 1.68 GB layer; `du`: 1,745 MiB |
+| of which `nvidia/` + `cuda*` + `triton/` | **4,183 MiB (67% of the venv)** | 0 (no such folder) |
+| of which `torch/` | 964 MiB | 656 MiB |
+| of which everything else (transformers, pyarrow, scipy, pandas, langchain, ...) | about 1,088 MiB | about 1,089 MiB |
+| `src/` + `data/corpus_v1/` | 0.96 MB | 0.96 MB |
+| **Image total** | **6.58 GB** | **1.87 GB** |
+
+### Finding (fixed the same day): two thirds of the first image was GPU code the service never loads
+
+`uv.lock` gives `torch 2.14.0` CUDA 13 dependencies (`cuda-toolkit`, `nvidia-cudnn-cu13`, `nvidia-nccl-cu13`, `nvidia-cusparselt-cu13`, ...) under the marker `sys_platform == 'linux'`. Inside the image, `torch.__version__` is `2.14.0+cu130` and `torch.cuda.is_available()` is `False`. 2.5 GiB of the 3.09 GiB download, and 4.2 GiB of the installed environment, are CUDA libraries that ProcureRAG's CPU-only retrieval never uses. The marker names no CPU architecture, so a `linux/amd64` build would get the same set (not built today).
+
+Why it mattered: Azure Container Apps has to pull the image onto every new host, so image size becomes cold-start time.
+
+The other candidates are small. `deepeval` and `ragas` sit in the runtime group, but the API never imports them (checked in `sys.modules` after `load_live_pipeline()`), and together they are 18 MiB. `pyarrow`, `pandas`, `datasets`, and `scipy` are imported by the model stack itself.
+
+### Fix: CPU-only `torch` on Linux
+
+Juan decided to remove the CUDA libraries, since the service runs on CPU only. `torch` now comes from PyTorch's CPU-only package index on Linux. This is the pattern from uv's "Using uv with PyTorch" guide: a `[tool.uv.sources]` entry for `torch` with `marker = "sys_platform == 'linux'"`, pointing at an `explicit = true` `[[tool.uv.index]]` for `https://download.pytorch.org/whl/cpu`. `pyproject.toml` explains each part in comments. No Dockerfile instruction changed.
+
+The lockfile diff, checked package by package (`tomllib`, old vs. new `uv.lock`):
+
+- 157 -> 138 packages: 19 removed (the 18 `nvidia-*`/`cuda-*` packages and `triton`), none added.
+- The only changed entry is `torch`. It now has two variants: `2.14.0` from PyPI for `sys_platform != 'linux'`, and `2.14.0+cpu` from `download.pytorch.org/whl/cpu` for Linux. Both the `manylinux_2_28_aarch64` wheel (this Mac) and the `manylinux_2_28_x86_64` wheel (Azure) are in the lock.
+- `uv lock --check` passes. On the host, `uv sync --locked --dry-run` reports `Would make no changes`, and the host `torch` is still `2.14.0`.
+
+Two gotchas, both found in a scratch copy before the repo was touched:
+
+1. **`[tool.uv.sources]` only applies to direct dependencies.** At first `torch` was only pulled in by `sentence-transformers`, and `uv lock` silently ignored the source: `torch` stayed on PyPI, with all 15 `nvidia-*` packages, and no warning. So `torch` is now listed in `dependencies`.
+2. **An open lower bound picked a newer patch for Linux only.** With `torch>=2.14.0`, uv chose `2.14.1+cpu` from the PyTorch index for Linux while macOS stayed on `2.14.0`, a silent version skew between host and container. `torch==2.14.0` keeps the build variant (CUDA -> CPU) as the only change. A future `torch` upgrade is a deliberate edit.
+
+Before and after (current numbers from the verbatim runbook re-run below):
+
+| Measurement | First image (CUDA `torch`) | Current image (CPU-only `torch`) |
+|---|---|---|
+| Image size | 6.58 GB | **1.87 GB (-72%)** |
+| `/app/.venv` | 6,235 MiB | 1,745 MiB |
+| Packages installed / downloaded | 152 / 3.09 GiB | 133 / 323 MiB |
+| `uv sync` step | 45.4 s | 10.0 s |
+| Build wall time (base images cached) | 59 s | 15 s |
+| Startup to `healthy` | 9 s | 9 s |
+| Memory after the smoke (`docker stats`) | 709 MiB | 572 MiB |
+| Warm Q001 `/query` median (n=10) | 39.7 ms | 39.3 ms |
+| Q001 / Q091 + approve chunk ids | Identical to the host | Identical to the host (and so to the first image) |
+
+The retrieval answers did not change. Same 5 chunk ids for Q001 and same 19 for Q091 + approve, in the same order, from the host's macOS `torch 2.14.0`, the first image's `2.14.0+cu130`, and the current image's `2.14.0+cpu`.
+
+### Model cache: strategy and evidence
+
+Strategy (Juan's choice): a named volume `procurerag-hf-cache`, mounted at `HF_HOME=/home/procurerag/.cache/huggingface`, warmed once over the network. Then every container mounts it read-only, with `HF_HUB_OFFLINE=1` (the image default).
+
+| Check | Result |
+|---|---|
+| No warm-up: an empty cache, image defaults (exploratory pass) | Exit code 3 after 4 s: `LocalEntryNotFoundError: Cannot find the requested files in the disk cache and outgoing traffic has been disabled`, then `ERROR: Application startup failed. Exiting.` It fails loudly; nothing is downloaded |
+| Warm-up into an empty volume (runbook step 3) | `both models cached`: 16 s (exploratory), 19 s (verbatim), and 14 s (CPU-only re-run). One expected "unauthenticated requests to the HF Hub" warning; no token was used |
+| What the volume holds | 106 MB: `models--sentence-transformers--multi-qa-MiniLM-L6-cos-v1` 88 MB, `models--cross-encoder--ms-marco-TinyBERT-L2-v2` 18 MB. The volume root is owned by `procurerag`, which shows the Dockerfile's `mkdir -p "$HF_HOME"` (run as that user) worked |
+| Model snapshots | MiniLM `b207367332321f8e44f96e224ef15bc607f4dbf0`, TinyBERT `81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc`. These are the same snapshots as the host's own cache. The code does not pin them: a later warm-up gets whatever `main` is then |
+| Offline steady state: `--network none`, the cache mounted `:ro` (all three passes) | `healthy after 10 s`. Q001 through `docker exec`: `not_generated ['FAQ-001::chunk-12', 'FAQ-001::chunk-13', 'POL-001::chunk-4', 'FAQ-001::chunk-5', 'FAQ-001::chunk-6']` (0.05 s). Outbound check: `URLError: <urlopen error [Errno -3] Temporary failure in name resolution>`. No HF warning in the logs |
+| Which steps need network | The build (base images, PyPI, and PyTorch's CPU-only index) and the warm-up (HF Hub). After that: none |
+
+### Running-container smoke (runbook steps 4-7, verbatim pass)
+
+The run command published the port on host loopback only (`docker port`: `8000/tcp -> 127.0.0.1:8000`) and passed no provider key. It set `PROCURERAG_LIVE_LLM=0` and both `LANGSMITH_*=false` explicitly.
+
+Startup to `healthy`: 9 s in all three runs published on loopback, and 10 s in all three offline runs. These are whole-second wall clock, from `docker run` returning to Docker reporting `healthy`, with a 2 s probe interval while starting.
+
+| # | Probe | Expected | Actual | Time (curl) |
+|---|---|---|---|---|
+| 1 | `GET /health` | 200, `status=ok`, `live_llm=false` | `{"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}` | 4.1 ms |
+| 2 | Q001, labeled, `buyer` | `not_generated` with sources | `not_generated`; 5 sources `FAQ-001::chunk-12, FAQ-001::chunk-13, POL-001::chunk-4, FAQ-001::chunk-5, FAQ-001::chunk-6`; `run_id` set; no findings; text `[not generated: evidence was complete, but no LLM client was passed to build_graph]` | 64 ms (first query) |
+| 3 | Q091, labeled, no decision | `pending_approval`, no `run_id` | `pending_approval`; `run_id: null`; no sources; proposed follow-up `approval bands EUR 50,000 250,000 Band 3 VP Procurement`; allowed `approve`/`edit`/`reject` | 2.5 ms |
+| 4 | `What is the capital of France?`, free text | `blocked` before retrieval | `blocked`; finding `off_topic` / `input` / `block`; `run_id: null` | 1.9 ms |
+
+Extra probes against the same image (exploratory pass, plus the Q091 approve in the verbatim pass):
+
+| Probe | Result |
+|---|---|
+| Q092, labeled, `requester`, no decision | `pending_approval`, `run_id: null`; follow-up `cleaning contractor high-risk supplier Enhanced Due Diligence Legal approval recruitment fees subcontracting insurance` |
+| Injection phrase in free text | `blocked`, finding `prompt_injection` / `block` |
+| Body without `role` | HTTP 422 |
+| `/query/stream`, Q001's question as free text, `requester` | events `request_validated` -> `retrieval_started` -> `result` |
+| Q091 + `{"type": "approve", ...}` (second pass runs; LLM off) | `not_generated`, finding `excessive_agency` / `route_to_hitl`, 19 sources, 99 ms. The 19 chunk ids are **identical, in order, to the host `.venv` run** (TestClient with lifespan, same request) |
+| Q001 on host vs container | Same 5 chunk ids, same order |
+| Rate limit: 20 quick requests after 13 earlier ones | 17 x 200, then 3 x 429 with `Retry-After: 33`; `/health` still 200 |
+| Logs (verbatim pass) | 0 `Traceback`; 0 matches for `api_key\|token\|secret\|sk-or\|lsv2_`; every request from the host logged from `172.17.0.1` (the Docker bridge gateway); the one health probe logged from `127.0.0.1` |
+| Shutdown | `docker stop`: 1 s (verbatim), 2 s (exploratory, exit code 0, log ends `Finished server process [1]`). `docker ps --all --filter name=procurerag` was empty afterwards |
+| Process | `Started server process [1]`: Uvicorn is PID 1 (exec-form `CMD`) |
+
+Control experiment for the `CMD` choice, on the same base image: in shell form (`sh -c '...'`), `/proc/1/cmdline` is `sh -c ...` even for a single command (Debian's `dash` does not hand over to the command), and `docker stop` ended it with exit code 137 (SIGKILL) after 3 s. In exec form, `docker stop` ended it with exit code 0 in 1 s.
+
+### Re-run on the CPU-only image (the whole runbook, verbatim)
+
+From a fresh clone plus the four changed files, image `sha256:03b9c758...`:
+
+| Step | Result |
+|---|---|
+| 1. Build context | 24 files (unchanged) |
+| 2. Build and inspect | Same image id from the clone (8 steps `CACHED`); 0 secret-like words in `docker history` |
+| 3. Warm-up into a re-created empty volume | `both models cached` in 14 s |
+| 4. Run on `127.0.0.1:8000` | `healthy after 9 s` |
+| 5.1 `/health` | `ok`, `live_llm: false` |
+| 5.2 Q001 | `not_generated`, the same 5 chunk ids, `run_id` set, 97 ms |
+| 5.3 Q091, no decision | `pending_approval`, `run_id: null`, the same proposed follow-up, 3.0 ms |
+| 5.4 Off-topic | `blocked`, `off_topic` finding, 2.7 ms |
+| Warm latency (n=10) | `/health` median 2.5 ms (1.9-5.5 ms); Q001 `/query` median 39.3 ms (37.4-50.8 ms) |
+| Q091 + approve | `not_generated`, `excessive_agency` / `route_to_hitl`, 19 sources **identical in order to the host**, 101 ms |
+| Memory after the smoke | 572 MiB, 60 PIDs |
+| 6. Logs | 0 `Traceback`; 0 secret-like matches; host requests from `172.17.0.1`, the health probe from `127.0.0.1` |
+| 7. Stop and clean up | `docker stop` 1 s; no container left |
+| Offline (`--network none`, `:ro`) | `healthy after 10 s`; Q001 answers with the same 5 chunks; outbound `Temporary failure in name resolution` |
+| Image filesystem and user | 0 `.env` files; `uid=1000(procurerag)`; `touch /app/src/x`: `Permission denied` |
+
+A first attempt at the step-5 summaries crashed in the summarizing Python one-liner on the host (it split curl's output wrongly), not in the service. The container had already answered. The four probes were sent again with the parser fixed, and the table shows that second set.
+
+### Secret boundary evidence
+
+| Where | Check | Result |
+|---|---|---|
+| Build context | Runbook step 1 (a throwaway `busybox` build that lists `/context`) | 24 files, 1.83 MB: `pyproject.toml`, `uv.lock`, 20 `src/*.py`, 2 `data/corpus_v1/*.jsonl`. No `.env`, `.env.local`, `.venv` (1.2 GB on the host), `.git`, `tests/`, `docs/`, caches, or `egg-info` |
+| `.dockerignore` mutation check | Fake `src/.env`, `src/.env.prod`, `data/corpus_v1/.env`, a `.pyc`, an `egg-info`, `.DS_Store`, plus root `.env`, `.env.local`, `secrets.json`, `data/corpus_v0/` (in a scratch copy) | Full file: only the 4 legitimate files enter. Without step 3: all six nested fakes enter. Step 1 (`*`) alone keeps the root-level fakes and `corpus_v0` out |
+| Image filesystem | `find / -xdev -name ".env" -o -name ".env.*"` | 0 files |
+| `/app` contents | `find /app` (excluding `.venv`) | Exactly the 24 context files |
+| Image config and history | `grep -ciE 'api_key\|token\|secret\|password\|sk-or\|lsv2_'` over the env and `docker history --no-trunc` | 0. No `OPENROUTER_API_KEY`, `LANGSMITH_API_KEY`, or `TAVILY_API_KEY` name anywhere in `inspect` or `history` |
+| Running container | `env` names | `GPG_KEY HF_HOME HF_HUB_OFFLINE HOME HOSTNAME LANG LANGSMITH_TRACING LANGSMITH_TRACING_V2 PATH PROCURERAG_LIVE_LLM PWD PYTHON_SHA256 PYTHON_VERSION UV_COMPILE_BYTECODE`: no key |
+| Runtime user | `touch /app/src/x` as `procurerag` | `Permission denied` |
+
+### Latency and cost by layer
+
+| Layer | Measurement | Caveat |
+|---|---|---|
+| Image build with every dependency installed | 15 s with CPU-only `torch` (59 s with the CUDA build) | Base images already pulled; 323 MiB downloaded (3.09 GiB with CUDA), so it depends on the network |
+| Cached rebuild | About 1 s (no change); under 1 s (source change) | The dependency layer is reused |
+| Image storage | 1.87 GB with CPU-only `torch` (6.58 GB with the CUDA build, 67% of whose environment was CUDA) | Models are outside the image (a 106 MB volume) |
+| Model warm-up | 16-19 s, 106 MB from the HF Hub | Once per volume; public models, no token |
+| Cold start to healthy | 9 s (published), 10 s (`--network none`) | Warm cache, image already local; whole-second clock, 2 s probes. Day 21 measured 8-12 s on the host |
+| Warm `/health` | Median 2.7 ms (n=10, 1.6-5.3 ms) | Liveness only |
+| Warm deterministic `/query` (Q001) | Median 39.3 ms with CPU-only `torch` (n=10, 37.4-50.8 ms); 39.7 ms with the CUDA build; first query 64 ms | Local retrieval, LLM off, one client, no concurrency |
+| Two-pass `/query` (Q091 + approve) | 99 ms | LLM off |
+| Live LLM | Not run | Paid. It would add a provider round trip and per-token cost on top of the numbers above |
+| Memory | 572 MiB after the smoke with CPU-only `torch` (709 MiB with the CUDA build) (`docker stats`), 60 PIDs | One worker. Each extra worker would load its own copy of both models |
+| Future Azure drivers | Image pull (1.87 GB) on every new host, registry storage, about 0.6 GiB RAM minimum, model-cache placement, log volume, optional OpenRouter tokens | Day 23 measures or estimates these |
+
+### Limits of this evidence
+
+- One machine and one architecture (`linux/arm64`). The `linux/amd64` image Azure needs was not built.
+- Latency is n=10 from one client, with no concurrent requests. This is not a load test and gives no p95.
+- Startup timing has whole-second resolution.
+- The "cold" build had the base images already pulled, and its time depends on download speed.
+- No vulnerability scan of the image was run.
+- Trace rows built inside the container record no code version (`git describe` finds no `git`; the code handles that and records `None`). The image tag is not recorded in the trace either.
+- Every Day 21 limit is unchanged: caller-asserted role, stateless approval, unchecked free-text evidence, unpersisted traces. The in-process rate limit now also sees every host client as one address (`172.17.0.1`), so they share one budget.
+
+### Verification (2026-10-15, after the CPU-only `torch` change)
+
+```bash
+uv lock --check
+# Resolved 141 packages: uv.lock agrees with pyproject.toml
+
+./.venv/bin/python -c "import torch; print(torch.__version__)"
+# 2.14.0   (the host environment is unchanged)
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/pytest -q
+# 357 passed in 2.90s   (2.32s before the change)
+
+./.venv/bin/python -m compileall -q src tests
+# clean, no output
+
+./.venv/bin/python -m ruff check src tests
+# All checks passed!
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/regression_suite.py --verify-retrieval
+# All cases match their currently expected state (frozen fixtures).
+# The current retrieval pipeline still matches every case's expectation.
+
+git diff --check
+# clean, no output
+```
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still

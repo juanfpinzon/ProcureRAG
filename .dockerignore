@@ -1,0 +1,66 @@
+# .dockerignore: what `docker build .` may send to the builder (the "build context").
+#
+# Why this file is a SECURITY boundary, not just a speed-up:
+# `docker build .` packs up the directory and sends it to the builder BEFORE
+# any Dockerfile line runs. Whatever is sent can end up in an image layer
+# through a careless `COPY . .`, even if Git ignores it. `.gitignore` only
+# decides what Git TRACKS. It has no effect on Docker. This repo's real
+# `.env` (API keys) is gitignored, and without this file it would still be
+# sent to the builder on every build.
+#
+# Style: an ALLOW-LIST. Step 1 excludes everything, step 2 lets back in only
+# what the running service needs, and step 3 re-excludes dangerous files
+# INSIDE the allowed folders. A new file someone drops in the repo root
+# tomorrow (a `secrets.json`, a 2 GB model dump) stays out by default. That
+# is "fail closed", the same rule as `ROLE_CLEARANCE` in `src/api.py`: what
+# nobody listed stays hidden.
+#
+# Rule order matters: when several lines match a path, the LAST one wins.
+#
+# The Dockerfile and this file are still sent to the builder (it needs them
+# to run the build), but `COPY` never copies them into the image.
+
+# --- Step 1: exclude everything -------------------------------------------
+# This alone already keeps out every category the image must not contain:
+#   .env, .env.local          secrets (OpenRouter, LangSmith, Tavily keys)
+#   .venv/                    the host's environment: macOS/arm64 wheels and host paths
+#   .git/                     the full history, including anything ever committed by mistake
+#   tests/, docs/             not needed to SERVE requests (docs/traces/ holds trace rows)
+#   .pytest_cache/, .ruff_cache/, .deepeval/, .claude/    local tool state
+#   data/corpus_v0/           the old corpus; the service reads only corpus_v1
+*
+
+# --- Step 2: allow back only what the image needs -------------------------
+# The dependency contract: uv installs exactly what uv.lock pins.
+!pyproject.toml
+!uv.lock
+# The application code: `uvicorn api:app --app-dir src` imports from here.
+!src/
+# The data the service loads at startup: the 34 documents
+# (`procurement_kb.jsonl`) and the 93 labeled queries (`example_queries.jsonl`).
+!data/corpus_v1/
+
+# --- Step 3: re-exclude what must never enter, even inside allowed folders --
+# Step 2 re-allowed whole folders, so a `src/.env` or a stale cache inside
+# them would slip back in without these lines.
+
+# Secrets, anywhere in the tree. (No `.env.example` exists today. If one is
+# added, it must hold variable names and safe defaults only, and would be
+# re-allowed here with its own `!` line.)
+**/.env
+**/.env.*
+
+# Python bytecode built on the host (macOS, host paths). The image compiles
+# its own (`UV_COMPILE_BYTECODE` in the Dockerfile).
+**/__pycache__
+**/*.py[cod]
+
+# Packaging metadata left by an old editable install on the host
+# (`src/procurerag.egg-info/`). The service does not use it.
+**/*.egg-info
+
+# A virtual environment, in case one is ever created inside an allowed folder.
+**/.venv
+
+# macOS Finder metadata.
+**/.DS_Store
