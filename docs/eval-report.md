@@ -4494,7 +4494,7 @@ LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/agent_
 
 What was measured: the Day 21 API (`src/api.py`), packaged by the new `Dockerfile` and `.dockerignore` as the image `procurerag-api:day22`, then built, run, and probed with the commands in [`docker-runbook.md`](docker-runbook.md).
 
-All numbers are from 2026-10-15, on one machine: Docker 29.7.2 (client and server), Docker Desktop on Apple Silicon, daemon `linux/aarch64`, 12 CPUs, 7.65 GiB memory. Only `linux/arm64` was built.
+Unless a section says otherwise, all numbers are from 2026-10-15, on one machine: Docker 29.7.2 (client and server), Docker Desktop on Apple Silicon, daemon `linux/aarch64`, 12 CPUs, 7.65 GiB memory. A `linux/amd64` build on the Hermes VM was reported on 2026-10-17. It has its own section, because it is a different machine ("`linux/amd64` on the Hermes VM").
 
 Two images were built under the tag `procurerag-api:day22`, one after the other:
 
@@ -4559,6 +4559,8 @@ Where the size goes (`docker history`, and `du` inside the image):
 Why it mattered: Azure Container Apps has to pull the image onto every new host, so image size becomes cold-start time.
 
 The other candidates are small. `deepeval` and `ragas` sit in the runtime group, but the API never imports them (checked in `sys.modules` after `load_live_pipeline()`), and together they are 18 MiB. `pyarrow`, `pandas`, `datasets`, and `scipy` are imported by the model stack itself.
+
+`--no-dev` omits the dev GROUP, not every package named in it. A review of the built image found `pytest` and `httpx` installed, and no `ruff`. `uv tree --no-dev --invert` shows why: `pytest` comes in through `deepeval` (directly, and through its `pytest-asyncio`, `pytest-repeat`, `pytest-rerunfailures`, and `pytest-xdist` plugins), and `httpx` through `huggingface-hub`, `langchain-core`, `datasets`, and others. `ruff` is reached only through `procurerag (group: dev)`. An optional later optimization: move `deepeval`, `ragas`, and other evaluation-only dependencies out of the serving runtime group, so the image stops carrying a test runner.
 
 ### Fix: CPU-only `torch` on Linux
 
@@ -4658,6 +4660,24 @@ From a fresh clone plus the four changed files, image `sha256:03b9c758...`:
 
 A first attempt at the step-5 summaries crashed in the summarizing Python one-liner on the host (it split curl's output wrongly), not in the service. The container had already answered. The four probes were sent again with the parser fixed, and the table shows that second set.
 
+### `linux/amd64` on the Hermes VM (reported 2026-10-17)
+
+Azure Container Apps runs `linux/amd64`. That image was built and exercised successfully on the Hermes VM. These numbers were reported from that run; the hardware details of the VM are not recorded here.
+
+| Measurement | Hermes VM, `linux/amd64` | Mac, `linux/arm64` (CPU-only `torch`) |
+|---|---|---|
+| Image id | `sha256:b9f88b8abc7c…` | `sha256:03b9c758...` |
+| Image size | 590,293,766 bytes, as reported (see the caveat below) | 1,873,016,867 bytes on disk |
+| Build | 332.57 s, truly cold: image pulls, dependency downloads, and bytecode compiling | 15 s, with base images and the `uv` layer already cached |
+| Offline startup to healthy | 51 s | 10 s |
+| Memory after the smoke | about 682 MiB | 572 MiB |
+
+Caveats:
+
+- **Different machines, not just different architectures.** The VM is much slower than the Apple Silicon Mac. The two columns compare two machines, and nothing in them isolates the effect of `amd64` vs `arm64`. The builds are not comparable either: one was fully cold, the other reused cached layers.
+- **The two size figures measure different things.** The x86_64 `torch 2.14.0+cpu` wheel alone unpacks to 712 MiB (`uv pip install --target ... --python-platform x86_64-manylinux_2_28`, measured on 2026-10-17). That is more than the whole 590 MB figure. So 590 MB cannot be the unpacked, on-disk size that the Mac's classic `overlay2` image store reports as `Size`. It is most likely a compressed size (the layers as stored or transferred), not what is unpacked on disk. Which one that VM's Docker reports as `Size` depends on its image store, and that was not checked. The on-disk size on the VM still needs recording: `docker image ls` shows both columns, or run `du -sm /app/.venv` inside the image.
+- **51 s is close to the Dockerfile's 60 s start period.** On that VM the health check still turned healthy inside the start period. A slower host, or a platform probe with a shorter grace period, would start counting failures before the models finish loading. Day 23 has to size Azure's startup probe for this case, not for the Mac's 10 s.
+
 ### Secret boundary evidence
 
 | Where | Check | Result |
@@ -4688,7 +4708,7 @@ A first attempt at the step-5 summaries crashed in the summarizing Python one-li
 
 ### Limits of this evidence
 
-- One machine and one architecture (`linux/arm64`). The `linux/amd64` image Azure needs was not built.
+- Two machines, and they are hard to compare. All the detailed probes ran on the Mac (`linux/arm64`). The `linux/amd64` image Azure needs was built and exercised on the Hermes VM, a much slower machine (51 s vs 10 s offline startup), and only its summary numbers are recorded here. Its on-disk size is not recorded yet: the reported 590 MB is most likely compressed.
 - Latency is n=10 from one client, with no concurrent requests. This is not a load test and gives no p95.
 - Startup timing has whole-second resolution.
 - The "cold" build had the base images already pulled, and its time depends on download speed.

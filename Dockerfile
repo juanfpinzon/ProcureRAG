@@ -75,8 +75,12 @@ ENV UV_COMPILE_BYTECODE=1
 #                       takes `torch` from PyTorch's CPU-only index, not PyPI
 #                       (see `[tool.uv.sources]` in pyproject.toml), so no
 #                       NVIDIA/CUDA library is installed.
-# --no-dev              Skip the `dev` dependency group (pytest, ruff, httpx).
-#                       The image serves requests; it does not run the tests.
+# --no-dev              Skip the project's `dev` dependency group. The image
+#                       serves requests; it does not run the tests. This
+#                       omits the GROUP, not every package named in it: the
+#                       runtime dependency `deepeval` pulls in pytest, and
+#                       several runtime libraries pull in httpx, so both are
+#                       still installed. Only ruff is really left out.
 # --no-install-project  Install the dependencies only, not ProcureRAG itself.
 #                       The code is not copied yet (this layer must not depend
 #                       on it), and pyproject.toml has no [build-system]

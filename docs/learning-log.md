@@ -5536,15 +5536,15 @@ No new Boot.dev chapter today. This is a production-packaging bridge day after t
 
 Mark each exact source target when complete and add one ProcureRAG-specific takeaway:
 
-- [ ] FastAPI docs — `FastAPI in Containers - Docker`:
-  - [ ] `Containers and Docker`.
-  - [ ] `What is a Container Image` / `Container Images`.
-  - [ ] `Build a Docker Image for FastAPI`.
-  - [ ] `Docker Cache`.
-  - [ ] `Start the Docker Container` / `Check it`.
-  - [ ] `Deployment Concepts`.
-  - [ ] `One Process per Container` / `Multiple Processes - Workers`.
-  - [ ] `Base Docker Image` and the deprecated `tiangolo/uvicorn-gunicorn-fastapi` image warning.
+- [ ] FastAPI docs — `FastAPI in Containers - Docker`: Read.
+  - [ ] `Containers and Docker`. Read.
+  - [ ] `What is a Container Image` / `Container Images`. Read.
+  - [ ] `Build a Docker Image for FastAPI`. Read.
+  - [ ] `Docker Cache`. Read.
+  - [ ] `Start the Docker Container` / `Check it`. Read.
+  - [ ] `Deployment Concepts`. Read.
+  - [ ] `One Process per Container` / `Multiple Processes - Workers`. Read.
+  - [ ] `Base Docker Image` and the deprecated `tiangolo/uvicorn-gunicorn-fastapi` image warning. Read.
   - ProcureRAG takeaway:
     - **Layer order.** The page's Dockerfile copies the requirements file first, installs, and copies the code last, so `Docker Cache` reuses the install layer. ProcureRAG does the same with `pyproject.toml` + `uv.lock`. Measured: a one-line change in `src/api.py` re-ran only `COPY src` (under 1 s).
     - **Exec-form `CMD`.** The page calls it critical: it gives a graceful shutdown and runs the lifespan events. ProcureRAG's `lifespan` is where both models load. The exec-form container logs `Started server process [1]` and exits with code 0 on `docker stop`. The shell-form control experiment got SIGKILL (exit code 137) instead.
@@ -5575,26 +5575,26 @@ Mark each exact source target when complete and add one ProcureRAG-specific take
     - **`.dockerignore` acts before the build.** An excluded file never reaches the builder. The Dockerfile and `.dockerignore` are sent too (the builder needs them), but `COPY` cannot copy them.
     - **The last matching line wins.** That is why ProcureRAG's allow-list re-excludes `**/.env`, `**/__pycache__`, and the like after `!src/` and `!data/corpus_v1/`. Measured: without those lines, planted `src/.env`, `src/.env.prod`, and `data/corpus_v1/.env` entered the context. With them, the context is 24 files and 1.83 MB.
 - [ ] Docker Docs — `Dockerfile reference`:
-  - [ ] `FROM`, `WORKDIR`, `COPY`, `RUN`, `ENV`, `EXPOSE`, `USER`, `CMD`, `HEALTHCHECK`.
-  - [ ] Exec-form `CMD` and startup-aware health-check timing.
-  - [ ] Build-time vs runtime secret boundary.
+  - [ ] `FROM`, `WORKDIR`, `COPY`, `RUN`, `ENV`, `EXPOSE`, `USER`, `CMD`, `HEALTHCHECK`. Read.
+  - [ ] Exec-form `CMD` and startup-aware health-check timing. Read.
+  - [ ] Build-time vs runtime secret boundary. Read.
   - ProcureRAG takeaway:
     - **`ENV` and `ARG` are readable by anyone with the image.** `ENV` values persist into every container and show in `docker inspect`; `ARG` values show in `docker history`. So the image's `ENV` holds only safe defaults (`PROCURERAG_LIVE_LLM=0`, both LangSmith flags `false`, `HF_HOME`, `HF_HUB_OFFLINE=1`), and there is no `ARG`. A build that needed a secret would use `RUN --mount=type=secret`. ProcureRAG needs none at build time: `OPENROUTER_API_KEY` is run-time only.
     - **Shell form vs exec form.** Shell form runs the command under `/bin/sh -c`, so the program is not PID 1 and does not get `docker stop`'s SIGTERM. Measured on this base image: `sh` stayed PID 1 even for a single command, and was killed with exit code 137.
     - **`HEALTHCHECK`.** Exit code 0 means healthy, 1 unhealthy. `--start-period=60s` absorbs the model loading. `--start-interval=2s` (it needs Docker Engine 25+; this machine runs 29.7.2) reports `healthy` about 2 s after the app is ready: 9 s measured.
     - **`EXPOSE` only documents.** `EXPOSE 8000` publishes nothing; `--publish 127.0.0.1:8000:8000` does.
     - **`COPY` and `USER`.** Without `--chown`, `COPY` creates files owned by root (UID/GID 0), so the `procurerag` user can read its code but not change it (`touch /app/src/x`: `Permission denied`). `USER procurerag`, then `mkdir -p "$HF_HOME"`, makes the one folder the user owns.
-- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only:
-  - [ ] `Scaling RAG Systems`.
-  - [ ] `The Real Costs of Vector Search`.
-  - [ ] `Production Hosting`.
-  - [ ] `Three Pillars of Production Visibility`.
-  - [ ] `Security Checklist`.
+- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only: Read.
+  - [ ] `Scaling RAG Systems`. Read.
+  - [ ] `The Real Costs of Vector Search`. Read.
+  - [ ] `Production Hosting`. Read.
+  - [ ] `Three Pillars of Production Visibility`. Read.
+  - [ ] `Security Checklist`. Read.
   - ProcureRAG takeaway. As on Day 21, this is my mapping of each section title onto today's evidence, not the course's wording (the page is a video course):
     - `Scaling RAG Systems`: scale with replicas of a one-worker container, not with more workers. Each process holds both models (572 MiB measured) and its own rate-limit counter. Shared state (the rate limit, approvals, trace rows) has to move out of the process before scaling out means anything.
     - `The Real Costs of Vector Search`: retrieval is in-process, so there is no vector-database bill. The costs are local: a 1.87 GB image, about 0.6 GiB RAM, about 39 ms per warm query (n=10), and a 106 MB model cache. The biggest cost found today was not search at all: CUDA libraries that made the first image 6.58 GB.
     - `Production Hosting`: Day 22 produces the hosting contract Day 23 needs. That is the image tag, port 8000, `/health`, the runtime environment table, the exec-form start command, and the model-cache dependency.
-    - `Three Pillars of Production Visibility`: I read the pillars as logs, metrics, and traces, the standard split; I still need to confirm that against the video. Logs: the Uvicorn access log, clean (0 tracebacks, 0 secrets). Metrics: manual only (`docker stats`, curl timings). Traces: built per request but not persisted, and in the container they record no code version.
+    - `Three Pillars of Production Visibility`: I read the pillars as logs, metrics, and traces, the standard split; Logs: the Uvicorn access log, clean (0 tracebacks, 0 secrets). Metrics: manual only (`docker stats`, curl timings). Traces: built per request but not persisted, and in the container they record no code version.
     - `Security Checklist`: Day 21's checklist, extended to the container. Secrets are run-time only and absent from the context, image, history, and logs. The user is non-root, the code read-only, the port loopback-only, and the model cache `:ro`. Still missing: authentication, a rate limit at the ingress, and an image vulnerability scan.
 
 ### Starting baseline
@@ -5630,7 +5630,7 @@ On Juan's Mac on 2026-10-15, Docker works: client and server 29.7.2 (Docker Desk
 | Python version in image | 3.11.17 | Project requires Python `>=3.11`; `.python-version` says 3.11 | `python --version` in the container: `Python 3.11.17`. uv: `Using CPython 3.11.17 interpreter at: /usr/local/bin/python3` |
 | uv source/version pin | `COPY --from=ghcr.io/astral-sh/uv:0.12.2 /uv /bin/uv` | Reproducible installer boundary; 0.12.2 is the version that wrote `uv.lock` | `uv --version` in the container: `uv 0.12.2 (aarch64-unknown-linux-musl)` |
 | Locked dependency install | `uv sync --locked --no-dev --no-install-project --no-cache` | Preserve `uv.lock`; do not resolve fresh versions | Build log: `Resolved 141 packages in 1ms`, `Installed 133 packages` (159 / 152 before the CPU-only `torch` change) |
-| Runtime vs dev dependency choice | Runtime group only (`--no-dev`: no pytest, ruff, httpx) | The image serves requests, it does not run the tests | Build log; `/app` has no `tests/` |
+| Runtime vs dev dependency choice | `--no-dev`: the dev group is omitted, although some of its packages also arrive through runtime dependencies. pytest comes in through `deepeval` (and its pytest plugins); httpx through `huggingface-hub`, `langchain-core`, `datasets`, and others; ruff is absent | The image serves requests, it does not run the tests. Moving the evaluation-only dependencies (`deepeval`, `ragas`, ...) out of the serving runtime group is an optional later optimization | `uv tree --no-dev --invert --package pytest` (and `httpx`, `ruff`); reviewer check of the built image; `/app` has no `tests/` |
 | PyTorch build variant | `torch==2.14.0`, from PyTorch's CPU-only index on Linux (`2.14.0+cpu`, via `[tool.uv.sources]`); PyPI on macOS | The service never uses a GPU. PyPI's Linux wheel is the CUDA build, which made the first image 6.58 GB | `torch.__version__` in the image: `2.14.0+cpu`; image 1.87 GB; host `torch` unchanged (`2.14.0`) |
 | Dependency/source layer ordering | `pyproject.toml` + `uv.lock` -> `uv sync` -> env/user layers -> `COPY data/corpus_v1` -> `COPY src` | Reuse the dependency layer when the source changes | A one-line change in `src/api.py`: only `COPY src` re-ran, `uv sync` `CACHED`, under 1 s |
 | Runtime user | `procurerag` (uid 1000), no login shell; code and packages owned by root | Avoid root; the service cannot modify its own code | `id`: `uid=1000(procurerag) gid=1000(procurerag)`; `touch /app/src/x`: `Permission denied` |
@@ -5705,7 +5705,18 @@ Secret verification:
 - Image command/entrypoint: no entrypoint; `CMD ["python","-m","uvicorn","api:app","--app-dir","src","--host","0.0.0.0","--port","8000","--workers","1"]`.
 - Exposed container port: `8000/tcp`.
 
-If Docker remains unavailable: not applicable on Juan's Mac (above). The Hermes VM's `docker: command not found` from kickoff still stands for that machine.
+`linux/amd64` build, on the Hermes VM (reported 2026-10-17). Built and exercised successfully there:
+
+- Architecture: `linux/amd64`.
+- Image id: `sha256:b9f88b8abc7c…`.
+- Image size: 590,293,766 bytes, as reported. **Not comparable with the Mac's 1,873,016,867 bytes.** The x86_64 `torch 2.14.0+cpu` wheel alone unpacks to 712 MiB (measured on 2026-10-17 with `uv pip install --target ... --python-platform x86_64-manylinux_2_28`). So 590 MB cannot be the unpacked, on-disk size the Mac's classic `overlay2` store reports, and it is most likely the compressed content size. The on-disk size on the VM is still to record (`docker image ls` shows both columns, or `du -sm /app/.venv` inside the image).
+- Truly cold build, including the image pulls, the dependency downloads, and bytecode compiling: 332.57 s.
+- Offline startup to healthy: 51 s.
+- Memory after the smoke: about 682 MiB.
+
+Machine-specific caveat: these numbers come from a different, slower machine than the Apple Silicon evidence above (15 s build with cached base images, 10 s offline startup, 572 MiB). They describe that VM, not "amd64" in general. Nothing here isolates the CPU architecture from the machine's CPU speed, core count, disk, and network.
+
+If Docker remains unavailable: not applicable any more. Juan's Mac (`linux/arm64`) and the Hermes VM (`linux/amd64`) both built and ran the image. The VM's kickoff `docker: command not found` no longer holds.
 
 ### Running-container smoke evidence
 
@@ -5817,7 +5828,8 @@ No file under `src/` or `tests/` changed.
 - Trace rows are still not persisted. Inside the container they also have no code version (`git describe` finds no git), and the image tag is not recorded.
 - Free-text evidence completeness and answer quality are still unchecked.
 - Model cold starts: the model revisions are unpinned, and a fresh host needs the warm-up (or another strategy) before it can start.
-- Only `linux/arm64` was built; Azure needs `linux/amd64` (its CPU-only `torch` wheel is already in `uv.lock`, but that build has not been run). No vulnerability scan was run. `torch` is now pinned exactly, so its upgrades are manual.
+- The `linux/amd64` image now exists, but it was measured on a different, slower machine (the Hermes VM): 51 s offline startup to healthy there vs 10 s on the Mac. Those numbers are not yet comparable with each other, and its 590 MB size figure is likely a compressed size (see "Actual Docker build evidence"). No vulnerability scan was run. `torch` is now pinned exactly, so its upgrades are manual.
+- The serving image still carries the evaluation stack: `deepeval` brings in pytest and its plugins, and `ragas` the dataset tooling. Moving the evaluation-only dependencies out of the runtime group is an optional later optimization.
 - Day 23 deployment has not started.
 
 ### What I can now explain in an interview
@@ -5876,11 +5888,15 @@ Draft answers should cover these shapes, then be practiced without notes:
      - 572 MiB of steady memory for one worker;
      - warm `/query` about 39 ms (Q001), about 100 ms for a two-pass query;
      - under 1% CPU at rest.
+   - Measured on the Hermes VM (`linux/amd64`, the architecture Azure runs; a different, slower machine):
+     - 51 s offline from start to healthy, five times the Mac's 10 s. That is close to the Dockerfile's 60 s start period, so Azure's startup probe needs a generous grace period;
+     - about 682 MiB after the smoke;
+     - 332.57 s for a truly cold build.
    - Not measured yet, and needed before choosing a CPU/memory profile:
      - peak memory during startup (only the steady state was measured);
      - throughput and p95 latency under concurrent requests (only one client, n=10);
      - CPU per request under load;
-     - the `linux/amd64` image's behavior;
+     - why the VM starts five times slower (CPU, cores, or disk), and how Azure's CPU allocation compares;
      - the image pull time and model-cache cold start on Azure;
      - live-LLM latency and token cost (paid, not run).
    - These decide the CPU/memory pair, the minimum number of replicas (zero replicas means a cold start on the first request), and whether to bake the models into the image.
@@ -5891,6 +5907,6 @@ Draft answers should cover these shapes, then be practiced without notes:
 2. **Done (2026-10-15):** `Dockerfile`, `.dockerignore`, and [`docs/docker-runbook.md`](docker-runbook.md); model cache strategy (named volume) decided and proven, offline steady state included.
 3. **Done (2026-10-15):** a real build, healthy run, deterministic no-key smoke, pending-approval smoke, blocked-input smoke, measurements, logs, and cleanup, all from runbook commands executed as written ([`eval-report.md`](eval-report.md), "Day 22").
 4. **Juan:** re-run the runbook end to end on his own, then practice the interview drill without notes.
-5. **Done (2026-10-15):** `torch` switched to the CPU-only build on Linux (6.58 GB -> 1.87 GB, same retrieval results). Still open for Day 23: the image is `linux/arm64`, and Azure needs `linux/amd64`.
+5. **Done (2026-10-15):** `torch` switched to the CPU-only build on Linux (6.58 GB -> 1.87 GB, same retrieval results). **Done (reported 2026-10-17):** the `linux/amd64` image was built and exercised on the Hermes VM (51 s offline startup to healthy, about 682 MiB). Still open: record that image's on-disk size, since the reported 590 MB looks like a compressed size.
 6. **Ask Hermes to review HER-290** with the exact review prompt in `docs/day-22-dockerized-local-production-runbook.md`.
 7. **After a clean Day 22 review:** start Day 23 — Azure Container Apps deployment or an evidence-backed documented fallback, preserving the same image/config/health contract.

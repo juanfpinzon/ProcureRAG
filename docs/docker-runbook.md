@@ -10,7 +10,7 @@ Day 22 (HER-290). The commands below were executed as written on 2026-10-15. The
 
 ## Prerequisites
 
-- Docker Engine or Docker Desktop, with BuildKit (the default builder since Docker 23). Measured on Docker 29.7.2: Docker Desktop on Apple Silicon, so the daemon runs `linux/aarch64`.
+- Docker Engine or Docker Desktop, with BuildKit (the default builder since Docker 23). Measured on Docker 29.7.2: Docker Desktop on Apple Silicon, so the daemon runs `linux/aarch64`. The image was also built and exercised as `linux/amd64` on the Hermes VM (reported 2026-10-17). That machine is much slower, so its timings differ (see "Day 23 handoff").
 - About 2 GB free in Docker's disk for the image (1.87 GB measured), plus about 110 MB for the model cache volume.
 - Network access for two steps only: the build (base images, Python packages from PyPI, and `torch` from PyTorch's CPU-only index) and the one-time model warm-up (Hugging Face Hub). Every run after that works with no network at all.
 - Run every command from the repository root.
@@ -22,7 +22,7 @@ Day 22 (HER-290). The commands below were executed as written on 2026-10-15. The
 |---|---|---|
 | Base image | `python:3.11.17-slim-trixie` (official image, Debian 13). Digest on 2026-10-15: `sha256:e88e9763f943ec1834f992a4b51e0f24500486803e8bc534e5767af9ea65f6ce` | `.python-version` is 3.11. "slim" means fewer OS packages to patch. FastAPI's docs mark `tiangolo/uvicorn-gunicorn-fastapi` as deprecated |
 | Installer | `uv 0.12.2`, one binary copied from `ghcr.io/astral-sh/uv:0.12.2` | The uv version that wrote `uv.lock` |
-| Dependencies | `uv sync --locked --no-dev --no-install-project --no-cache` into `/app/.venv` | Exactly the lockfile's versions; the runtime group only; built fresh for Linux, never copied from the host `.venv` |
+| Dependencies | `uv sync --locked --no-dev --no-install-project --no-cache` into `/app/.venv` | Exactly the lockfile's versions, built fresh for Linux, never copied from the host `.venv`. The dev group is omitted, although some of its packages also arrive through runtime dependencies (pytest through `deepeval`; httpx through `huggingface-hub`, `langchain-core`, and others). Only ruff is absent |
 | PyTorch build | `torch 2.14.0+cpu` from `https://download.pytorch.org/whl/cpu` on Linux (`[tool.uv.sources]` in `pyproject.toml`); macOS keeps PyPI's `torch 2.14.0` | The service runs on CPU only. PyPI's Linux wheel is the CUDA build, which made the first image 6.58 GB |
 | Files copied in | `pyproject.toml`, `uv.lock`, `src/`, `data/corpus_v1/` (24 files, 1.8 MB) | `.dockerignore` is an allow-list: everything else stays out |
 | Runtime user | `procurerag` (uid 1000), no login shell. Code and packages are owned by root | Not root, and it cannot modify its own code |
@@ -264,20 +264,27 @@ docker run --detach --rm --name procurerag-live \
 
 What Day 23 can rely on:
 
-- Image `procurerag-api:day22`; container port `8000`; `GET /health` returns HTTP 200 once startup is complete (9-10 s here, with a warm local cache).
+- Image `procurerag-api:day22`; container port `8000`; `GET /health` returns HTTP 200 once startup is complete. With a warm cache, that took 9-10 s on the Mac and 51 s (offline) on the Hermes VM.
 - The environment contract in "Runtime configuration". The deterministic path needs no secret.
 - A start command that needs no shell: the image's `CMD`.
 
 What Day 23 must decide:
 
-- **CPU architecture.** This image was built on Apple Silicon, so it is `linux/arm64`. Azure Container Apps runs `linux/amd64`: build with `docker build --platform linux/amd64`. That build has not been tried yet. `uv.lock` already holds the `x86_64` CPU-only `torch` wheel it needs.
+- **CPU architecture.** The image built on the Mac is `linux/arm64`. Azure Container Apps runs `linux/amd64`. That image has now been built and exercised successfully on the Hermes VM (reported 2026-10-17):
+  - image id `sha256:b9f88b8abc7c…`;
+  - a truly cold build (image pulls, dependency downloads, bytecode compiling) in 332.57 s;
+  - offline startup to healthy in 51 s;
+  - about 682 MiB after the smoke.
+
+  These numbers belong to that VM. It is a much slower machine than the Mac (10 s startup, 572 MiB), so they do not show what Azure will do. Its reported size, 590,293,766 bytes, is most likely a compressed size: the x86_64 `torch` wheel alone unpacks to 712 MiB. So it cannot be compared with the Mac's 1.87 GB on-disk figure.
 - **Where the models come from.** A local named volume has no direct cloud equivalent. The options are a cloud file share warmed once (Azure Files), models baked into the image, or a download at every start (`HF_HUB_OFFLINE=0`). Each one moves the cold-start cost somewhere else. Baking the 106 MB of models in is now cheap compared with the 1.87 GB image.
-- **Image size.** 1.87 GB with CPU-only `torch` (it was 6.58 GB with the CUDA build). Every cold start on a new host still pulls it, so it remains a cold-start cost to measure on Azure.
-- **Health probes.** Kubernetes-based platforms such as Azure Container Apps do not run the Dockerfile `HEALTHCHECK`. The same `/health` route, with a comparable startup grace period, has to be configured as the platform's own probe.
+- **Image size.** 1.87 GB on disk for `linux/arm64` with CPU-only `torch` (it was 6.58 GB with the CUDA build). The `linux/amd64` on-disk size is not recorded yet. Every cold start on a new host still pulls it, so it remains a cold-start cost to measure on Azure.
+- **Health probes.** Kubernetes-based platforms such as Azure Container Apps do not run the Dockerfile `HEALTHCHECK`. The same `/health` route has to be configured as the platform's own probe. Its startup grace period must cover the slow case: 51 s on the Hermes VM, already close to the Dockerfile's 60 s start period.
 
 ## Honest limits
 
 - Every Day 21 limit still applies inside the container: the role is caller-asserted (no authentication); approval is a stateless re-submission; free-text evidence is unchecked; trace rows are not persisted.
 - The rate limit lives in the one Uvicorn process. It resets whenever the container restarts. Behind Docker's port forwarding, every client on the host arrives from the same gateway address, so they all share one 30-requests-per-minute budget.
 - Trace rows built inside the container have no code version: `git describe` finds no `git` and no `.git` in the image, and the code records `None`, as designed. The image tag is not yet recorded anywhere in the trace.
-- Only `linux/arm64` was built and run. No vulnerability scan of the image was run.
+- `linux/arm64` was built and run on the Mac, and `linux/amd64` on the Hermes VM. The two machines differ a lot, so their timings measure the machines as much as the architectures. No vulnerability scan of the image was run.
+- `--no-dev` leaves out the dev group, but the evaluation stack is still a runtime dependency. `deepeval` brings pytest into the serving image.
