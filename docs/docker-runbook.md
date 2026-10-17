@@ -276,9 +276,9 @@ What Day 23 must decide:
   - offline startup to healthy in 51 s;
   - about 682 MiB after the smoke.
 
-  These numbers belong to that VM. It is a much slower machine than the Mac (10 s startup, 572 MiB), so they do not show what Azure will do. Its reported size, 590,293,766 bytes, is most likely a compressed size: the x86_64 `torch` wheel alone unpacks to 712 MiB. So it cannot be compared with the Mac's 1.87 GB on-disk figure.
+  These numbers belong to that VM. It is a much slower machine than the Mac (10 s startup, 572 MiB), so they do not show what Azure will do. `docker image inspect` reports 590,293,766 bytes of content, while `docker image ls` reports 2.74 GB of local disk usage and `/app/.venv` uses 1,859 MiB. The comparable local-disk figure is therefore 2.74 GB, not 590 MB.
 - **Where the models come from.** A local named volume has no direct cloud equivalent. The options are a cloud file share warmed once (Azure Files), models baked into the image, or a download at every start (`HF_HUB_OFFLINE=0`). Each one moves the cold-start cost somewhere else. Baking the 106 MB of models in is now cheap compared with the 1.87 GB image.
-- **Image size.** 1.87 GB on disk for `linux/arm64` with CPU-only `torch` (it was 6.58 GB with the CUDA build). The `linux/amd64` on-disk size is not recorded yet. Every cold start on a new host still pulls it, so it remains a cold-start cost to measure on Azure.
+- **Image size.** 1.87 GB on disk for `linux/arm64` with CPU-only `torch` (it was 6.58 GB with the CUDA build) and 2.74 GB of local disk usage for `linux/amd64` on the Hermes VM. Every cold start on a new host still pulls the transferred content, so image pull time remains a cost to measure on Azure.
 - **Health probes.** Kubernetes-based platforms such as Azure Container Apps do not run the Dockerfile `HEALTHCHECK`. The same `/health` route has to be configured as the platform's own probe. Its startup grace period must cover the slow case: 51 s on the Hermes VM, already close to the Dockerfile's 60 s start period.
 
 ## Honest limits

@@ -5534,30 +5534,30 @@ Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
 
 No new Boot.dev chapter today. This is a production-packaging bridge day after the Day 21 FastAPI service.
 
-Mark each exact source target when complete and add one ProcureRAG-specific takeaway:
+All exact source targets below were read and confirmed by Juan on 2026-10-17; each includes a ProcureRAG-specific takeaway:
 
-- [ ] FastAPI docs — `FastAPI in Containers - Docker`: Read.
-  - [ ] `Containers and Docker`. Read.
-  - [ ] `What is a Container Image` / `Container Images`. Read.
-  - [ ] `Build a Docker Image for FastAPI`. Read.
-  - [ ] `Docker Cache`. Read.
-  - [ ] `Start the Docker Container` / `Check it`. Read.
-  - [ ] `Deployment Concepts`. Read.
-  - [ ] `One Process per Container` / `Multiple Processes - Workers`. Read.
-  - [ ] `Base Docker Image` and the deprecated `tiangolo/uvicorn-gunicorn-fastapi` image warning. Read.
+- [x] FastAPI docs — `FastAPI in Containers - Docker`: Read.
+  - [x] `Containers and Docker`. Read.
+  - [x] `What is a Container Image` / `Container Images`. Read.
+  - [x] `Build a Docker Image for FastAPI`. Read.
+  - [x] `Docker Cache`. Read.
+  - [x] `Start the Docker Container` / `Check it`. Read.
+  - [x] `Deployment Concepts`. Read.
+  - [x] `One Process per Container` / `Multiple Processes - Workers`. Read.
+  - [x] `Base Docker Image` and the deprecated `tiangolo/uvicorn-gunicorn-fastapi` image warning. Read.
   - ProcureRAG takeaway:
     - **Layer order.** The page's Dockerfile copies the requirements file first, installs, and copies the code last, so `Docker Cache` reuses the install layer. ProcureRAG does the same with `pyproject.toml` + `uv.lock`. Measured: a one-line change in `src/api.py` re-ran only `COPY src` (under 1 s).
     - **Exec-form `CMD`.** The page calls it critical: it gives a graceful shutdown and runs the lifespan events. ProcureRAG's `lifespan` is where both models load. The exec-form container logs `Started server process [1]` and exits with code 0 on `docker stop`. The shell-form control experiment got SIGKILL (exit code 137) instead.
     - **One process per container.** In a cluster that replicates containers, the page runs one Uvicorn process per container and leaves `--workers` out. Azure Container Apps replicates containers, so ProcureRAG keeps `--workers 1` and would scale with replicas. That is also what its per-process models and rate limiter require.
     - **Base image.** Built from the official `python:3.11.17-slim-trixie`, not the deprecated `tiangolo/uvicorn-gunicorn-fastapi`. Since Uvicorn now has `--workers` itself, that special image is no longer needed.
     - **Day 23 follow-up.** Behind a TLS-terminating proxy, the page adds `--proxy-headers`. For ProcureRAG this also decides what the rate limiter sees as "the client". Uvicorn only believes `X-Forwarded-For` from addresses in `--forwarded-allow-ips` (default `127.0.0.1,::1`). Behind Azure's ingress, every caller would otherwise share the proxy's address, as every host client shares `172.17.0.1` today.
-- [ ] Astral uv docs — `Using uv in Docker`:
-  - [ ] `Installing uv`.
-  - [ ] `Installing a project`.
-  - [ ] `Using the environment`.
-  - [ ] `Intermediate layers`.
-  - [ ] `Non-editable installs`.
-  - [ ] `.venv` in `.dockerignore`, uv version pinning, and `uv sync --locked`.
+- [x] Astral uv docs — `Using uv in Docker`:
+  - [x] `Installing uv`.
+  - [x] `Installing a project`.
+  - [x] `Using the environment`.
+  - [x] `Intermediate layers`.
+  - [x] `Non-editable installs`.
+  - [x] `.venv` in `.dockerignore`, uv version pinning, and `uv sync --locked`.
   - ProcureRAG takeaway:
     - **Used, as the guide shows:**
       - the `uv` binary copied from `ghcr.io/astral-sh/uv`, pinned to `0.12.2`, the version that wrote `uv.lock`;
@@ -5569,27 +5569,27 @@ Mark each exact source target when complete and add one ProcureRAG-specific take
       - Cache mounts (with `UV_LINK_MODE=copy`). I used `uv sync --no-cache` instead: simpler, and the downloads do not stay in the layer. The price, measured: a lockfile change re-downloads everything (15 s, 323 MiB with CPU-only `torch`).
       - Non-editable installs and multi-stage builds. They exist to copy only `.venv` into a final image. ProcureRAG is not an installable package and runs from `src/`. The leftover cost is the 45 MB `uv` binary staying in the runtime image.
     - **`.venv` stays out of the context.** The guide's reason is that it is platform-specific. The host's `.venv` is 1.2 GB of macOS wheels, and it is excluded by the allow-list.
-- [ ] Docker Docs — `Build context` → `.dockerignore` files / local filesystem context.
+- [x] Docker Docs — `Build context` → `.dockerignore` files / local filesystem context.
   - ProcureRAG takeaway:
     - **Why `.gitignore` alone cannot keep `.env` out.** Only Git reads `.gitignore`. `docker build .` sends the local directory to the builder, filtered only by the `.dockerignore` at the root of the context. So ProcureRAG's `.env` is untracked by Git and would still be sent. A `COPY . .` would then put it into a layer, and layers ship with the image.
     - **`.dockerignore` acts before the build.** An excluded file never reaches the builder. The Dockerfile and `.dockerignore` are sent too (the builder needs them), but `COPY` cannot copy them.
     - **The last matching line wins.** That is why ProcureRAG's allow-list re-excludes `**/.env`, `**/__pycache__`, and the like after `!src/` and `!data/corpus_v1/`. Measured: without those lines, planted `src/.env`, `src/.env.prod`, and `data/corpus_v1/.env` entered the context. With them, the context is 24 files and 1.83 MB.
-- [ ] Docker Docs — `Dockerfile reference`:
-  - [ ] `FROM`, `WORKDIR`, `COPY`, `RUN`, `ENV`, `EXPOSE`, `USER`, `CMD`, `HEALTHCHECK`. Read.
-  - [ ] Exec-form `CMD` and startup-aware health-check timing. Read.
-  - [ ] Build-time vs runtime secret boundary. Read.
+- [x] Docker Docs — `Dockerfile reference`:
+  - [x] `FROM`, `WORKDIR`, `COPY`, `RUN`, `ENV`, `EXPOSE`, `USER`, `CMD`, `HEALTHCHECK`. Read.
+  - [x] Exec-form `CMD` and startup-aware health-check timing. Read.
+  - [x] Build-time vs runtime secret boundary. Read.
   - ProcureRAG takeaway:
     - **`ENV` and `ARG` are readable by anyone with the image.** `ENV` values persist into every container and show in `docker inspect`; `ARG` values show in `docker history`. So the image's `ENV` holds only safe defaults (`PROCURERAG_LIVE_LLM=0`, both LangSmith flags `false`, `HF_HOME`, `HF_HUB_OFFLINE=1`), and there is no `ARG`. A build that needed a secret would use `RUN --mount=type=secret`. ProcureRAG needs none at build time: `OPENROUTER_API_KEY` is run-time only.
     - **Shell form vs exec form.** Shell form runs the command under `/bin/sh -c`, so the program is not PID 1 and does not get `docker stop`'s SIGTERM. Measured on this base image: `sh` stayed PID 1 even for a single command, and was killed with exit code 137.
     - **`HEALTHCHECK`.** Exit code 0 means healthy, 1 unhealthy. `--start-period=60s` absorbs the model loading. `--start-interval=2s` (it needs Docker Engine 25+; this machine runs 29.7.2) reports `healthy` about 2 s after the app is ready: 9 s measured.
     - **`EXPOSE` only documents.** `EXPOSE 8000` publishes nothing; `--publish 127.0.0.1:8000:8000` does.
     - **`COPY` and `USER`.** Without `--chown`, `COPY` creates files owned by root (UID/GID 0), so the `procurerag` user can read its code but not change it (`touch /app/src/x`: `Permission denied`). `USER procurerag`, then `mkdir -p "$HF_HOME"`, makes the one folder the user owns.
-- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only: Read.
-  - [ ] `Scaling RAG Systems`. Read.
-  - [ ] `The Real Costs of Vector Search`. Read.
-  - [ ] `Production Hosting`. Read.
-  - [ ] `Three Pillars of Production Visibility`. Read.
-  - [ ] `Security Checklist`. Read.
+- [x] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only: Read.
+  - [x] `Scaling RAG Systems`. Read.
+  - [x] `The Real Costs of Vector Search`. Read.
+  - [x] `Production Hosting`. Read.
+  - [x] `Three Pillars of Production Visibility`. Read.
+  - [x] `Security Checklist`. Read.
   - ProcureRAG takeaway. As on Day 21, this is my mapping of each section title onto today's evidence, not the course's wording (the page is a video course):
     - `Scaling RAG Systems`: scale with replicas of a one-worker container, not with more workers. Each process holds both models (572 MiB measured) and its own rate-limit counter. Shared state (the rate limit, approvals, trace rows) has to move out of the process before scaling out means anything.
     - `The Real Costs of Vector Search`: retrieval is in-process, so there is no vector-database bill. The costs are local: a 1.87 GB image, about 0.6 GiB RAM, about 39 ms per warm query (n=10), and a 106 MB model cache. The biggest cost found today was not search at all: CUDA libraries that made the first image 6.58 GB.
@@ -5709,7 +5709,7 @@ Secret verification:
 
 - Architecture: `linux/amd64`.
 - Image id: `sha256:b9f88b8abc7c…`.
-- Image size: 590,293,766 bytes, as reported. **Not comparable with the Mac's 1,873,016,867 bytes.** The x86_64 `torch 2.14.0+cpu` wheel alone unpacks to 712 MiB (measured on 2026-10-17 with `uv pip install --target ... --python-platform x86_64-manylinux_2_28`). So 590 MB cannot be the unpacked, on-disk size the Mac's classic `overlay2` store reports, and it is most likely the compressed content size. The on-disk size on the VM is still to record (`docker image ls` shows both columns, or `du -sm /app/.venv` inside the image).
+- Image size: `docker image inspect` reports 590,293,766 bytes of content, while `docker image ls` reports 2.74 GB of local disk usage and `du -sm /app/.venv` reports 1,859 MiB inside the image. The 590 MB figure is therefore not comparable with the Mac's 1,873,016,867-byte on-disk figure; the VM's local disk figure is 2.74 GB.
 - Truly cold build, including the image pulls, the dependency downloads, and bytecode compiling: 332.57 s.
 - Offline startup to healthy: 51 s.
 - Memory after the smoke: about 682 MiB.
@@ -5828,7 +5828,7 @@ No file under `src/` or `tests/` changed.
 - Trace rows are still not persisted. Inside the container they also have no code version (`git describe` finds no git), and the image tag is not recorded.
 - Free-text evidence completeness and answer quality are still unchecked.
 - Model cold starts: the model revisions are unpinned, and a fresh host needs the warm-up (or another strategy) before it can start.
-- The `linux/amd64` image now exists, but it was measured on a different, slower machine (the Hermes VM): 51 s offline startup to healthy there vs 10 s on the Mac. Those numbers are not yet comparable with each other, and its 590 MB size figure is likely a compressed size (see "Actual Docker build evidence"). No vulnerability scan was run. `torch` is now pinned exactly, so its upgrades are manual.
+- The `linux/amd64` image now exists, but it was measured on a different, slower machine (the Hermes VM): 51-54 s offline startup to healthy in the recorded runs vs 10 s on the Mac. Those timings are not directly comparable. On the VM, `docker image inspect` reports 590,293,766 bytes of content while `docker image ls` reports 2.74 GB of local disk usage. No vulnerability scan was run. `torch` is now pinned exactly, so its upgrades are manual.
 - The serving image still carries the evaluation stack: `deepeval` brings in pytest and its plugins, and `ragas` the dataset tooling. Moving the evaluation-only dependencies out of the runtime group is an optional later optimization.
 - Day 23 deployment has not started.
 
@@ -5903,10 +5903,10 @@ Draft answers should cover these shapes, then be practiced without notes:
 
 ### Next step
 
-1. **Juan:** read the exact Day 22 source sections, tick each box in "Course/source checkpoint" once it is actually read, check each drafted takeaway against the source, and confirm the freeCodeCamp "three pillars" reading against the video.
+1. **Done (confirmed 2026-10-17):** Juan read the exact Day 22 source sections, confirmed the drafted takeaways against the sources, and completed every checkbox in "Course/source checkpoint".
 2. **Done (2026-10-15):** `Dockerfile`, `.dockerignore`, and [`docs/docker-runbook.md`](docker-runbook.md); model cache strategy (named volume) decided and proven, offline steady state included.
 3. **Done (2026-10-15):** a real build, healthy run, deterministic no-key smoke, pending-approval smoke, blocked-input smoke, measurements, logs, and cleanup, all from runbook commands executed as written ([`eval-report.md`](eval-report.md), "Day 22").
-4. **Juan:** re-run the runbook end to end on his own, then practice the interview drill without notes.
-5. **Done (2026-10-15):** `torch` switched to the CPU-only build on Linux (6.58 GB -> 1.87 GB, same retrieval results). **Done (reported 2026-10-17):** the `linux/amd64` image was built and exercised on the Hermes VM (51 s offline startup to healthy, about 682 MiB). Still open: record that image's on-disk size, since the reported 590 MB looks like a compressed size.
-6. **Ask Hermes to review HER-290** with the exact review prompt in `docs/day-22-dockerized-local-production-runbook.md`.
-7. **After a clean Day 22 review:** start Day 23 — Azure Container Apps deployment or an evidence-backed documented fallback, preserving the same image/config/health contract.
+4. **Ongoing, non-blocking practice:** the detailed interview answers are recorded above; continue rehearsing them without notes during Day 23 rather than treating rehearsal as unfinished Day 22 implementation work.
+5. **Done (2026-10-15):** `torch` switched to the CPU-only build on Linux (6.58 GB -> 1.87 GB, same retrieval results). **Done (verified 2026-10-17):** the `linux/amd64` image was built and exercised on the Hermes VM; `docker image ls` reports 2.74 GB of local disk usage and `/app/.venv` uses 1,859 MiB.
+6. **Done (2026-10-17):** Hermes re-reviewed HER-290, reran the Python and Docker gates, and confirmed the Day 22 artifact and corrected evidence are closure-ready.
+7. **Next:** start Day 23 — Azure Container Apps deployment or an evidence-backed documented fallback, preserving the same image/config/health contract.

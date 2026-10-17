@@ -4667,7 +4667,7 @@ Azure Container Apps runs `linux/amd64`. That image was built and exercised succ
 | Measurement | Hermes VM, `linux/amd64` | Mac, `linux/arm64` (CPU-only `torch`) |
 |---|---|---|
 | Image id | `sha256:b9f88b8abc7c…` | `sha256:03b9c758...` |
-| Image size | 590,293,766 bytes, as reported (see the caveat below) | 1,873,016,867 bytes on disk |
+| Image size | 590,293,766 bytes from `docker image inspect`; 2.74 GB local disk usage from `docker image ls`; `/app/.venv` 1,859 MiB | 1,873,016,867 bytes on disk |
 | Build | 332.57 s, truly cold: image pulls, dependency downloads, and bytecode compiling | 15 s, with base images and the `uv` layer already cached |
 | Offline startup to healthy | 51 s | 10 s |
 | Memory after the smoke | about 682 MiB | 572 MiB |
@@ -4675,7 +4675,7 @@ Azure Container Apps runs `linux/amd64`. That image was built and exercised succ
 Caveats:
 
 - **Different machines, not just different architectures.** The VM is much slower than the Apple Silicon Mac. The two columns compare two machines, and nothing in them isolates the effect of `amd64` vs `arm64`. The builds are not comparable either: one was fully cold, the other reused cached layers.
-- **The two size figures measure different things.** The x86_64 `torch 2.14.0+cpu` wheel alone unpacks to 712 MiB (`uv pip install --target ... --python-platform x86_64-manylinux_2_28`, measured on 2026-10-17). That is more than the whole 590 MB figure. So 590 MB cannot be the unpacked, on-disk size that the Mac's classic `overlay2` image store reports as `Size`. It is most likely a compressed size (the layers as stored or transferred), not what is unpacked on disk. Which one that VM's Docker reports as `Size` depends on its image store, and that was not checked. The on-disk size on the VM still needs recording: `docker image ls` shows both columns, or run `du -sm /app/.venv` inside the image.
+- **The size figures measure different things.** The VM reports 590,293,766 bytes through `docker image inspect`, but `docker image ls` reports 2.74 GB of local disk usage and `du -sm /app/.venv` reports 1,859 MiB. The x86_64 `torch 2.14.0+cpu` wheel alone unpacks to 712 MiB, so the 590 MB content figure was never comparable with the Mac's classic on-disk figure. For local capacity planning on this VM, use 2.74 GB; measure transferred pull size separately on Azure.
 - **51 s is close to the Dockerfile's 60 s start period.** On that VM the health check still turned healthy inside the start period. A slower host, or a platform probe with a shorter grace period, would start counting failures before the models finish loading. Day 23 has to size Azure's startup probe for this case, not for the Mac's 10 s.
 
 ### Secret boundary evidence
@@ -4708,7 +4708,7 @@ Caveats:
 
 ### Limits of this evidence
 
-- Two machines, and they are hard to compare. All the detailed probes ran on the Mac (`linux/arm64`). The `linux/amd64` image Azure needs was built and exercised on the Hermes VM, a much slower machine (51 s vs 10 s offline startup), and only its summary numbers are recorded here. Its on-disk size is not recorded yet: the reported 590 MB is most likely compressed.
+- Two machines, and they are hard to compare. All the detailed probes ran on the Mac (`linux/arm64`). The `linux/amd64` image Azure needs was built and exercised on the Hermes VM, a much slower machine (51-54 s vs 10 s offline startup), and only its summary numbers are recorded here. The VM reports 2.74 GB of local image disk usage; Azure pull time and storage still need direct measurement.
 - Latency is n=10 from one client, with no concurrent requests. This is not a load test and gives no p95.
 - Startup timing has whole-second resolution.
 - The "cold" build had the base images already pulled, and its time depends on download speed.
