@@ -305,18 +305,20 @@ git status --short
 
 Then fill this decision table before cloud mutation:
 
+Filled 2026-10-19 (full reasoning and evidence: `docs/learning-log.md` → Day 23 → "Deployment contract"):
+
 | Decision | Chosen value | Why | Proof command/evidence |
 |---|---|---|---|
-| Subscription/region | _TODO_ | permissions, proximity, service availability | `az account show`, provider state |
-| Resource group | _TODO_ | dedicated + disposable | `az group show` |
-| App/environment names | _TODO_ | lowercase/unique/reusable | `az containerapp show`, env query |
-| Build path | `--source .` / existing registry image / other | _TODO_ | registry image + revision image |
-| Model delivery | baked / startup download / Azure Files | _TODO_ | fresh-replica startup proof |
+| Subscription/region | `Azure subscription 1` (`FreeTrial_2014-09-01`, spending limit `On`) / `northeurope` | Existing CLI login; providers already `Registered`; `westeurope` refused new resources (`RequestDisallowedByAzure`) | `az account show`, `az rest ... subscriptionPolicies`, provider state |
+| Resource group | `rg-procurerag-day23` | dedicated + disposable; the subscription had 0 groups | `az group show` |
+| App/environment names | `procurerag-api` / `cae-procurerag-day23`; registry `procureragday23jp` | lowercase/unique/reusable | `az containerapp show`, env query |
+| Build path | **Existing registry image:** local `docker buildx build --platform linux/amd64 --push` to ACR, then `az containerapp up --image` | `--source .` needs ACR Tasks, which is paused on free-trial subscriptions | registry tag + digest + revision image |
+| Model delivery | **baked** (Dockerfile bake step), `HF_HUB_OFFLINE=1` at run time | fresh replicas have no volume; no runtime Hub dependency | local no-volume `--network none` run (done); Azure cold start (step 9) |
 | Ingress/port | external HTTPS -> 8000 for smoke | temporary public verification | ingress query + `/health` |
-| Runtime configuration | live LLM/tracing off | free deterministic path | app config names, `/health` |
-| Probe strategy | default inspected / custom HTTP probes | current startup may be ~51 s | revision config + logs |
-| Resources/scale | _TODO CPU/memory_; min 0 or 1; max 1 | memory/cost/cold-start trade-off | app revision config |
-| Cleanup/retention | delete RG / disable ingress / retain until date | no accidental public/cost tail | final `az` verification |
+| Runtime configuration | live LLM/tracing off; `HF_HUB_OFFLINE=1`; `OMP_NUM_THREADS=1` | free deterministic path; threads match the 1 vCPU (106 s -> 23 s measured) | app config names, `/health` |
+| Probe strategy | **custom HTTP probes** on `/health:8000`: startup about 160 s budget, readiness, liveness | Docker `HEALTHCHECK` is ignored; measured startups 23-57 s | revision config + logs |
+| Resources/scale | 1.0 vCPU / 2.0 GiB; min 0; max 1 | 700 MiB measured peak; scale-to-zero cost vs cold start | app revision config |
+| Cleanup/retention | delete RG the same day | no accidental public/cost tail | final `az` verification |
 
 **Gate before Block 3:** the fresh cloud replica must have a valid model path. Do not deploy the current offline/no-cache contract blindly.
 
@@ -336,7 +338,7 @@ Complete the exact sections above and write concise answers to:
 
 Choose the model route first. Recommended order:
 
-1. **Primary:** make the cloud-target image self-contained by baking the two exact model artifacts into its cache, then keep runtime offline.
+1. **Primary:** make the cloud-target image self-contained by baking the two exact model artifacts into its cache, then keep runtime offline. - Go with this one, Chosen option.
 2. **Bounded fallback:** allow startup download for the first Azure experiment, explicitly label it as network-dependent, and measure a true fresh-replica cold start.
 3. **Advanced only:** Azure Files cache with a documented warm-up and mount/permission lifecycle.
 
@@ -352,6 +354,8 @@ export CONTAINERAPP_NAME=<unique-lowercase-app-name>
 Do not put credentials or keys in these variables or in the route/log.
 
 ### Block 3A — Primary route: Juan-owned Azure deployment, 120–150m
+
+Executable version for this subscription: `docs/azure-container-apps-runbook.md`, steps 0-6. The template is `deploy/azure/containerapp-template.yaml`. The build is local `linux/amd64` + push ("Path B"), because `--source .` needs ACR Tasks.
 
 Prerequisite/discovery commands:
 
@@ -430,6 +434,8 @@ Fallback priority:
 4. Local-only Day 22 evidence plus a complete Azure retry plan is progress, but does **not** close HER-291 or satisfy the HER-270 Azure/fallback criterion unless the documented fallback itself is executed and verified.
 
 ### Block 4 — Cloud smoke, logs, cleanup, and interview drill, 60–75m
+
+Executable version: `docs/azure-container-apps-runbook.md`, steps 7-11. Its Q091 body is read from `data/corpus_v1/example_queries.jsonl` with `jq`, so the labeled text is always canonical.
 
 After the FQDN is ready:
 

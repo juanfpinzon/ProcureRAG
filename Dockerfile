@@ -1,7 +1,12 @@
 # Dockerfile: the Day 21 FastAPI service (`src/api.py`) as a container image.
 #
-#   build:  docker build --tag procurerag-api:day22 .
-#   run:    see docs/docker-runbook.md (the model cache volume is warmed first)
+#   build:  docker build --tag procurerag-api:day23 .
+#   run:    locally, see docs/docker-runbook.md
+#           on Azure Container Apps, see docs/azure-container-apps-runbook.md
+#
+# Since Day 23 the image is self-contained: the build bakes the two Hugging
+# Face models into it (see "The two Hugging Face models" below), so a
+# container starts with no network and no mounted model cache.
 #
 # Keep two moments apart while reading this file:
 #
@@ -111,14 +116,16 @@ ENV PATH="/app/.venv/bin:$PATH"
 # LANGSMITH_TRACING=false Send no trace to LangSmith. Both names are set,
 # LANGSMITH_TRACING_V2    because LangSmith reads the _V2 name first.
 #   =false
-# HF_HOME                 Where Hugging Face stores downloaded models. A fixed,
-#                         known path, so the named cache volume can be mounted
-#                         exactly here (see docs/docker-runbook.md).
-# HF_HUB_OFFLINE=1        Never contact the Hugging Face Hub. The two models
-#                         must already be in HF_HOME. With an empty cache,
-#                         startup fails at once with a clear error, instead of
-#                         quietly downloading the models again in every new
-#                         container. Only the warm-up run sets this to 0.
+# HF_HOME                 Where Hugging Face stores the models. A fixed, known
+#                         path: the build bakes the models into it, and a
+#                         local cache volume can still be mounted exactly here
+#                         (see docs/docker-runbook.md).
+# HF_HUB_OFFLINE=1        Never contact the Hugging Face Hub at run time. The
+#                         two models are already in HF_HOME. If they were not,
+#                         startup would fail at once with a clear error,
+#                         instead of quietly downloading them again in every
+#                         new container. Only the bake step below lifts it,
+#                         for that one build command.
 #
 # There is deliberately NO OPENROUTER_API_KEY here, and no ARG for it.
 # ENV and ARG values are saved in the image's config and history: anyone who
@@ -143,12 +150,55 @@ RUN useradd --create-home --shell /usr/sbin/nologin procurerag
 USER procurerag
 
 # Create the model cache folder AS the runtime user, so that user owns it.
-# This line is what makes the named volume work. When an EMPTY named volume is
-# first mounted on a folder that exists in the image, Docker copies that
-# folder's contents AND its owner into the volume. Without this line, Docker
-# would create the mount point owned by root, and the model download would
-# fail with "Permission denied".
+# The bake step below writes into it as that user. It also keeps Day 22's
+# optional named volume working: when an EMPTY named volume is first mounted
+# on a folder that exists in the image, Docker copies that folder's contents
+# AND its owner into the volume. Without this line, Docker would create the
+# mount point owned by root, and a model download into the volume would fail
+# with "Permission denied".
 RUN mkdir -p "$HF_HOME"
+
+# ---------------------------------------------------------------------------
+# The two Hugging Face models, baked into the image (Day 23)
+#
+# Day 22 kept the models OUT of the image, in a named Docker volume warmed
+# once per machine. Azure Container Apps has no such volume: every new
+# replica starts from the image alone. With HF_HUB_OFFLINE=1 and an empty
+# cache, startup would stop with `LocalEntryNotFoundError` (exit code 3,
+# measured on Day 22). So the models now travel INSIDE the image. The one
+# step that has network anyway (the build) downloads them, and every
+# container after that starts offline, on any host.
+#
+# How the RUN line below does it:
+#
+# - `HF_HUB_OFFLINE=0 python ...` lifts the offline default for THIS one
+#   command only. A `NAME=value` prefix sets a variable for one process. It
+#   is not an ENV instruction, so it is not saved in the image: every
+#   container still starts with HF_HUB_OFFLINE=1.
+# - It loads each model with the same class and the same arguments as
+#   server startup (`semantic_search.load_embedding_model` and
+#   `reranking.load_cross_encoder`). So it downloads exactly the files
+#   startup will look for, and nothing more. (`snapshot_download` would
+#   fetch the whole model repository, including its ONNX and OpenVINO
+#   copies, which the service never loads.)
+# - The model names are written here a second time, not imported from
+#   src/. src/ is copied LATER (below), so that a code change does not
+#   re-run this 106 MB download. If the names in src/ ever change and this
+#   line does not, startup fails loudly (offline, the new model is not in
+#   the cache). It never silently loads a different model.
+# - `grep` prints, into the build log, the commit each model's `main`
+#   branch pointed to at build time: one line per model, `.../refs/main:<hash>`.
+#   The code asks for `main`, so a later build may bake newer weights. The
+#   build log is therefore where each image's exact model revisions are
+#   recorded. `du` prints the size the models add to the image.
+#
+# It runs as `procurerag` (USER above), into the folder that user owns.
+# This layer comes after the dependencies (it needs sentence-transformers)
+# and before the code, so Docker reuses it on every code-only rebuild.
+# ---------------------------------------------------------------------------
+RUN HF_HUB_OFFLINE=0 python -c "from sentence_transformers import CrossEncoder, SentenceTransformer; SentenceTransformer('sentence-transformers/multi-qa-MiniLM-L6-cos-v1'); CrossEncoder('cross-encoder/ms-marco-TinyBERT-L2-v2', device='cpu')" \
+ && grep . "$HF_HOME"/hub/models--*/refs/main \
+ && du -sh "$HF_HOME"
 
 # ---------------------------------------------------------------------------
 # The application: data first, then code (the code changes more often)
@@ -167,6 +217,9 @@ COPY src ./src
 # Documentation only: EXPOSE publishes nothing. It records "this image
 # listens on 8000" in the image metadata. The actual host -> container
 # mapping is made at run time, by `docker run --publish 127.0.0.1:8000:8000`.
+# `az containerapp up --source .` also reads this line to pick the ingress
+# target port, although the Azure runbook still passes `--target-port 8000`
+# explicitly.
 # ---------------------------------------------------------------------------
 EXPOSE 8000
 
@@ -196,6 +249,10 @@ EXPOSE 8000
 # service, and answers HTTP. It does NOT prove that answers are correct, or
 # that OpenRouter is reachable. (`/health` never calls the pipeline or the
 # provider; see `health` in src/api.py.)
+#
+# Only Docker runs this check. Azure Container Apps ignores it and uses its
+# own startup/readiness/liveness probes, which are configured on the
+# container app (deploy/azure/containerapp-template.yaml), not here.
 # ---------------------------------------------------------------------------
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --start-interval=2s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]

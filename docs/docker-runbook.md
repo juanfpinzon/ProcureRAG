@@ -8,6 +8,8 @@ Day 22 (HER-290). The commands below were executed as written on 2026-10-15. The
 
 **What you do not get:** authentication, a production rate limit, answer-quality evaluation, or a cloud deployment (see "Honest limits").
 
+> **Day 23 change.** The `Dockerfile` now bakes the two models into the image (about +110 MB), so a container needs neither step 3's volume nor any network to start. Step 3 and the `--volume` flags below still work, because a mounted volume simply takes the place of the baked folder. But the "exit code 3 without a warm cache" behavior only applies to images built from the Day 22 `Dockerfile`. The cloud deployment is in [`azure-container-apps-runbook.md`](azure-container-apps-runbook.md).
+
 ## Prerequisites
 
 - Docker Engine or Docker Desktop, with BuildKit (the default builder since Docker 23). Measured on Docker 29.7.2: Docker Desktop on Apple Silicon, so the daemon runs `linux/aarch64`. The image was also built and exercised as `linux/amd64` on the Hermes VM (reported 2026-10-17). That machine is much slower, so its timings differ (see "Day 23 handoff").

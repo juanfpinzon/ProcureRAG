@@ -1,0 +1,182 @@
+# deploy/azure/containerapp-template.yaml
+#
+# ProcureRAG's revision template for Azure Container Apps (Day 23): what
+# every replica of the app runs, and how the platform decides it is healthy.
+#
+# Applied by step 5 of docs/azure-container-apps-runbook.md:
+#
+#   sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$IMAGE|" \
+#     deploy/azure/containerapp-template.yaml > "$RENDERED"
+#   az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --yaml "$RENDERED"
+#
+# Why a file, and not command-line flags:
+#
+# - `az containerapp update` has flags for env vars, CPU/memory, and
+#   replicas, but NONE for health probes (checked with `--help`, Azure CLI
+#   2.91.0). Probes can only be set through YAML, an ARM/Bicep template, or
+#   the portal.
+# - `update --yaml` sends this file as a PATCH. Objects are merged into the
+#   app's existing configuration, so ingress, the registry, and the app's
+#   identity (set up by `az containerapp up`) are left alone, because this
+#   file does not mention them. But a LIST is replaced whole. The app
+#   has one container, and `containers` below replaces it. So the container
+#   entry must be complete: image, resources, env, and probes together.
+#   A field left out here is not "kept", it is removed.
+# - The result is one reviewable file for every revision-scope setting.
+#   Each change to it creates a new revision (an immutable snapshot of this
+#   template), which is what makes a rollback point at something exact.
+#
+# Two placeholders are filled in at deploy time, because their values only
+# exist once the registry and the app do: `__CONTAINERAPP_NAME__` (the
+# container keeps the app's name, as `az containerapp up` named it) and
+# `__IMAGE__` (the image the app currently runs, read back from Azure).
+#
+# What is deliberately NOT here: any secret. The deterministic deployment
+# needs no provider key, so there is no `secrets:` block and no
+# `secretRef`. Replicas pull the image with the app's managed identity
+# (`AcrPull`, set up by `az containerapp up`), so no registry password is
+# stored either. That registry setting lives under `configuration`, which
+# this PATCH does not touch.
+
+properties:
+  template:
+    containers:
+      - name: __CONTAINERAPP_NAME__
+        image: __IMAGE__
+
+        # -------------------------------------------------------------------
+        # CPU and memory of ONE replica. On the Consumption plan they must
+        # be one of the documented pairs, always 2 GiB per vCPU: 0.25/0.5Gi,
+        # 0.5/1.0Gi, ... 1.0/2.0Gi, ... up to 4.0/8.0Gi (2.0/4.0Gi in a
+        # Consumption-only environment).
+        #
+        # Measured locally (Day 23, `docker run --cpus 1 --memory 2g`, baked
+        # image): the memory high-water mark through startup and one query
+        # was 700 MiB, and 570 MiB at rest. 2 GiB leaves about 2.8x headroom
+        # over that peak. The smaller 0.5 vCPU / 1 GiB pair would leave
+        # only about 30%, with a slower model load. Billing: 1 vCPU and
+        # 2 GiB for 1 second use 1 vCPU-second and 2 GiB-seconds. The monthly
+        # free grant (180,000 vCPU-s, 360,000 GiB-s) therefore covers about
+        # 50 replica-hours at this size.
+        # -------------------------------------------------------------------
+        resources:
+          cpu: 1.0
+          memory: 2Gi
+
+        # -------------------------------------------------------------------
+        # Runtime configuration: plain, non-secret values. Changing any of
+        # them creates a new revision.
+        #
+        # The image already sets the first four as ENV defaults (see the
+        # Dockerfile). They are repeated here for the same reason the Day 22
+        # runbook repeats them on `docker run`: so the deployed
+        # configuration shows them. `az containerapp show` lists the app's
+        # env, and it cannot see the image's ENV.
+        # -------------------------------------------------------------------
+        env:
+          # No paid LLM call: a complete-evidence query ends "not_generated".
+          # There is no OPENROUTER_API_KEY anywhere in this deployment.
+          - name: PROCURERAG_LIVE_LLM
+            value: "0"
+          # No LangSmith traces. Both names, because LangSmith reads _V2 first.
+          - name: LANGSMITH_TRACING
+            value: "false"
+          - name: LANGSMITH_TRACING_V2
+            value: "false"
+          # The models are baked into the image, so the Hub is never needed
+          # at run time. A fresh replica that cannot find them fails loudly
+          # instead of downloading them.
+          - name: HF_HUB_OFFLINE
+            value: "1"
+          # How many threads PyTorch uses for its math. It must MATCH `cpu`
+          # above. Without it, PyTorch starts one thread per core it can SEE,
+          # which can be far more than the 1 vCPU the replica is allowed
+          # to use. Those threads then fight over that single vCPU of
+          # CPU time, and startup gets much slower. Measured locally
+          # (`--cpus 1`, the container could see 12 cores): startup took
+          # 106 s with PyTorch's 12 threads, and 23 s with OMP_NUM_THREADS=1.
+          # With 2 CPUs: 35.5 s with 12 threads, 14.6 s with 2.
+          - name: OMP_NUM_THREADS
+            value: "1"
+
+        # -------------------------------------------------------------------
+        # Health probes: how Container Apps decides what to do with a
+        # replica. The Dockerfile's HEALTHCHECK is NOT used here: only
+        # Docker runs that.
+        #
+        # All three call GET /health on port 8000 (the ingress target port;
+        # probes must use a port number, never a name). /health answers
+        # only once `lifespan` has loaded both models: Uvicorn opens port
+        # 8000 only AFTER startup finishes, so until then every probe gets
+        # "connection refused". /health is never rate-limited, and never
+        # calls the pipeline or the LLM, so probing it costs nothing.
+        # (Probe requests are not billed either.)
+        #
+        # Limits in the API spec (2025-07-01): initialDelaySeconds 1-60,
+        # periodSeconds 1-240, failureThreshold 1-10. So a long startup is
+        # covered by a longer PERIOD, not by more failures.
+        # -------------------------------------------------------------------
+        probes:
+          # STARTUP: "has the app finished starting?" It runs first. Until
+          # it succeeds, readiness and liveness do not run, so slow model
+          # loading is never mistaken for a hung process. After
+          # failureThreshold failures in a row, the replica is restarted.
+          #
+          # Budget: first probe at 10 s, then one every 15 s, for up to 10
+          # failures, i.e. about 10 + 10 x 15 = 160 s before a restart.
+          # Measured startups: 23 s (Mac, 1 CPU), 51 s (Hermes VM, amd64),
+          # 57 s (amd64 emulated on the Mac, 1 CPU). 160 s is about 3x the
+          # slowest of them. The price of the 15 s period: a ready replica
+          # can wait up to 15 s for its first successful probe, and cold
+          # starts include that wait.
+          - type: Startup
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 10
+
+          # READINESS: "may this replica receive traffic right now?" A
+          # replica that fails 3 probes in a row (about 30 s) is taken out
+          # of load balancing, but it is not restarted.
+          - type: Readiness
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # LIVENESS: "is the process still alive?" 3 failures in a row
+          # (about 90 s) restart the replica. These are the same numbers as
+          # the Dockerfile's HEALTHCHECK (every 30 s, 5 s timeout, 3
+          # retries), but here a failure triggers a restart, while Docker
+          # only reports "unhealthy".
+          - type: Liveness
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+    # -----------------------------------------------------------------------
+    # Scale limits: the cost boundary of the smoke deployment.
+    #
+    # minReplicas 0: when no request has arrived for the cooldown period
+    # (300 s by default), the app scales to zero replicas, and a scaled-to-
+    # zero app is not billed for CPU or memory. The price is a cold start:
+    # the next request waits while a fresh replica pulls the image (if that
+    # host does not already have it), starts, loads the models, and passes
+    # the startup probe. Because the models are baked into the image, that
+    # cold start needs no Hugging Face Hub.
+    #
+    # maxReplicas 1: never more than one replica. It caps spend, and it
+    # keeps the in-process rate limiter honest (one process, one counter).
+    # No scale rule is listed, so the default HTTP rule applies.
+    # -----------------------------------------------------------------------
+    scale:
+      minReplicas: 0
+      maxReplicas: 1

@@ -5923,55 +5923,105 @@ Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
 
 No new Boot.dev chapter today. Day 23 is a cloud-deployment bridge day after the Day 22 container artifact.
 
-- [ ] Microsoft Learn — `Deploy a Flask or FastAPI web app as a container in Azure Container Apps`.
-  - [ ] `Prerequisites`.
-  - [ ] `Add Dockerfile and .dockerignore files` — comparison only; preserve ProcureRAG's Day 22 artifact.
-  - [ ] `Build and run the image locally` — reactivation only.
-  - [ ] `Deploy web app to Azure`.
-  - [ ] `Make updates and redeploy`.
-  - [ ] `Clean up`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Microsoft Learn — `Deploy Azure Container Apps with the az containerapp up Command`.
-  - [ ] `Set up the Azure CLI`.
-  - [ ] `Deploy an existing image`.
-  - [ ] `Deploy from local source code`.
-  - [ ] `Configure container app settings`.
-  - [ ] `Redeploy a container app`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Microsoft Learn — `Quickstart: Deploy your first container app with containerapp up`.
-  - [ ] `Prerequisites` / `Setup`.
-  - [ ] `Create and deploy the container app`.
-  - [ ] `Verify deployment`.
-  - [ ] `Clean up resources`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Microsoft Learn — `Configure Ingress for your app in Azure Container Apps`.
-  - [ ] `Ingress settings`.
-  - [ ] `Automatic port detection`.
-  - [ ] `Enable ingress`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Microsoft Learn — `Health probes in Azure Container Apps`.
-  - [ ] `HTTP probes` / `TCP probes`.
-  - [ ] `Restrictions`.
-  - [ ] `Default configuration`.
-  - ProcureRAG takeaway: _TODO: Explain startup vs readiness vs liveness, and why the Dockerfile HEALTHCHECK is not Azure probe evidence._
-- [ ] Microsoft Learn — `Manage environment variables on Azure Container Apps` and `Manage secrets in Azure Container Apps`.
-  - [ ] Environment variables and `secretref:<name>`.
-  - [ ] Revision behavior for environment-variable changes.
-  - [ ] Application-scoped secret behavior and restart/new-revision implications.
-  - ProcureRAG takeaway: _TODO: Fill in. The deterministic deployment should use no provider key._
-- [ ] Microsoft Learn — `View log streams in Azure Container Apps`.
-  - [ ] System logs.
-  - [ ] Console logs.
-  - [ ] Revision/replica/container selection.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Microsoft Learn — `Set scaling rules in Azure Container Apps`.
-  - [ ] `Scale definition`.
-  - [ ] HTTP scaling; `minReplicas`, `maxReplicas`, and scale-to-zero.
-  - ProcureRAG takeaway: _TODO: Explain the model cold-start/cost trade-off._
-- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only.
-  - [ ] `Production Hosting`.
-  - [ ] `Three Pillars of Production Visibility`.
-  - ProcureRAG takeaway: _TODO: Map the sections to registry/image, revision, logs, metrics, traces, and cleanup evidence._
+Juan marked every source below as read in the route doc ("All read." / "Read." / "Fully done.", 2026-10-19). Each takeaway was checked against the page as published on 2026-10-19, and is tied to today's evidence:
+
+- [x] Microsoft Learn — `Deploy a Flask or FastAPI web app as a container in Azure Container Apps`.
+  - [x] `Prerequisites`.
+  - [x] `Add Dockerfile and .dockerignore files` — comparison only; preserve ProcureRAG's Day 22 artifact.
+  - [x] `Build and run the image locally` — reactivation only.
+  - [x] `Deploy web app to Azure`.
+  - [x] `Make updates and redeploy`.
+  - [x] `Clean up`.
+  - ProcureRAG takeaway:
+    - **Their Dockerfile vs ours.** The FastAPI sample uses:
+      - an unpinned `FROM python:3.11` and `pip install -r requirements.txt`;
+      - `COPY . .` with a three-line deny-list `.dockerignore` (`.git*`, `**/*.pyc`, `.venv/`);
+      - `uvicorn ... --workers 4`.
+
+      ProcureRAG keeps Day 22's choices: a pinned slim base, a locked `uv sync`, an allow-list `.dockerignore`, a non-root user, and ONE worker. With the sample's deny-list, `COPY . .` would ship this repo's `.env`. Four workers would mean four copies of both models and four separate rate-limit counters.
+    - **Deploy and redeploy.** The tutorial deploys with one `az containerapp up --source .`, which creates the registry, environment, app, and Log Analytics workspace in one group. It redeploys by re-running `up`, and names `az acr build` + `az containerapp update` for more complex updates. Both of those build in ACR Tasks, which is paused on this free-trial subscription. So ProcureRAG ran the chain in explicit steps: local `buildx --platform linux/amd64 --push`, then `up --image`, then `update --yaml`.
+    - **Clean up** is `az group delete`. That is why everything lives in the dedicated `rg-procurerag-day23`.
+- [x] Microsoft Learn — `Deploy Azure Container Apps with the az containerapp up Command`.
+  - [x] `Set up the Azure CLI`.
+  - [x] `Deploy an existing image`.
+  - [x] `Deploy from local source code`.
+  - [x] `Configure container app settings`.
+  - [x] `Redeploy a container app`.
+  - ProcureRAG takeaway:
+    - **What `up` creates or reuses:** the resource group, the registry, the environment with its Log Analytics workspace, and the app. With `--source`, it also builds (with the Dockerfile if there is one), pushes, and deploys. A Dockerfile `EXPOSE` sets the ingress target port.
+    - **`up` is "primarily default settings", and it is not an abbreviation for `update`.** Resources and scaling are set afterwards with `az containerapp update`. That is exactly what happened: revision 1 ran with the defaults (0.5 vCPU / 1 GiB, 0-10 replicas), and runbook step 5 applied the contract as a new revision.
+    - **Redeploying an image** means `up --image` with the same `--resource-group` and `--environment`. Today's equivalent is re-applying the template with a new image, which is the rollback path too.
+- [x] Microsoft Learn — `Quickstart: Deploy your first container app with containerapp up`.
+  - [x] `Prerequisites` / `Setup`.
+  - [x] `Create and deploy the container app`.
+  - [x] `Verify deployment`.
+  - [x] `Clean up resources`.
+  - ProcureRAG takeaway:
+    - **Setup:** `az login`, the `containerapp` extension, and registering `Microsoft.App` + `Microsoft.OperationalInsights`. Here, all providers were already `Registered`. The extension (1.3.0b5) mattered more than expected: it changed how `up` lets replicas pull from the registry (a managed identity instead of a password). The page also notes that since May 2024, preview features need `--allow-preview true`.
+    - **Verify:** the quickstart verifies by opening the FQDN. ProcureRAG verified the contract, not just "the page loads": `/health` plus the four Day 22 smoke probes through the public FQDN.
+    - **Clean up:** the quickstart's `az group delete` warns that it deletes everything in the group. A dedicated, tagged group makes that safe.
+- [x] Microsoft Learn — `Configure Ingress for your app in Azure Container Apps`.
+  - [x] `Ingress settings`.
+  - [x] `Automatic port detection`.
+  - [x] `Enable ingress`.
+  - ProcureRAG takeaway:
+    - **Ingress is application-wide.** Its changes apply to all revisions at once and create no new revision. Seen in 9b: the IP restriction took effect with no new revision.
+    - **The three settings in use.** HTTP ingress is always exposed on port 443. `targetPort` is the port the app listens on inside the replica. `allowInsecure: false` (the default) redirects plain HTTP to HTTPS. Recorded: `external: true`, `targetPort: 8000`, `allowInsecure: false`, and the FQDN `procurerag-api.agreeablemeadow-eb73c414.northeurope.azurecontainerapps.io`.
+    - **Automatic port detection** only runs for HTTP when no target port is set; it scans the container's listening ports. ProcureRAG sets 8000 explicitly. The page also confirms that the default ingress configuration uses TCP health probes.
+- [x] Microsoft Learn — `Health probes in Azure Container Apps`.
+  - [x] `HTTP probes` / `TCP probes`.
+  - [x] `Restrictions`.
+  - [x] `Default configuration`.
+  - ProcureRAG takeaway:
+    - **Three probes, three questions:**
+      - startup: "has it finished starting?" It runs first, so slow model loading is not mistaken for a hang;
+      - readiness: "may it get traffic now?" A failing replica is taken out of rotation;
+      - liveness: "is it still alive?" A failing replica is restarted.
+
+      An HTTP probe passes on any status from 200 to 399. Restrictions: one probe of each type, no `exec`, numeric ports only, no gRPC.
+    - **The defaults are not guaranteed.** The page says the PORTAL adds TCP defaults when ingress is enabled (startup: every 1 s, up to 240 failures; readiness: every 5 s, up to 48). Those might not exist on a CLI-created app, and they would not be visible in its configuration. So the template defines HTTP probes on `/health:8000`, inspectable on the revision.
+    - **The Dockerfile `HEALTHCHECK` is not Azure evidence.** Docker runs it; Container Apps ignores it.
+    - **Seen on Azure:** exactly one `Probe of StartUp failed` (empty status code: the port was not open yet), 10 s after the container started while the models were loading. Then the revision became ready.
+- [x] Microsoft Learn — `Manage environment variables on Azure Container Apps` and `Manage secrets in Azure Container Apps`.
+  - [x] Environment variables and `secretref:<name>`.
+  - [x] Revision behavior for environment-variable changes.
+  - [x] Application-scoped secret behavior and restart/new-revision implications.
+  - ProcureRAG takeaway:
+    - **Env vars are revision-scope.** "After the Container App is created, the only way to update the environment variables is by creating a new revision." 9b's `--set-env-vars` turned `procurerag-api--0000002` into `--0000003`.
+    - **Secrets are app-scope.** Adding, changing, or removing one creates no revision. Existing revisions only see the change after a restart or in a new revision. Before deleting a secret, deploy a revision that no longer references it, then deactivate every revision that does. That is the order of 9b's revert.
+    - **The deterministic deployment holds no secret at all.** No provider key, and the image pull uses the app's managed identity (`AcrPull`).
+    - **Production:** Key Vault references instead of stored values, and caution with roles. `listSecrets` returns plaintext, and even "Container Apps Operator" includes it.
+    - **A useful extra:** the platform injects `CONTAINER_APP_REVISION` and `CONTAINER_APP_REPLICA_NAME`. They would give the trace rows the code/version handle they still lack (see "What remains weak").
+- [x] Microsoft Learn — `View log streams in Azure Container Apps`.
+  - [x] System logs.
+  - [x] Console logs.
+  - [x] Revision/replica/container selection.
+  - ProcureRAG takeaway:
+    - **Who writes each log.** The runtime writes the system logs: image pull, container start, probe failures, scaling. The app writes the console logs (stdout/stderr).
+    - **Reading them.** `az containerapp logs show` takes `--tail` (0-300, default 20) or `--follow`. For console logs it picks one revision, replica, and container; with one of each, the defaults are enough. `az containerapp env logs show` gives the environment's system log.
+    - **Seen today, each log answering a different question:**
+      - System: `Successfully pulled image "procureragday23jp.azurecr.io/procurerag-api:day23" in 17.50s. Image size: 691011584 bytes`, `Created`/`Started container`, and one startup-probe failure.
+      - Console: the LangSmith `429 ... usage limit exceeded` errors, while every request returned 200. The system log saw a perfectly healthy replica.
+- [x] Microsoft Learn — `Set scaling rules in Azure Container Apps`.
+  - [x] `Scale definition`.
+  - [x] HTTP scaling; `minReplicas`, `maxReplicas`, and scale-to-zero.
+  - ProcureRAG takeaway:
+    - **The defaults:** 0 to 10 replicas, an HTTP rule at 10 concurrent requests, and a 300 s cooldown before the last replica is removed. A revision at zero replicas has no compute charge. Changing a scale rule creates a revision.
+    - **ProcureRAG runs 0 to 1.** That means no idle charge, a spend cap, and one process (so one rate-limit counter). The price is the cold start, measured: the first `/health` after scale-to-zero took 59.07 s, against about 0.15 s warm. It includes scheduling, the image pull (17.50 s for 691 MB on an earlier replica start), container start, model load, and the startup probe.
+    - **What the baked models did and did not fix.** They removed the Hub from the cold start, but not the cold start itself. `minReplicas: 1` would remove it, at the price of being billed all the time (at the reduced idle rate while idle).
+- [x] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only.
+  - [x] `Production Hosting`.
+  - [x] `Three Pillars of Production Visibility`.
+  - ProcureRAG takeaway. As on Day 22, this maps each section title onto today's evidence (the page is a video course):
+    - `Production Hosting`: Day 22's hosting contract is now a hosted artifact with handles:
+      - the registry image `procurerag-api:day23` (plus its digest);
+      - revisions `--0000001` (bootstrap), `--0000002` (contract), and `--0000003` (live LLM);
+      - the FQDN, the ingress, the probes, and the scale settings, all recorded;
+      - a one-command cleanup, `az group delete`.
+    - `Three Pillars of Production Visibility` (logs, metrics, traces):
+      - Logs: system and console, through `az containerapp logs show`.
+      - Metrics: only what was measured by hand (curl timings, the pull time in the system log). Azure Monitor metrics were not queried.
+      - Traces: the LangSmith path is wired (key, EU endpoint, project), but every upload got 429 (quota). Trace rows are still not persisted.
 
 ### Starting baseline
 
@@ -5997,141 +6047,434 @@ Local image `procurerag-api:day22`: not currently present
 
 This is not yet an Azure attempt. Juan may use his Mac, Azure Cloud Shell, or deliberately install Azure CLI. Account/subscription credentials must not be copied into this log.
 
+Block 0 re-run on Juan's Mac, 2026-10-19, `main` at `0e9a3ca`, before any Day 23 file change (only the route doc had a local edit):
+
+```text
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/pytest -q
+357 passed in 2.67s
+
+./.venv/bin/python -m compileall -q src tests
+clean, no output
+
+./.venv/bin/python -m ruff check src tests
+All checks passed!
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false ./.venv/bin/python src/regression_suite.py --verify-retrieval
+All cases match their currently expected state (frozen fixtures).
+The current retrieval pipeline still matches every case's expectation.
+
+git diff --check
+clean, no output
+
+git status --short
+ M docs/day-23-azure-container-apps-deployment.md
+```
+
+Tooling on the Mac: Azure CLI 2.91.0 (Homebrew cask, no extensions), Docker 29.7.2 (`linux/arm64` daemon, buildx can target `linux/amd64`). So the Azure route runs from the Mac, not the Hermes VM.
+
 ### Deployment contract
 
 The current Day 22 image expects a pre-warmed Docker named volume while `HF_HUB_OFFLINE=1`. Azure Container Apps does not automatically have that local volume. The model-delivery decision must be completed before deployment.
 
+Decided on 2026-10-19, before any cloud resource was created. The commands are in [`docs/azure-container-apps-runbook.md`](azure-container-apps-runbook.md); the revision-scope settings are in [`deploy/azure/containerapp-template.yaml`](../deploy/azure/containerapp-template.yaml). "Pending" cells are filled from Juan's run of the runbook step named in the cell.
+
 | Decision | Chosen value | Why | Evidence |
 |---|---|---|---|
-| Azure account/subscription handle | _TODO: Non-secret handle only._ | _TODO_ | _TODO: Sanitized `az account show` fields._ |
-| Region | _TODO_ | _TODO: proximity, availability, cost._ | _TODO_ |
-| Dedicated resource group | _TODO_ | Must be disposable and contain no unrelated resources | _TODO_ |
-| Container Apps environment | _TODO_ | _TODO_ | _TODO_ |
-| Container app name | _TODO_ | lowercase/unique | _TODO_ |
-| Build path | _TODO: `--source .`, existing registry image, or other._ | _TODO_ | _TODO: Registry/image tag or digest._ |
-| Model delivery | _TODO: baked, startup download, or Azure Files._ | _TODO: fresh-replica behavior and reproducibility._ | _TODO_ |
-| Ingress / target port | _TODO_ | Expected temporary external HTTPS -> container port 8000 | _TODO_ |
-| Container Apps probes | _TODO: default inspected or custom startup/readiness/liveness._ | Startup may take about 51 s on the measured VM | _TODO_ |
-| Runtime environment | _TODO_ | Live LLM/tracing off; no provider key | _TODO: Safe names/settings only._ |
-| CPU / memory | _TODO_ | Day 22 measured about 682 MiB after smoke on one VM | _TODO_ |
-| Min / max replicas | _TODO_ | Cost vs cold start | _TODO_ |
-| Revision / rollback strategy | _TODO_ | Identify immutable active and previous artifacts | _TODO_ |
-| Cleanup / retention decision | _TODO_ | No accidental public or cost tail | _TODO_ |
+| Azure account/subscription handle | `Azure subscription 1`; offer `FreeTrial_2014-09-01`; spending limit `On`; state `Enabled`. The subscription id is not recorded | The existing CLI login on the Mac. The offer type decides the build path (below). With the spending limit on, the subscription stops instead of billing once the credit is used | `az account show --query '{subscription:name,state:state}'` and `az rest ... --query subscriptionPolicies` (read-only, 2026-10-19) |
+| Region | `northeurope` (changed from `westeurope` on 2026-10-19) | Close to Juan's CEST time zone. `westeurope` refused the registry: `RequestDisallowedByAzure ... not accepting new customers` | `az deployment group validate` (creates nothing) for ACR + Log Analytics + Container Apps environment: `westeurope` denied; `northeurope`, `swedencentral`, `germanywestcentral`, `francecentral`, `centralus` `Succeeded` |
+| Dedicated resource group | `rg-procurerag-day23`, tagged `project=procurerag day=23 purpose=disposable-smoke` | Holds this deployment only, so cleanup is one `az group delete` | Created in `northeurope` at 20:01:30 UTC (after the empty `westeurope` group was deleted at 20:00:31). Activity log, 2026-10-19 |
+| Container Apps environment | `cae-procurerag-day23`, with the Log Analytics workspace `az containerapp up` creates | `up` creates both when the named environment does not exist | Workspace `workspace-rgprocureragday23jo8i` created 20:06:43, environment 20:06:56 -> 20:08:59 UTC (about 2 min). Activity log |
+| Container app name | `procurerag-api` | Lowercase, under 32 characters (the CLI's rule) | Created 20:09:11 -> 20:09:44 UTC; FQDN `procurerag-api.agreeablemeadow-eb73c414.northeurope.azurecontainerapps.io` (step 6) |
+| Build path | **Path B:** local `docker buildx build --platform linux/amd64 --push` to ACR `procureragday23jp` (Basic, admin user on), then `az containerapp up --image` | `up --source .` with a Dockerfile queues an ACR Tasks build (`queue_acr_build` in the Azure CLI 2.91.0 source). ACR Tasks runs are paused on trial-credit subscriptions (`TasksOperationsNotAllowed`, Microsoft Q&A), and this one is `FreeTrial`. Container Apps runs only `linux/amd64` images | Pushed image `procureragday23jp.azurecr.io/procurerag-api:day23` = `@sha256:f66462bcef47a98fd7e6f8b3f736f1866426db3b7b19fd2ed4ac3893f4ecef09` (local `RepoDigests` after the push). Its image id `sha256:b2cd7f6cc2dc…` is the same as the locally verified amd64 build's. The push build (`docker buildx history`): `linux/amd64`, git `0e9a3ca` plus the uncommitted Day 23 changes, 17/17 steps cached, 4.4 s |
+| Model delivery | **Baked** into the image at build time; `HF_HUB_OFFLINE=1` at run time | Juan's Block 2 choice. A fresh replica has no Docker volume; with the models in the image, it starts with no Hub dependency | Build log: MiniLM `b207367332321f8e44f96e224ef15bc607f4dbf0`, TinyBERT `81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc`, `106M`; no-volume `--network none` container answers Q001 (see "Cloud-target image: local verification") |
+| Ingress / target port | External HTTPS -> target port `8000`; insecure HTTP off | Public only for the smoke window; Uvicorn listens on `0.0.0.0:8000` in the replica | `external: true`, `targetPort: 8000`, `allowInsecure: false`, `revisionsMode: Single` (step 6). `GET /health` through the FQDN: HTTP 200 |
+| Container Apps probes | **Custom HTTP** probes on `/health`, port 8000. Startup: 10 s delay, every 15 s, 10 failures (about 160 s). Readiness: every 10 s, 3 failures. Liveness: every 30 s, 5 s timeout, 3 failures | ACA ignores the Dockerfile `HEALTHCHECK`. Its documented defaults are TCP probes that "the portal" adds, so they are not guaranteed on a CLI-created app, nor visible in its config. Uvicorn opens port 8000 only after `lifespan` (checked in `uvicorn/server.py`), so `/health` fails until the models are loaded. 160 s is about 3x the slowest measured startup (57 s). The API spec caps `failureThreshold` at 10, so the budget comes from the period | Template passed offline through the CLI's own YAML deserializer. On Azure, the system log shows `Probe of StartUp failed with status code: ` 10.06 s after `Started container`. That matches this probe: HTTP ("status code"), first after `initialDelaySeconds: 10`. The portal's TCP default would have probed after 1 s, every 1 s. The probe list itself was not read back before the app was deleted |
+| Runtime environment | `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`; no `OPENROUTER_API_KEY`. No app secret at all: with the `containerapp` extension (1.3.0b5), `up` gave the app a system-assigned managed identity with `AcrPull` on the registry instead of storing the ACR password (observed 2026-10-19; the registry's admin user stays enabled but unused) | Free deterministic path. `OMP_NUM_THREADS` must match the vCPU: measured, it cuts 1-CPU startup from about 106 s to 23 s | On the live revision `--0000003` (read 2026-10-19, before deletion), the template's env was present (`HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`) plus 9b's live vars, with the keys as `secretRef` only. Secret names: only the two 9b secrets, no registry password. Registry: `identity: system`; the app identity holds `AcrPull` on the registry |
+| CPU / memory | 1.0 vCPU / 2.0 GiB | Memory high-water mark 700 MiB (cgroup `memory.peak`, `--cpus 1 --memory 2g`), 529 MiB after the smoke: about 2.8x headroom. 0.5/1.0 GiB would leave about 30% | Applied by `update --yaml` (write accepted 20:14:18 UTC, the write that produced `--0000002`). Not read back from Azure before deletion |
+| Min / max replicas | 0 / 1 | Scaled to zero, no CPU/memory charge. One replica caps spend and keeps the in-process rate limiter to a single counter. The cost: a cold start, measured separately | Scale-to-zero observed: after the cooldown, a request woke a new replica: `HTTP 200 in 59.068821 s` (step 9). `maxReplicas` was not read back |
+| Revision / rollback strategy | Single revision mode. Record the active revision, its image tag, and the ACR digest. Rollback = re-apply the template with the previous `image@sha256:...` | A digest cannot be moved like a tag | Revisions: `--0000001` (`up`, ready at step 6), `--0000002` (template; pulled `:day23` at 20:20:19 UTC), `--0000003` (9b live, created 20:58:22). Image digest `sha256:f66462bc…`. All ran the same image, so no rollback target existed |
+| Cleanup / retention decision | Delete `rg-procurerag-day23` the same day, once the evidence is recorded. Verify `az group exists` -> `false` and no `procurerag` group left; `docker logout` the registry | Unauthenticated public endpoint; no cost tail | `az group delete` accepted 21:26:03 UTC (repeated 21:31:08). App, registry, workspace, and role assignment deleted 21:26:40-41. At 21:43:07 UTC the group was still `Deleting` (the environment remained). See "Cleanup / retention evidence" |
 
 ### Azure prerequisites and command evidence
 
-- `az version`: _TODO: Fill in._
-- `az login`: _TODO: Record success/blocker without tokens._
-- Sanitized account/subscription state: _TODO: Fill in._
-- Container Apps extension version/status: _TODO: Fill in._
-- `Microsoft.App` registration state: _TODO: Fill in._
-- `Microsoft.OperationalInsights` registration state: _TODO: Fill in._
-- Docker/local cloud-target image check: _TODO: Fill in._
+Read-only checks on 2026-10-19 (nothing was created or changed):
+
+- `az version`: `azure-cli 2.91.0`, `extensions: {}`.
+- `az login`: an existing CLI login on the Mac; `az account show` succeeded, so no new login was needed.
+- Sanitized account/subscription state: `{"subscription": "Azure subscription 1", "state": "Enabled", "isDefault": true}`. Offer and spending limit through `az rest --url '/subscriptions/{subscriptionId}?api-version=2022-12-01'`: `quotaId FreeTrial_2014-09-01`, `spendingLimit On`. The subscription id was not printed (`az rest` fills `{subscriptionId}` itself).
+- Container Apps extension version/status: not installed at first. The built-in `az containerapp` (CLI 2.91.0) has every command the runbook uses: `up`, `update --yaml`, `revision`, `replica`, `logs show`, `secret list`. Runbook step 2 then installed `containerapp 1.3.0b5`, and CLI output began with `WARNING: The behavior of this command has been altered by the following extension: containerapp`. The extension changed `up`'s registry authentication to a managed identity (see "What failed or was confusing").
+- `Microsoft.App` registration state: `Registered`.
+- `Microsoft.OperationalInsights` registration state: `Registered`.
+- `Microsoft.ContainerRegistry` registration state: `Registered`.
+- Existing resource groups in the subscription: 0. So `rg-procurerag-day23` cannot collide with or contain anything unrelated.
+- Docker/local cloud-target image check: done. See the next section.
+
+### Cloud-target image: local verification (2026-10-19)
+
+The Block 2 decision (bake the models) is implemented in the `Dockerfile`. One new `RUN` after the dependency layer and before `COPY src`:
+
+```dockerfile
+RUN HF_HUB_OFFLINE=0 python -c "from sentence_transformers import CrossEncoder, SentenceTransformer; SentenceTransformer('sentence-transformers/multi-qa-MiniLM-L6-cos-v1'); CrossEncoder('cross-encoder/ms-marco-TinyBERT-L2-v2', device='cpu')" \
+ && grep . "$HF_HOME"/hub/models--*/refs/main \
+ && du -sh "$HF_HOME"
+```
+
+It uses the same classes and arguments as startup's two loaders, so it caches exactly the files startup reads. The model names are repeated rather than imported from `src/`, so a code change does not re-run the download. If the two ever drift, offline startup fails loudly.
+
+Build evidence:
+
+| Build | Result | Bake step output | Image |
+|---|---|---|---|
+| `docker build --tag procurerag-api:day23 .` (`linux/arm64`, dependency layers cached) | 20 s; the bake step 16.7 s | `models--cross-encoder--ms-marco-TinyBERT-L2-v2/refs/main:81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc`, `models--sentence-transformers--multi-qa-MiniLM-L6-cos-v1/refs/main:b207367332321f8e44f96e224ef15bc607f4dbf0`, `106M` | `sha256:5ed5950b3a26…`, 1,983,144,153 bytes (Day 22: 1,873,016,867, so +110,127,286 bytes) |
+| `docker buildx build --platform linux/amd64 --load` (base image pulled, every dependency downloaded) | 45 s; `uv sync` 14.4 s, the bake step 18.6 s | The same two commits, `106M` | `sha256:b2cd7f6cc2dc…`, 2,085,260,470 bytes, `linux/amd64` |
+
+Both builds baked the same commits as Day 22's warm-up and the host cache.
+
+Fresh-container evidence: no volume, `--network none`, the same safe env as the runbook.
+
+- `linux/arm64`, `--cpus 1 --memory 2g --env OMP_NUM_THREADS=1`, runbook step 0 executed verbatim: `Application startup complete` 25.5 s after `Started server process`. Q001 from inside the container: `not_generated ['FAQ-001::chunk-12', 'FAQ-001::chunk-13', 'POL-001::chunk-4', 'FAQ-001::chunk-5', 'FAQ-001::chunk-6']`, Day 22's exact chunks. A request to `huggingface.co` from inside the container: `Temporary failure in name resolution`. `$HF_HOME/hub` holds the two model folders (plus Hugging Face's `CACHEDIR.TAG` marker), owned by `procurerag`.
+- `linux/amd64` under emulation, same flags: startup 57 s, `platform.machine()` `x86_64`, Q001 the same 5 chunks.
+
+The Azure-sizing finding: CPU limit vs PyTorch threads. Startup time on the Mac, from Uvicorn's own log timestamps, `--network none`:
+
+| CPU limit | `OMP_NUM_THREADS` | PyTorch threads | Startup |
+|---|---|---|---|
+| 1 | unset | 12 (it sees all 12 cores) | about 106 s (103 s of it building the chunk-embedding index) |
+| 1 | 1 | 1 | 23.2 s (25.5 s in the verbatim re-run) |
+| 2 | unset | 12 | 35.5 s |
+| 2 | 2 | 2 | 14.6 s |
+
+With more threads than allowed CPU time, PyTorch's threads mostly wait for each other. An Azure replica with `cpu: 1.0` can see more cores than it may use, so the template sets `OMP_NUM_THREADS=1` next to `cpu: 1.0`. The first run without it also showed a Docker detail: after the 60 s `--start-period`, the `HEALTHCHECK` interval goes back to 30 s, so Docker reported `healthy after 126 s` for an app that was ready at about 106 s.
+
+Memory at `--cpus 1 --memory 2g`: cgroup `memory.peak` 733,732,864 bytes (700 MiB) through startup and one query; 528.7 MiB after the full smoke.
+
+The runbook's step 7 and step 9 commands were run against a local container (`BASE_URL=http://127.0.0.1:8000`, same flags) to test every `jq` filter:
+
+```text
+{"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}  HTTP 200
+{"status":"not_generated","query_id":"Q001","run_id":"04b140f7-...","sources":["FAQ-001::chunk-12","FAQ-001::chunk-13","POL-001::chunk-4","FAQ-001::chunk-5","FAQ-001::chunk-6"]}
+{"status":"pending_approval","run_id":null,"sources":0,"proposed_action":"recursive_retrieve"}
+{"status":"blocked","run_id":null,"findings":["off_topic"]}
+{"status":"blocked","run_id":null,"findings":["prompt_injection"]}
+warm /health median pair (n=10): 1.4 ms   warm Q001 median pair (n=10): 52 ms (1 CPU, 1 thread)
+container log: 0 Traceback, 0 secret-like matches
+```
+
+This is local evidence for the artifact. It is not Azure evidence: the registry, revision, ingress, probes, and cold start are still Juan's runbook steps 3-11.
 
 ### Deployment attempt / fallback evidence
 
-- Exact primary command attempted: _TODO: Fill in._
-- Result: _TODO: Success or exact non-secret error._
-- Last successful source-to-cloud layer: _TODO: local source / remote build / registry push / revision / replica / ingress._
-- First failed layer, if any: _TODO: Fill in._
-- Resources created before success/failure: _TODO: Fill in._
-- Azure resource group: _TODO: Fill in._
-- Container Apps environment: _TODO: Fill in._
-- Registry/image tag or digest: _TODO: Fill in._
-- Container app: _TODO: Fill in._
-- Active revision: _TODO: Fill in._
-- FQDN: _TODO: Fill in or state why unavailable._
-- Replica state: _TODO: Fill in._
-- Model path on a fresh replica: _TODO: Fill in with real evidence._
-- Fallback host/path if Azure blocked: _TODO: Fill in._
-- Exact retry checklist if blocked: _TODO: Fill in._
+Executed by Juan on 2026-10-19, from [`docs/azure-container-apps-runbook.md`](azure-container-apps-runbook.md). Times are UTC, from the Azure activity log and the system log.
+
+- **Exact primary command attempted: Path B.** ACR Tasks is paused on this free-trial subscription, so `az containerapp up --source .` (Path A) was deliberately not run. The chain:
+  1. `az group create --name rg-procurerag-day23 --location northeurope`;
+  2. `az acr create --name procureragday23jp ... --sku Basic --admin-enabled true`;
+  3. `az acr login`;
+  4. a `linux/amd64` build into the local image store (`docker buildx history`: `naming to procureragday23jp.azurecr.io/procurerag-api:day23`), then a push to ACR;
+  5. `az containerapp up --name procurerag-api --resource-group rg-procurerag-day23 --location northeurope --environment cae-procurerag-day23 --image procureragday23jp.azurecr.io/procurerag-api:day23 --ingress external --target-port 8000`;
+  6. `az containerapp update --yaml` with the rendered `deploy/azure/containerapp-template.yaml`.
+- **Result: success.** The public HTTPS FQDN answered `/health` and the four contract smokes (next section).
+- **Last successful source-to-cloud layer: ingress.** That means every layer succeeded: local source -> local `linux/amd64` build -> registry push -> revision -> replica -> ingress.
+- **First failed layer, if any: none in the final chain.** Before it, the registry creation in `westeurope` failed twice (19:52:58 and 19:55:44, `RequestDisallowedByAzure`), before any billable resource existed. Fixed by moving the region (see "What failed or was confusing").
+- **Resources created** (all in the one group):
+  - the registry `procureragday23jp` (20:02:04);
+  - the Log Analytics workspace `workspace-rgprocureragday23jo8i` (20:06:43);
+  - the environment `cae-procurerag-day23` (20:06:56 -> 20:08:59);
+  - the app `procurerag-api` (20:09:11 -> 20:09:44), with a system-assigned identity and an `AcrPull` role assignment on the registry (20:10:14).
+
+  Earlier, an empty `westeurope` group was created (19:52:16) and deleted (20:00:31).
+- **Azure resource group:** `rg-procurerag-day23`, `northeurope`.
+- **Container Apps environment:** `cae-procurerag-day23`, logging to `workspace-rgprocureragday23jo8i`.
+- **Registry/image tag or digest:** `procureragday23jp.azurecr.io/procurerag-api:day23` = `@sha256:f66462bcef47a98fd7e6f8b3f736f1866426db3b7b19fd2ed4ac3893f4ecef09`, from the local image's `RepoDigests` after the push. Its image id `sha256:b2cd7f6cc2dc…` (`linux/amd64`, 2,085,260,470 bytes) is identical to the amd64 build verified locally, so Azure ran exactly the image that was tested offline.
+- **Container app:** `procurerag-api`.
+- **Active revision:**
+  - `procurerag-api--0000002`, the deterministic contract revision from the template. When step 6 was captured, it was `latestRevision` while `latestReadyRevision` was still `--0000001`, the bootstrap revision from `up`;
+  - `procurerag-api--0000003`, the 9b live-LLM revision (created 20:58:22; `Healthy`, 1 replica).
+- **FQDN:** `procurerag-api.agreeablemeadow-eb73c414.northeurope.azurecontainerapps.io`.
+- **Replica state:**
+  - `--0000002`'s replica `procurerag-api--0000002-5d459985d6-d7wwr` pulled the image 20:20:02 -> 20:20:19 and started at 20:20:25. After the cooldown it scaled to zero, and a request brought a fresh replica back (step 9);
+  - `--0000003`: 1 replica, `Healthy`.
+- **Model path on a fresh replica:** after scale-to-zero, a new replica answered `HTTP 200 in 59.068821 s`. It had no volume and `HF_HUB_OFFLINE=1`, so its models could only come from the image.
+- **Fallback host/path if Azure blocked:** not needed; the Azure route succeeded.
+- **Exact retry checklist if blocked:** not needed. The one blocker (region policy) was recovered within the run:
+  1. read the activity log for the exact error;
+  2. `az deployment group validate` per region (creates nothing);
+  3. delete the empty group;
+  4. `export LOCATION=northeurope`;
+  5. restart step 3.
 
 ### Deployed smoke and operational evidence
 
 | Probe | Command/handle | Expected | Actual evidence |
 |---|---|---|---|
-| Public `/health` | `GET https://<fqdn>/health` | HTTP 200; `live_llm=false` | _TODO_ |
-| Deterministic Q001 | `POST /query`, exact Q001 text, buyer, Q001 | no paid call; expected status/sources | _TODO_ |
-| Q091 or Q092 without decision | exact canonical labeled text | `pending_approval`, no run id/sources | _TODO_ |
-| Blocked input | off-topic or injection-shaped request | `blocked` | _TODO_ |
-| System logs | `az containerapp logs show --type system` | provisioning/replica state understood | _TODO: Sanitized summary._ |
-| Console logs | `az containerapp logs show --type console` | clean Uvicorn/model startup; no traceback/secret | _TODO: Sanitized summary._ |
-| Active revision/image | safe app/revision query | immutable handle recorded | _TODO_ |
-| Fresh-replica cold start | scale/revision restart/new replica | measured separately | _TODO_ |
-| Warm `/health` latency | repeated request | labeled warm measurement | _TODO_ |
-| Warm deterministic `/query` latency | repeated Q001 | labeled warm measurement | _TODO_ |
+| Public `/health` | `GET https://<fqdn>/health` | HTTP 200; `live_llm=false` | `{"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}`, `HTTP 200 in 0.202188 s` |
+| Deterministic Q001 | `POST /query`, exact Q001 text, buyer, Q001 | no paid call; expected status/sources | `not_generated`, `run_id` `29191a29-a896-4f57-b609-37abe2dea94f`, sources `FAQ-001::chunk-12`, `FAQ-001::chunk-13`, `POL-001::chunk-4`, `FAQ-001::chunk-5`, `FAQ-001::chunk-6` (Day 22's exact list) |
+| Q091 or Q092 without decision | exact canonical labeled text | `pending_approval`, no run id/sources | Q091 (body built from the canonical file with `jq`): `pending_approval`, `run_id: null`, 0 sources, `proposed_action: recursive_retrieve` |
+| Blocked input | off-topic or injection-shaped request | `blocked` | Off-topic: `blocked`, findings `["off_topic"]`, `run_id: null`. Injection: `blocked`, findings `["prompt_injection"]`, `run_id: null` |
+| System logs | `az containerapp logs show --type system` | provisioning/replica state understood | Revision `--0000002`: `Successfully pulled image "procureragday23jp.azurecr.io/procurerag-api:day23" in 17.50s. Image size: 691011584 bytes` (20:20:19), `Created`/`Started container` (20:20:25), one `Probe of StartUp failed with status code: ` (20:20:35, models still loading), `KEDAScalersStarted` (20:21:18). No restart, no pull error |
+| Console logs | `az containerapp logs show --type console` | clean Uvicorn/model startup; no traceback/secret | Read on the live revision `--0000003` (94 lines in the 300-line tail). Access lines: callers as `100.100.0.56` (the ingress proxy), `POST /query ... 200 OK`; probes as `127.0.0.1` (`GET /health ... 200 OK`). Plus the LangSmith `429` ingest errors (see "What failed"). The lines read contained no key value. The step 8 `Traceback`/secret grep counts were not recorded |
+| Active revision/image | safe app/revision query | immutable handle recorded | `--0000002` (contract) and `--0000003` (live), image `procurerag-api@sha256:f66462bc…` |
+| Fresh-replica cold start | scale/revision restart/new replica | measured separately | After the cooldown, a fresh replica: `HTTP 200 in 59.068821 s` for `/health` |
+| Warm `/health` latency | repeated request | labeled warm measurement | Median pair of 10 (client-side, new TLS connection each time): 0.148794 / 0.151035 s, about 0.150 s |
+| Warm deterministic `/query` latency | repeated Q001 | labeled warm measurement | Median pair of 10 (client-side, new TLS connection each time): 0.218464 / 0.218762 s, about 0.219 s |
 
 ### Runtime configuration, probes, scaling, and cost
 
-- Safe runtime settings actually present: _TODO: Fill in names and non-secret values only._
-- `OPENROUTER_API_KEY` absent from the deterministic deployment: _TODO: Verify without printing values._
-- Model ids/revisions/cache path and image-size effect: _TODO: Fill in._
-- Hub/network behavior on a fresh replica: _TODO: Fill in._
-- Startup/readiness/liveness configuration: _TODO: Fill in._
-- Why the selected probe timings fit measured startup: _TODO: Fill in._
-- CPU/memory and min/max replica settings: _TODO: Fill in._
-- Cost boundary / budget note: _TODO: Fill in._
-- Rollback path: _TODO: Name the previous image/revision and the command/traffic action._
+- Safe runtime settings actually present: read on the live revision `--0000003` (2026-10-19, before deletion):
+  - from the template: `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`;
+  - from 9b: `PROCURERAG_LIVE_LLM=1`, `LANGSMITH_TRACING=true`, `LANGSMITH_TRACING_V2=true`, `LANGSMITH_PROJECT=ProcureRAG`, `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com`, and `OPENROUTER_API_KEY` / `LANGSMITH_API_KEY` as `secretRef` only (`openrouter-api-key`, `langsmith-api-key`).
+
+  The deterministic revision `--0000002` ran the template's values. Its `/health` reported `live_llm:false`, but its env list was not read back.
+- `OPENROUTER_API_KEY` absent from the deterministic deployment, three ways:
+  - `/health` on `--0000002` returned `live_llm:false`, so startup built no LLM client;
+  - the template has no such variable;
+  - in 9b the key had to be ADDED, as a new secret plus a `secretRef` env var. Before that, the app had no secret at all.
+
+  No value was printed at any point.
+- Model ids/revisions/cache path and image-size effect: `sentence-transformers/multi-qa-MiniLM-L6-cos-v1` at `b207367332321f8e44f96e224ef15bc607f4dbf0` and `cross-encoder/ms-marco-TinyBERT-L2-v2` at `81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc`, baked into `HF_HOME=/home/procurerag/.cache/huggingface` (106 MB). The image grows by 110,127,286 bytes (arm64). These are the local builds' revisions. The pushed image's own build log (runbook step 3) must show the same two lines.
+- Hub/network behavior on a fresh replica: locally, a no-volume container with `--network none` starts and answers Q001. On Azure, after scale-to-zero, a fresh replica with `HF_HUB_OFFLINE=1` and no volume answered `/health` in 59.07 s. No Hub access was needed.
+- Startup/readiness/liveness configuration: the template's custom HTTP probes on `/health:8000`, applied with `update --yaml`:
+  - startup: 10 s delay, every 15 s, 10 failures, 5 s timeout;
+  - readiness: every 10 s, 3 failures;
+  - liveness: every 30 s, 5 s timeout, 3 failures.
+
+  Azure evidence: the one startup-probe failure came 10.06 s after `Started container` and reported a "status code". That is this HTTP probe after its 10 s delay. The portal's TCP default would have probed after 1 s, every 1 s. The probe list was not read back before deletion.
+- Why the selected probe timings fit measured startup: the startup budget is about 160 s (10 + 10 x 15).
+  - Measured startups: 23 s (Mac, 1 CPU, `OMP_NUM_THREADS=1`), 51 s (Hermes VM), 57 s (emulated amd64).
+  - On Azure, one startup failure, then ready; the whole cold start, image pull and scheduling included, took 59.07 s.
+
+  So there was no restart loop, and a lot of margin.
+- CPU/memory and min/max replica settings: 1.0 vCPU / 2.0 GiB, `minReplicas: 0`, `maxReplicas: 1`, applied by the `update --yaml` write (accepted 20:14:18 UTC). Scale-to-zero was observed (the cold start of step 9). CPU, memory, and `maxReplicas` were not read back from Azure before deletion.
+- Cost boundary / budget note (the plan; actual usage pending):
+  - Container Apps Consumption bills vCPU-seconds and GiB-seconds while a replica runs, with a monthly free grant of 180,000 vCPU-s, 360,000 GiB-s, and 2 million requests per subscription. At 1 vCPU / 2 GiB, that is about 50 replica-hours. A revision scaled to zero has no CPU/memory charge, and health-probe requests are not billed (Microsoft Learn, "Billing in Azure Container Apps").
+  - The ACR Basic registry and Log Analytics ingestion bill while they exist. Prices were not checked here.
+  - The subscription is a free trial with the spending limit `On`, so it stops instead of billing beyond its credit. The real cost guard is deleting the resource group the same day.
+- Rollback path: every revision (`--0000001`, `--0000002`, `--0000003`) ran the same image, `procurerag-api@sha256:f66462bc…`, so today there was no earlier image to roll back to.
+  - For a future image: `export IMAGE=procureragday23jp.azurecr.io/procurerag-api@sha256:f66462bcef47a98fd7e6f8b3f736f1866426db3b7b19fd2ed4ac3893f4ecef09`, then re-run runbook step 5. That is a new revision running exactly this image.
+  - Rolling back CONFIG works the same way. Step 5 replaces the env list, so it takes `--0000003`'s live config back to the deterministic template.
 
 ### Cleanup / retention evidence
 
-- Decision: _TODO: deleted resource group, disabled ingress, scaled/retained intentionally, or fallback resources._
-- Exact cleanup command: _TODO: Fill in._
-- Verification that the dedicated resource group/app no longer exists, or retention owner/deletion date: _TODO: Fill in._
-- Any asynchronous deletion still pending: _TODO: Fill in._
-- No unrelated/shared resource was deleted: _TODO: Confirm._
+- Decision: delete the dedicated resource group the same day, after the evidence was captured. No retention.
+- Exact cleanup command: runbook step 11, `az group delete --name rg-procurerag-day23 --yes --no-wait`. The activity log shows the deletion accepted at 21:26:03 UTC, and issued again at 21:31:08 UTC.
+- Verification (activity log and read-only queries, UTC):
+  - the app `procurerag-api`, the registry `procureragday23jp`, the workspace `workspace-rgprocureragday23jo8i`, and the `AcrPull` role assignment were deleted at 21:26:40-41, so the public FQDN's app was gone from 21:26:40;
+  - `az containerapp show` -> `ResourceNotFound`;
+  - `az acr repository show` -> registry not found.
+- Any asynchronous deletion still pending: yes, at 21:43:07 UTC. `az group exists` -> `true`, the group `Deleting`, and only `cae-procurerag-day23` (the environment) still listed. Still to record: the first time `az group exists --name rg-procurerag-day23` prints `false`, and an empty `az group list --query "[?contains(name, 'procurerag')].name" -o tsv`.
+- No unrelated/shared resource was deleted. The subscription had 0 resource groups before Day 23 (read 2026-10-19), and every delete in the activity log is a resource of `rg-procurerag-day23`.
+- Left on this Mac: the local image `procureragday23jp.azurecr.io/procurerag-api:day23` (2.09 GB; `docker image rm` frees it). The registry token from `az acr login` expires on its own (about 3 h) once the registry is gone; `docker logout procureragday23jp.azurecr.io` removes it now.
 
 ### Verification after build/deploy
 
 ```text
-pytest: _TODO_
-compileall: _TODO_
-Ruff: _TODO_
-retrieval regression: _TODO_
-git diff --check: _TODO_
-git status --short: _TODO_
-cloud health/query/log/cleanup gates: _TODO_
+After the Block 0/3A artifact changes (2026-10-19), before any Azure resource exists:
+
+pytest: 357 passed in 2.29s
+compileall: clean, no output
+Ruff: All checks passed!
+retrieval regression: all frozen cases match; the current pipeline matches every case's expectation
+git diff --check: clean, no output
+git status --short:
+ M Dockerfile
+ M docs/day-23-azure-container-apps-deployment.md
+ M docs/docker-runbook.md
+ M docs/learning-log.md
+?? deploy/
+?? docs/azure-container-apps-runbook.md
+cloud gates (2026-10-19, through the public FQDN):
+  /health        HTTP 200, live_llm=false
+  Q001           not_generated, Day 22's 5 chunks
+  Q091           pending_approval, run_id null, 0 sources
+  off-topic      blocked [off_topic];  injection: blocked [prompt_injection]
+  system log     image pull 17.50 s / 691,011,584 bytes, 1 startup-probe failure, no restart
+  console log    access lines OK; LangSmith 429 ingest errors (9b live revision)
+  cold / warm    59.07 s cold /health; about 0.150 s warm /health, about 0.219 s warm Q001
+  cleanup        group delete accepted 21:26:03 UTC; app/registry/workspace deleted; group still Deleting at 21:43:07 UTC
 ```
+
+No file under `src/` or `tests/` changed. `deploy/` is outside the `.dockerignore` allow-list, so the template never enters the build context.
 
 ### What failed or was confusing
 
-- _TODO: Fill in. Preserve exact non-secret errors and the layer that owned each failure._
+- **The first region was closed to this subscription (runbook step 3, 2026-10-19).** Layer: Azure region policy, before the registry existed. `az group create --location westeurope` succeeded, and then `az acr create` failed:
+
+  ```text
+  (RequestDisallowedByAzure) Resource 'procureragday23jp' was disallowed by Azure: The selected region is currently not accepting new customers: https://aka.ms/locationineligible.
+  ```
+
+  The Activity Log recorded it as `Microsoft.Authorization/policies/deny/action`. Retrying `az group create --location centralus` then failed twice with `InvalidResourceGroupLocation`: a group's region is fixed once it exists. Nothing billable had been created. `az deployment group validate` (a read-only check that runs the same policy) denied `westeurope` and passed `northeurope`, `swedencentral`, `germanywestcentral`, `francecentral`, and `centralus` for all three resource types. The fix: delete the empty group, then re-create everything in `northeurope`.
+- **No LangSmith traces from the live Azure run (runbook 9b, 2026-10-19).** Layer: the LangSmith account, not the deployment. The live revision (`procurerag-api--0000003`) had the right config: both tracing flags `true`, `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com`, project `ProcureRAG`, and the key as `secretRef: langsmith-api-key`. Its console log showed every upload rejected:
+
+  ```text
+  Failed to multipart ingest runs: langsmith.utils.LangSmithRateLimitError: Rate limit exceeded for https://eu.api.smith.langchain.com/runs/multipart. HTTPError('429 Client Error: Too Many Requests ...', '{"error":"Too many requests: tenant exceeded usage limits: Monthly unique traces usage limit exceeded"}')
+  ```
+
+  A 429, not a 401/403, so the key and the endpoint work. The project list (read with the `.env` key) shows the last stored run at 2026-10-14 23:05 UTC. That matches the 429 warnings in the Day 22 baseline note and "no traces since the 15th".
+  - October's root traces still listed in `ProcureRAG`: 3,906 (Oct 5: 277; Oct 6: 889; Oct 7: 749; Oct 14: 1,991), mostly tagged `day18-control-plane`/`day19-observability`, i.e. graph runs through `run_and_trace`. `production-rag-course`: 36.
+  - Free-tier traces are kept 14 days, so older runs no longer appear in the list, but they still count toward the month. LangSmith's Usage page is the authoritative number.
+  - The cause of the burn: `.env` sets `LANGSMITH_TRACING_V2=true`, and every script `main()` that calls `load_dotenv()` (`agent_control_plane`, `agent_observability`, `generation`, `framework_eval`, `regression_suite --live`) traces each of the 93 queries in a batch run. pytest does not: no test calls those `main()`s.
+  - The fix is on the LangSmith side (wait for the monthly reset, or raise the limit). The prevention: `LANGSMITH_TRACING_V2=false` in `.env`, and opt in per command (`LANGSMITH_TRACING=true LANGSMITH_TRACING_V2=true ...`; `load_dotenv()` never overrides a variable that is already set).
+- **The registry pull uses a managed identity, not a password (corrects the runbook's first draft).** With the `containerapp` extension 1.3.0b5, `az containerapp up --image` set `identity: SystemAssigned` on the app, registered the registry with `identity: system`, and granted `AcrPull` (`az role assignment list` on the registry). `az containerapp secret list` showed only the two 9b secrets, with no registry password. The first draft had predicted a password secret from reading the built-in CLI's source, without the extension.
+- **Removing the 9b secrets before the revert was refused (2026-10-19, 21:20:27 and 21:21:30 UTC).** Layer: Container Apps validation. Two app writes failed with:
+
+  ```text
+  ContainerAppSecretRefNotFound: SecretRef 'openrouter-api-key' defined for container 'procurerag-api' not found.
+  ```
+
+  Azure will not remove a secret while the running container's env still references it. The writes from 21:23:08 to 21:24:05 then succeeded. This is the order the runbook prescribes (and Microsoft's secrets page): first a revision with no `secretRef`, then remove the secrets. The runbook's "not tested" note is now answered: Azure refuses.
+- No other failure appears in the activity log or in the recorded runbook outputs.
 
 ### What became clearer
 
-- _TODO: Fill in. Separate container correctness, registry/build correctness, revision readiness, ingress reachability, and answer quality._
+- **"It works" is five separate claims, and each one was proven separately:**
+  - **Container correctness.** Proven on the Mac before any cloud resource existed. The image, with no volume and `--network none`, starts and answers Q001 with Day 22's exact chunks.
+  - **Build and registry.** WHERE the image is built, and for which CPU, is its own decision. ACR Tasks was not available, so the `linux/amd64` image was built locally and pushed. The pushed image's identity is its digest, not its tag.
+  - **Revision readiness.** A revision exists before it is ready. Step 6 captured `latestRevision: --0000002` while `latestReadyRevision` was still `--0000001`. The system log showed why: the container started, the startup probe failed once while the models loaded, then the revision became ready.
+  - **Ingress reachability.** The public HTTPS FQDN reached target port 8000. Ingress settings (target port, insecure off, IP restriction) belong to the app and create no revision.
+  - **Answer quality.** Still not proven, by any of the above. The smoke proves the Day 21 contract (`not_generated`, `pending_approval`, `blocked`) through the cloud endpoint; a live `answered` was not evaluated.
+- **Today's blockers came from account layers, not from the code:**
+  - an Azure region policy (`RequestDisallowedByAzure` in `westeurope`, hit);
+  - a SaaS quota (LangSmith's monthly trace limit, `429`, hit);
+  - a subscription offer (ACR Tasks paused on free trials). This one was avoided, not hit: the offer type (`FreeTrial`) was read before choosing the build path.
+
+  None of them shows up in a local test, and only the error text names the owner. So the fix starts with reading which layer said no.
+- **A container's CPU limit is not what the code sees.** PyTorch counted all the cores it could see (12), not the one it was allowed to use. Startup went from 106 s to 23 s once the thread count matched the CPU limit (`OMP_NUM_THREADS=1`). Cloud sizing has to be measured under the same limit.
+- **Read-only checks before a write save time:**
+  - `az deployment group validate` found the open regions without creating anything;
+  - the activity log gave the exact error of a command whose output was lost;
+  - the CLI's own source code, and its YAML deserializer, showed what `update --yaml` really sends.
+
+  But a source read can still be wrong about what runs. The CLI EXTENSION changed `up`'s registry authentication, and only the deployed app showed it.
+- **Warm and cold are different numbers.**
+  - Warm: `/health` about 150 ms and Q001 about 218 ms from the client, including the internet round trip and TLS.
+  - Cold: 59.07 s.
+  - Day 22's 39 ms was loopback. All three are real measurements, of different things.
 
 ### What I can now explain in an interview
 
 Draft answers should cover these shapes, then be practiced without notes:
 
 1. **What `az containerapp up --source .` does.**
-   - _TODO: Explain build context -> remote build -> registry image -> revision -> replica -> ingress._
+   - It runs a chain, and each link can fail on its own:
+     1. it packs the local folder as the build context;
+     2. with a Dockerfile, it queues a REMOTE build in ACR Tasks, on Azure's `linux/amd64` builders (`docker build` never runs on my machine), creating a registry if needed and tagging `<app>:<timestamp>`;
+     3. it pushes the image to that registry;
+     4. it creates or reuses the resource group, the environment, and its Log Analytics workspace;
+     5. it creates the app: a revision that points at the image, plus the credentials to pull it;
+     6. the revision starts replicas, which the probes gate;
+     7. ingress gives it a public HTTPS FQDN, forwarding to the target port (from `EXPOSE` or `--target-port`).
+   - Compared with `docker run`, it adds a registry, immutable revisions, platform-managed replica lifecycle and probes, managed TLS, and collected logs.
+   - On this subscription, link 2 is blocked (ACR Tasks is paused on free trials), and an earlier layer blocked too (`westeurope` refused new resources). So I ran the chain in explicit steps:
+     1. local `docker buildx build --platform linux/amd64 --push` to my own registry;
+     2. `az containerapp up --image`;
+     3. `az containerapp update --yaml` for the runtime contract.
+
+     Same links; each one visible.
 2. **Why Day 22's named model-cache volume does not automatically work on Azure.**
-   - _TODO: Explain the selected baked/download/Azure Files route and fresh-replica proof._
+   - **The problem.** On Day 22, the models lived in a local Docker volume, and the image defaults to `HF_HUB_OFFLINE=1`. So with an empty cache, startup stops at once (exit code 3, measured). An Azure replica is created from the image alone. A volume on my laptop does not exist there.
+   - **The choice: bake the models into the image.** The build loads both models once, with `HF_HUB_OFFLINE=0` for that one `RUN` only. The image grows by 110 MB, and the build log records each model's revision (MiniLM `b207367…`, TinyBERT `81d1926…`). At run time it stays offline.
+   - **The alternatives, rejected:**
+     - a download at every start would put the Hub (and its rate limits) into every cold start;
+     - Azure Files would add storage, mount permissions, and a warm-up step.
+   - **The proof, twice:**
+     - locally: no volume and `--network none`, still healthy, and Q001 answered;
+     - on Azure: a cold start from zero replicas answered `/health` (59.07 s) with `HF_HUB_OFFLINE=1`. The models can only have come from the image.
 3. **External ingress, target port, and Uvicorn's bind address.**
-   - _TODO: Explain public HTTPS -> target port 8000 -> `0.0.0.0:8000` in the container._
+   - Three different things:
+     - **External ingress** creates the public endpoint. HTTPS is on port 443, the certificate is managed by Azure, and `allowInsecure: false` redirects plain HTTP.
+     - **`targetPort: 8000`** is where the platform's proxy forwards each request, INSIDE the replica.
+     - **Uvicorn's `--host 0.0.0.0 --port 8000`** makes the app accept connections on the replica's network interface, where the proxy delivers each request. The console log showed something worth knowing: the `/health` probes arrived from `127.0.0.1`, while user requests arrived from the proxy (`100.100.0.56`). So with `--host 127.0.0.1`, the probes would still pass and every real request would fail: "healthy but unreachable", the same trap as Docker's `HEALTHCHECK` on Day 22.
+   - **Evidence:** `external: true`, `targetPort: 8000`, `allowInsecure: false`, and the FQDN `procurerag-api.agreeablemeadow-eb73c414.northeurope.azurecontainerapps.io`. The console log shows the requests arriving from `100.100.0.56`, the proxy's address, not mine.
 4. **Docker `HEALTHCHECK` versus Container Apps probes.**
-   - _TODO: Explain startup, readiness, liveness, and the deployed configuration._
+   - **The Docker `HEALTHCHECK`** is image metadata that Docker runs inside the container. It only labels the container `healthy`/`unhealthy`. Container Apps ignores it.
+   - **Container Apps has three probes of its own:**
+     - startup: runs first, and keeps the other two off while the app starts. Too many failures restart the replica;
+     - readiness: decides whether the replica gets traffic;
+     - liveness: restarts a replica that stopped responding.
+   - **ProcureRAG's probes are custom HTTP probes on `/health:8000`:**
+     - startup: first after 10 s, then every 15 s, up to 10 failures, i.e. about 160 s;
+     - readiness: every 10 s, 3 failures;
+     - liveness: every 30 s, 5 s timeout, 3 failures (the same timing as the `HEALTHCHECK`).
+   - **Why these numbers.** They are sized from measured startups: 23 to 57 s with the thread fix. The API caps `failureThreshold` at 10, so the budget comes from a longer period. Custom probes, because the documented defaults (TCP probes) are added by the PORTAL: maybe absent on a CLI-created app, and invisible in its configuration either way.
+   - **Evidence:** the system log shows one `Probe of StartUp failed`, 10 s after the container started, while the port was still closed during model loading. Then the revision became ready.
 5. **Scale-to-zero and cold-start/cost trade-offs.**
-   - _TODO: Explain image pull, model load/download, min/max replicas, and why warm latency is separate._
+   - **`minReplicas: 0` / `maxReplicas: 1`.** After 300 s without traffic, the app scales to zero, and zero replicas cost nothing for CPU and memory. The maximum of one caps spend and keeps a single rate-limit counter.
+   - **The price is the cold start.** Measured: the first `/health` after scale-to-zero took 59.07 s, against about 0.15 s warm. That one number includes:
+     - scheduling;
+     - the image pull (691 MB compressed took 17.50 s on an earlier replica start);
+     - the container start and the model load;
+     - the startup probe noticing the app is ready (up to 15 s).
+   - **What the baked models changed.** They removed the Hub download and its failure modes from the cold start, not the cold start itself.
+   - **The alternative.** `minReplicas: 1` means no cold start, but a replica billed all the time (at the reduced idle rate while idle).
+   - **Warm latency is a separate number.** `/health` takes about 150 ms and Q001 about 218 ms from my client, including the internet round trip and TLS. The 39 ms of Day 22 was loopback.
 6. **Environment variables versus secrets.**
-   - _TODO: Explain plain config, secret references, revisions/restarts, and why today's deterministic route needs no key._
+   - **Environment variables belong to the REVISION.** Changing them creates a new revision: 9b's switch to live LLM turned `--0000002` into `--0000003`.
+   - **Secrets belong to the APP.** Adding, changing, or removing one creates no revision. A running revision only sees the change after a restart or in a new revision.
+   - **They meet through a reference.** An env var refers to a secret as `secretref:<name>`, and `az containerapp show` returns only that reference, never the value.
+   - **Today's deterministic route needs no secret at all.** It has no provider key, and the image pull uses the app's managed identity (`AcrPull`) instead of a registry password.
+   - **The live run.** Two secrets, read from `.env` without printing them, plus env vars referencing them. To undo it: first a revision without the references, then delete the secrets. Microsoft's docs prescribe that same order.
+   - **In production:** Key Vault references, and narrow roles (`listSecrets` returns plaintext).
 7. **System logs versus console logs.**
-   - _TODO: Explain which layer each log type diagnoses._
+   - **System logs** are the platform's events: image pull, container create/start, probe failures, scaling, revision provisioning. An image-pull failure (wrong tag, wrong CPU architecture, no registry access) shows up ONLY here, because the container never starts.
+   - **Console logs** are the container's own stdout/stderr: Uvicorn startup, model loading, access lines, Python tracebacks, and background errors.
+   - **Evidence:**
+     - System: `Successfully pulled image ... in 17.50s. Image size: 691011584 bytes`, container started, one startup-probe failure.
+     - Console: the LangSmith `429 ... usage limit exceeded` errors, while every request returned 200. The system log saw a healthy replica the whole time.
+   - **Limits.** `logs show` reads one replica. A scaled-to-zero app has none to read, and older logs need a Log Analytics query.
 8. **Reproducibility and rollback.**
-   - _TODO: Name lockfile, image digest/tag, revision, config, model artifacts, and rollback action._
+   - **Pinned inputs:**
+     - `uv.lock`, installed with `--locked`;
+     - the base image tag (its digest is recorded);
+     - `uv` 0.12.2;
+     - the model revisions, recorded in the build log (NOT pinned in the code);
+     - the revision template (`deploy/azure/containerapp-template.yaml`);
+     - the runbook's commands.
+   - **Artifact identity.** The registry digest identifies the image; the tag `day23` can be moved. The revision names identify immutable snapshots (`--0000001` bootstrap, `--0000002` contract, `--0000003` live).
+   - **Rollback.** Re-apply the template with the previous image as `@sha256:<digest>`, which makes a new revision running exactly that image. Or, in multiple revision mode, move traffic back to the old revision. Today, every revision runs the same image, so there was no earlier image to roll back to.
 9. **Why the public deployment is temporary.**
-   - _TODO: Explain missing auth, caller-asserted role, process-local rate limit, and cleanup._
+   - **Anyone can query.** There is no authentication, and the role is caller-asserted. Anyone with the URL can call `/query` as `buyer`, and so see Confidential-document evidence.
+   - **The rate limit is weaker than it looks.** It is per process and keyed by the client address. Behind the ingress, every caller arrives as the proxy (`100.100.0.56` in the console log), so callers share a budget. And it is a speed limit, not a spending cap.
+   - **With the live LLM on, every request costs money.** That is why 9b limited the ingress to one IP address.
+   - **Hence:** a dedicated resource group, a short smoke window, then `az group delete`, verified.
 10. **What `/health` proves and does not prove.**
-    - _TODO: Explain startup/readiness versus answer quality/auth/provider/capacity._
+    - **What it proves:** the replica finished `lifespan` (both models loaded, the service built), and HTTP works through the whole ingress path (TLS, routing, target port). `live_llm` reports what startup built: `true` in 9b, so a key was found.
+    - **What it does not prove:**
+      - answer quality and citation correctness;
+      - OpenRouter reachability, or that the key is valid (`/health` never calls the provider);
+      - trace delivery (in 9b, `/health` was fine while every LangSmith upload got 429);
+      - authentication;
+      - capacity or latency under load;
+      - durable state.
 
 ### What remains weak
 
-- _TODO: Fill in after deployment. Carry forward authentication, caller-asserted role, process-local rate limiting, stateless approval, non-persisted traces, free-text evidence completeness, and unmeasured graph-path answer quality unless Day 23 actually changes/proves them._
+Carried forward, unchanged by Day 23:
+
+- **No authentication.** The role is caller-asserted. A public endpoint makes this worse.
+- **A process-local rate limiter.** Behind the Container Apps ingress, it sees the proxy's address (`100.100.0.56`), not the caller's, so callers share a budget.
+- **Approval is stateless.** It is a re-submission, not a resume.
+- **Trace rows are not persisted.** They still have no code/version handle (`CONTAINER_APP_REVISION` is available on Azure, and unused).
+- **Free-text evidence completeness is unchecked.**
+- **Live answers are not evaluated**, the Q001/Q091 answers of 9b included.
+
+New with Day 23:
+
+- **LangSmith tracing is blocked by the account's monthly quota (`429`).** The deployed tracing path is wired, but no trace from Azure has been stored yet. And the OpenRouter call would not appear as its own LLM run with token usage.
+- **The revision references the image by tag.** The model revisions are recorded in the build log, not pinned in the code. `OMP_NUM_THREADS` must be kept in step with `cpu` by hand.
+- **The registry's admin user is enabled but unused.**
+- **The deployment is manual:** CLI commands from a runbook, run from one laptop. There is no CI/CD and no infrastructure-as-code beyond the revision template.
+- **The performance numbers are single measurements from one client network.** One cold start, and ten-request warm medians. No load test, no p95, and no Azure Monitor metrics. Costs are estimated from the free-grant arithmetic, not read from Azure billing.
+- **`az containerapp logs show` is the only log access used.** History beyond the running replica (Log Analytics) was not queried.
 
 ### Next step
 
-1. Complete the Day 23 sources, deployment contract, and Juan-owned Azure/fallback execution.
-2. Send Hermes the exact review prompt from `docs/day-23-azure-container-apps-deployment.md`.
-3. After a clean Day 23 review, start **Day 24 — eval-gated CI/CD and graph-aware regression evidence (HER-292)**: deterministic merge/deploy gates for dependency sync, pytest, compileall, Ruff, retrieval regression, API smoke, and Docker build, with paid/live graph-answer checks kept optional/manual.
+1. **Done (2026-10-19):** Block 0. The baseline gates were re-run, and the deployment contract was decided before any cloud mutation. The model-bake `Dockerfile` change was verified locally on `linux/arm64` and `linux/amd64`.
+2. **Done (Juan, 2026-10-19):** executed [`docs/azure-container-apps-runbook.md`](azure-container-apps-runbook.md):
+   - steps 2-6 (Block 3A): the extension and providers, Path B build/push, `up --image`, the template, the handles;
+   - steps 7-11 (Block 4): the smoke, logs, cold/warm latency, the optional live 9b run, and cleanup.
+
+   The evidence is recorded above. One item is left: the time the group deletion completes (`az group exists` -> `false`), to be added under "Cleanup / retention evidence".
+3. **Drafted (2026-10-19):** the source takeaways, "What became clearer", the interview drill answers, and "What remains weak". Next (Juan): confirm each takeaway against your own reading, and practice the drill without notes.
+4. Send Hermes the exact review prompt from `docs/day-23-azure-container-apps-deployment.md`.
+5. After a clean Day 23 review, start **Day 24 — eval-gated CI/CD and graph-aware regression evidence (HER-292)**: deterministic merge/deploy gates for dependency sync, pytest, compileall, Ruff, retrieval regression, API smoke, and Docker build, with paid/live graph-answer checks kept optional/manual.
