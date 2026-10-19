@@ -5910,3 +5910,228 @@ Draft answers should cover these shapes, then be practiced without notes:
 5. **Done (2026-10-15):** `torch` switched to the CPU-only build on Linux (6.58 GB -> 1.87 GB, same retrieval results). **Done (verified 2026-10-17):** the `linux/amd64` image was built and exercised on the Hermes VM; `docker image ls` reports 2.74 GB of local disk usage and `/app/.venv` uses 1,859 MiB.
 6. **Done (2026-10-17):** Hermes re-reviewed HER-290, reran the Python and Docker gates, and confirmed the Day 22 artifact and corrected evidence are closure-ready.
 7. **Next:** start Day 23 — Azure Container Apps deployment or an evidence-backed documented fallback, preserving the same image/config/health contract.
+
+## 2026-10-17 — Day 23: Azure Container Apps Deployment or Evidence-Backed Fallback
+
+Route: [`docs/day-23-azure-container-apps-deployment.md`](day-23-azure-container-apps-deployment.md)
+
+Linear: HER-291 — Day 23 loop: Azure Container Apps or documented deployment fallback.
+
+Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Day 23 is a cloud-deployment bridge day after the Day 22 container artifact.
+
+- [ ] Microsoft Learn — `Deploy a Flask or FastAPI web app as a container in Azure Container Apps`.
+  - [ ] `Prerequisites`.
+  - [ ] `Add Dockerfile and .dockerignore files` — comparison only; preserve ProcureRAG's Day 22 artifact.
+  - [ ] `Build and run the image locally` — reactivation only.
+  - [ ] `Deploy web app to Azure`.
+  - [ ] `Make updates and redeploy`.
+  - [ ] `Clean up`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Microsoft Learn — `Deploy Azure Container Apps with the az containerapp up Command`.
+  - [ ] `Set up the Azure CLI`.
+  - [ ] `Deploy an existing image`.
+  - [ ] `Deploy from local source code`.
+  - [ ] `Configure container app settings`.
+  - [ ] `Redeploy a container app`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Microsoft Learn — `Quickstart: Deploy your first container app with containerapp up`.
+  - [ ] `Prerequisites` / `Setup`.
+  - [ ] `Create and deploy the container app`.
+  - [ ] `Verify deployment`.
+  - [ ] `Clean up resources`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Microsoft Learn — `Configure Ingress for your app in Azure Container Apps`.
+  - [ ] `Ingress settings`.
+  - [ ] `Automatic port detection`.
+  - [ ] `Enable ingress`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Microsoft Learn — `Health probes in Azure Container Apps`.
+  - [ ] `HTTP probes` / `TCP probes`.
+  - [ ] `Restrictions`.
+  - [ ] `Default configuration`.
+  - ProcureRAG takeaway: _TODO: Explain startup vs readiness vs liveness, and why the Dockerfile HEALTHCHECK is not Azure probe evidence._
+- [ ] Microsoft Learn — `Manage environment variables on Azure Container Apps` and `Manage secrets in Azure Container Apps`.
+  - [ ] Environment variables and `secretref:<name>`.
+  - [ ] Revision behavior for environment-variable changes.
+  - [ ] Application-scoped secret behavior and restart/new-revision implications.
+  - ProcureRAG takeaway: _TODO: Fill in. The deterministic deployment should use no provider key._
+- [ ] Microsoft Learn — `View log streams in Azure Container Apps`.
+  - [ ] System logs.
+  - [ ] Console logs.
+  - [ ] Revision/replica/container selection.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Microsoft Learn — `Set scaling rules in Azure Container Apps`.
+  - [ ] `Scale definition`.
+  - [ ] HTTP scaling; `minReplicas`, `maxReplicas`, and scale-to-zero.
+  - ProcureRAG takeaway: _TODO: Explain the model cold-start/cost trade-off._
+- [ ] freeCodeCamp — `Production RAG with LangChain & Vector Databases`, reactivation only.
+  - [ ] `Production Hosting`.
+  - [ ] `Three Pillars of Production Visibility`.
+  - ProcureRAG takeaway: _TODO: Map the sections to registry/image, revision, logs, metrics, traces, and cleanup evidence._
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-17, before the Day 23 route/log scaffold:
+
+```text
+main at 509854d; git status clean
+pytest: 357 passed in 6.93s
+compileall: clean
+Ruff: All checks passed!
+retrieval regression: all frozen cases matched; current pipeline matched every expected case
+git diff --check: clean
+```
+
+Tooling on the Hermes VM:
+
+```text
+Azure CLI: not installed (`az: command not found`)
+Docker client: 29.1.3, linux/amd64
+Docker daemon: available through `sg docker -c ...` after refreshing the docker group in a subprocess
+Local image `procurerag-api:day22`: not currently present
+```
+
+This is not yet an Azure attempt. Juan may use his Mac, Azure Cloud Shell, or deliberately install Azure CLI. Account/subscription credentials must not be copied into this log.
+
+### Deployment contract
+
+The current Day 22 image expects a pre-warmed Docker named volume while `HF_HUB_OFFLINE=1`. Azure Container Apps does not automatically have that local volume. The model-delivery decision must be completed before deployment.
+
+| Decision | Chosen value | Why | Evidence |
+|---|---|---|---|
+| Azure account/subscription handle | _TODO: Non-secret handle only._ | _TODO_ | _TODO: Sanitized `az account show` fields._ |
+| Region | _TODO_ | _TODO: proximity, availability, cost._ | _TODO_ |
+| Dedicated resource group | _TODO_ | Must be disposable and contain no unrelated resources | _TODO_ |
+| Container Apps environment | _TODO_ | _TODO_ | _TODO_ |
+| Container app name | _TODO_ | lowercase/unique | _TODO_ |
+| Build path | _TODO: `--source .`, existing registry image, or other._ | _TODO_ | _TODO: Registry/image tag or digest._ |
+| Model delivery | _TODO: baked, startup download, or Azure Files._ | _TODO: fresh-replica behavior and reproducibility._ | _TODO_ |
+| Ingress / target port | _TODO_ | Expected temporary external HTTPS -> container port 8000 | _TODO_ |
+| Container Apps probes | _TODO: default inspected or custom startup/readiness/liveness._ | Startup may take about 51 s on the measured VM | _TODO_ |
+| Runtime environment | _TODO_ | Live LLM/tracing off; no provider key | _TODO: Safe names/settings only._ |
+| CPU / memory | _TODO_ | Day 22 measured about 682 MiB after smoke on one VM | _TODO_ |
+| Min / max replicas | _TODO_ | Cost vs cold start | _TODO_ |
+| Revision / rollback strategy | _TODO_ | Identify immutable active and previous artifacts | _TODO_ |
+| Cleanup / retention decision | _TODO_ | No accidental public or cost tail | _TODO_ |
+
+### Azure prerequisites and command evidence
+
+- `az version`: _TODO: Fill in._
+- `az login`: _TODO: Record success/blocker without tokens._
+- Sanitized account/subscription state: _TODO: Fill in._
+- Container Apps extension version/status: _TODO: Fill in._
+- `Microsoft.App` registration state: _TODO: Fill in._
+- `Microsoft.OperationalInsights` registration state: _TODO: Fill in._
+- Docker/local cloud-target image check: _TODO: Fill in._
+
+### Deployment attempt / fallback evidence
+
+- Exact primary command attempted: _TODO: Fill in._
+- Result: _TODO: Success or exact non-secret error._
+- Last successful source-to-cloud layer: _TODO: local source / remote build / registry push / revision / replica / ingress._
+- First failed layer, if any: _TODO: Fill in._
+- Resources created before success/failure: _TODO: Fill in._
+- Azure resource group: _TODO: Fill in._
+- Container Apps environment: _TODO: Fill in._
+- Registry/image tag or digest: _TODO: Fill in._
+- Container app: _TODO: Fill in._
+- Active revision: _TODO: Fill in._
+- FQDN: _TODO: Fill in or state why unavailable._
+- Replica state: _TODO: Fill in._
+- Model path on a fresh replica: _TODO: Fill in with real evidence._
+- Fallback host/path if Azure blocked: _TODO: Fill in._
+- Exact retry checklist if blocked: _TODO: Fill in._
+
+### Deployed smoke and operational evidence
+
+| Probe | Command/handle | Expected | Actual evidence |
+|---|---|---|---|
+| Public `/health` | `GET https://<fqdn>/health` | HTTP 200; `live_llm=false` | _TODO_ |
+| Deterministic Q001 | `POST /query`, exact Q001 text, buyer, Q001 | no paid call; expected status/sources | _TODO_ |
+| Q091 or Q092 without decision | exact canonical labeled text | `pending_approval`, no run id/sources | _TODO_ |
+| Blocked input | off-topic or injection-shaped request | `blocked` | _TODO_ |
+| System logs | `az containerapp logs show --type system` | provisioning/replica state understood | _TODO: Sanitized summary._ |
+| Console logs | `az containerapp logs show --type console` | clean Uvicorn/model startup; no traceback/secret | _TODO: Sanitized summary._ |
+| Active revision/image | safe app/revision query | immutable handle recorded | _TODO_ |
+| Fresh-replica cold start | scale/revision restart/new replica | measured separately | _TODO_ |
+| Warm `/health` latency | repeated request | labeled warm measurement | _TODO_ |
+| Warm deterministic `/query` latency | repeated Q001 | labeled warm measurement | _TODO_ |
+
+### Runtime configuration, probes, scaling, and cost
+
+- Safe runtime settings actually present: _TODO: Fill in names and non-secret values only._
+- `OPENROUTER_API_KEY` absent from the deterministic deployment: _TODO: Verify without printing values._
+- Model ids/revisions/cache path and image-size effect: _TODO: Fill in._
+- Hub/network behavior on a fresh replica: _TODO: Fill in._
+- Startup/readiness/liveness configuration: _TODO: Fill in._
+- Why the selected probe timings fit measured startup: _TODO: Fill in._
+- CPU/memory and min/max replica settings: _TODO: Fill in._
+- Cost boundary / budget note: _TODO: Fill in._
+- Rollback path: _TODO: Name the previous image/revision and the command/traffic action._
+
+### Cleanup / retention evidence
+
+- Decision: _TODO: deleted resource group, disabled ingress, scaled/retained intentionally, or fallback resources._
+- Exact cleanup command: _TODO: Fill in._
+- Verification that the dedicated resource group/app no longer exists, or retention owner/deletion date: _TODO: Fill in._
+- Any asynchronous deletion still pending: _TODO: Fill in._
+- No unrelated/shared resource was deleted: _TODO: Confirm._
+
+### Verification after build/deploy
+
+```text
+pytest: _TODO_
+compileall: _TODO_
+Ruff: _TODO_
+retrieval regression: _TODO_
+git diff --check: _TODO_
+git status --short: _TODO_
+cloud health/query/log/cleanup gates: _TODO_
+```
+
+### What failed or was confusing
+
+- _TODO: Fill in. Preserve exact non-secret errors and the layer that owned each failure._
+
+### What became clearer
+
+- _TODO: Fill in. Separate container correctness, registry/build correctness, revision readiness, ingress reachability, and answer quality._
+
+### What I can now explain in an interview
+
+Draft answers should cover these shapes, then be practiced without notes:
+
+1. **What `az containerapp up --source .` does.**
+   - _TODO: Explain build context -> remote build -> registry image -> revision -> replica -> ingress._
+2. **Why Day 22's named model-cache volume does not automatically work on Azure.**
+   - _TODO: Explain the selected baked/download/Azure Files route and fresh-replica proof._
+3. **External ingress, target port, and Uvicorn's bind address.**
+   - _TODO: Explain public HTTPS -> target port 8000 -> `0.0.0.0:8000` in the container._
+4. **Docker `HEALTHCHECK` versus Container Apps probes.**
+   - _TODO: Explain startup, readiness, liveness, and the deployed configuration._
+5. **Scale-to-zero and cold-start/cost trade-offs.**
+   - _TODO: Explain image pull, model load/download, min/max replicas, and why warm latency is separate._
+6. **Environment variables versus secrets.**
+   - _TODO: Explain plain config, secret references, revisions/restarts, and why today's deterministic route needs no key._
+7. **System logs versus console logs.**
+   - _TODO: Explain which layer each log type diagnoses._
+8. **Reproducibility and rollback.**
+   - _TODO: Name lockfile, image digest/tag, revision, config, model artifacts, and rollback action._
+9. **Why the public deployment is temporary.**
+   - _TODO: Explain missing auth, caller-asserted role, process-local rate limit, and cleanup._
+10. **What `/health` proves and does not prove.**
+    - _TODO: Explain startup/readiness versus answer quality/auth/provider/capacity._
+
+### What remains weak
+
+- _TODO: Fill in after deployment. Carry forward authentication, caller-asserted role, process-local rate limiting, stateless approval, non-persisted traces, free-text evidence completeness, and unmeasured graph-path answer quality unless Day 23 actually changes/proves them._
+
+### Next step
+
+1. Complete the Day 23 sources, deployment contract, and Juan-owned Azure/fallback execution.
+2. Send Hermes the exact review prompt from `docs/day-23-azure-container-apps-deployment.md`.
+3. After a clean Day 23 review, start **Day 24 — eval-gated CI/CD and graph-aware regression evidence (HER-292)**: deterministic merge/deploy gates for dependency sync, pytest, compileall, Ruff, retrieval regression, API smoke, and Docker build, with paid/live graph-answer checks kept optional/manual.
