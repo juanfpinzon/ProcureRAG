@@ -6494,3 +6494,313 @@ New with Day 23:
 3. **Done (Juan, confirmed 2026-10-20):** confirmed the source takeaways against the readings and practiced the full interview drill without notes: source-to-cloud layers, the Day 22 model-volume gap, Container Apps probes versus Docker `HEALTHCHECK`, cold-versus-warm latency, digest/model reproducibility, and temporary-public-deployment security.
 4. **Done (Hermes re-review, 2026-10-20):** all review feedback is addressed. Commit `4efde38` records the completed deletion evidence, recovers the stored probes/resources/scale/env from Azure Resource Graph, adds the managed-identity checks plus early ACR admin-user shutdown to the runbook, and documents the remaining tag/model-pin limits as non-blocking. Fresh closure gates: `357 passed in 6.97s`; compileall clean; Ruff `All checks passed!`; frozen and current-pipeline retrieval regression matched every expected case; local Uvicorn `/health`, Q001, Q091, off-topic, and injection smokes all returned the expected contracts. No `src/` or `tests/` file changed during closure.
 5. **Next:** start **Day 24 — eval-gated CI/CD and graph-aware regression evidence (HER-292)**: deterministic merge/deploy gates for dependency sync, pytest, compileall, Ruff, retrieval regression, API smoke, and Docker build, with paid/live graph-answer checks kept optional/manual.
+
+## 2026-10-20 — Day 24: Eval-Gated CI/CD and Graph-Aware Regression Evidence
+
+Route: [`docs/day-24-eval-gated-cicd.md`](day-24-eval-gated-cicd.md)
+
+Linear: HER-292 — Day 24 loop: eval-gated CI/CD and graph-aware regression evidence.
+
+Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Day 24 is a production CI/CD bridge.
+
+For each completed source, add one ProcureRAG-specific takeaway. A checked box without an applied takeaway is not completion.
+
+- [ ] GitHub Docs — `Building and testing Python`.
+  - [ ] Python version selection.
+  - [ ] Dependency installation/caching.
+  - [ ] Test and lint steps.
+  - ProcureRAG takeaway: TODO.
+- [ ] Astral docs — `Using uv in GitHub Actions`.
+  - [ ] `setup-uv` and exact uv version pin.
+  - [ ] `.python-version` / Python 3.11.
+  - [ ] `uv sync --locked --dev` and `uv run`.
+  - [ ] uv cache behavior and pruning.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `Workflow syntax for GitHub Actions`.
+  - [ ] `pull_request`, `push`, and `workflow_dispatch`.
+  - [ ] `permissions`, `env`, `needs`, `if`, timeouts, concurrency.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `Secure use reference`.
+  - [ ] Least-privilege `GITHUB_TOKEN`.
+  - [ ] Full-length action commit-SHA pins.
+  - [ ] Untrusted input and privileged-trigger risks.
+  - [ ] Why `pull_request_target` must not execute untrusted ProcureRAG code.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `Manually running a workflow`.
+  - [ ] `workflow_dispatch`, inputs, and ref selection.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `Control the concurrency of workflows and jobs`.
+  - [ ] Superseded PR cancellation.
+  - [ ] Non-overlapping deployment group.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `Managing environments for deployment`.
+  - [ ] Required reviewers / prevent self-review.
+  - [ ] Deployment-branch restrictions.
+  - [ ] Environment secrets unavailable before approval.
+  - ProcureRAG takeaway: TODO.
+- [ ] Docker Docs — `Docker Build GitHub Actions`.
+  - [ ] Buildx and build-push actions.
+  - [ ] Build summary/artifact behavior.
+  - ProcureRAG takeaway: TODO.
+- [ ] Docker Docs — `Test before push with GitHub Actions`.
+  - [ ] Build/load/test the same image before push.
+  - ProcureRAG takeaway: TODO.
+- [ ] Docker Docs — `Cache management with GitHub Actions`.
+  - [ ] `gha` cache import/export.
+  - [ ] Cache trust/performance boundary.
+  - ProcureRAG takeaway: TODO.
+- [ ] GitHub Docs — `OpenID Connect`.
+  - [ ] Short-lived cloud tokens and job claims.
+  - [ ] Job-scoped `id-token: write`.
+  - ProcureRAG takeaway: TODO.
+- [ ] Microsoft Learn — `Use the Azure Login action with OpenID Connect`.
+  - [ ] Federated identity credential.
+  - [ ] Least-privilege Azure role/scope.
+  - ProcureRAG takeaway: TODO.
+- [ ] Microsoft Learn — `Deploy to Azure Container Apps with GitHub Actions`.
+  - [ ] Build versus existing-image deployment.
+  - [ ] SHA tag/digest, ACR push auth, and managed-identity pull.
+  - ProcureRAG takeaway: TODO.
+
+### Starting baseline
+
+Kickoff on 2026-10-20, before the Day 24 route/log scaffold:
+
+```text
+branch: main
+commit: 6e45949
+origin: https://github.com/juanfpinzon/ProcureRAG.git
+git status: clean
+.github/: absent; no workflow baseline
+.python-version: 3.11
+Python: 3.11.15
+uv: 0.11.11
+
+LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false PROCURERAG_LIVE_LLM=0 \
+  ./.venv/bin/pytest -q
+357 passed in 6.10s
+
+./.venv/bin/python -m compileall -q src tests
+clean, no output
+
+./.venv/bin/python -m ruff check src tests
+All checks passed!
+```
+
+The first combined `regression_suite.py --verify-retrieval` attempt loaded MiniLM, then the process exited 132 (`Illegal instruction`) before completing the model-backed lane. The isolated retry forced `HF_HUB_OFFLINE=1 OMP_NUM_THREADS=1`:
+
+```text
+fixture lane: exit 0; all seven frozen cases matched
+current retrieval lane: exit 0
+control-q001: [OK]
+control-q004: [OK]
+retrieval-miss-q091: [OK]
+retrieval-miss-q093: [OK]
+chunk-gap-q016: [OK]
+citation-negative-synthetic: [OK]
+The current retrieval pipeline still matches every case's expectation.
+```
+
+Kickoff interpretation: the first exit 132 is a host/runtime observation, not retrieval-quality evidence. Model-backed CI should set `OMP_NUM_THREADS=1` and distinguish process/runtime failure from an eval mismatch.
+
+### Day 23 handoff
+
+- Day 23 deployed and smoked one `linux/amd64` image on Azure Container Apps.
+- The app, ACR, environment, workspace, and dedicated resource group were then deleted.
+- Day 24 therefore begins with a verified deployment design but no live target resource.
+- An Actions Docker build is not an Azure deployment. An Azure job remains pending unless infrastructure and OIDC trust are intentionally recreated and exercised.
+- Day 23's remaining quality gap is still real: live graph-path answers were not evaluated against `expected_answer`.
+
+### Gate contract — fill before implementation
+
+Final workflow split: TODO (`ci.yml`, `live-eval.yml`, `deploy.yml`, or justified alternative).
+
+Pinned Python version: TODO.
+
+Pinned uv version: TODO.
+
+Action pins reviewed against their source repositories: TODO.
+
+Branch protection required checks: TODO.
+
+Docker PR-versus-push policy and measured reason: TODO.
+
+Live case/call budget: TODO.
+
+Deployment status today: TODO (`implemented and exercised`, `workflow only / not exercised`, or `deferred because no target infrastructure`).
+
+| Check/job | Trigger | Secrets? | Expected exit/failure rule | Blocks merge? | Blocks deploy? | Final evidence |
+|---|---|---|---|---:|---:|---|
+| locked dependency sync | TODO | none | lock drift/install failure -> non-zero | TODO | yes | TODO |
+| pytest | TODO | none | any failed test -> non-zero | TODO | yes | TODO |
+| compileall | TODO | none | compile error -> non-zero | TODO | yes | TODO |
+| Ruff | TODO | none | configured lint violation -> non-zero | TODO | yes | TODO |
+| frozen fixture regression | TODO | none | expected-state drift -> non-zero | TODO | yes | TODO |
+| current retrieval pipeline | TODO | none | expected evidence drift -> non-zero | TODO | yes | TODO |
+| deterministic graph route regression | TODO | none | route/attempt/stop/LLM-call drift -> non-zero | TODO | yes | TODO |
+| Docker build | TODO | none | image build failure -> non-zero | TODO | yes | TODO |
+| container API smoke | TODO | none | endpoint/contract/log failure -> non-zero | TODO | yes | TODO |
+| live graph answer eval | manual protected | provider secret | threshold/infrastructure categories explicit | no by default | TODO | TODO |
+| Azure promotion | manual protected | Azure OIDC | push/revision/smoke failure -> non-zero | no | yes | TODO |
+
+### Deterministic graph regression evidence
+
+Implementation path/file: TODO.
+
+Test path/file: TODO.
+
+| Case | Expected contract | Actual route/attempts/stop | LLM calls | Verdict |
+|---|---|---|---:|---|
+| Q001 control | direct complete-evidence route; one retrieval pass | TODO | TODO | TODO |
+| Q091 recursive recovery | first gap; exactly one follow-up; final gap empty; then generation route | TODO | TODO | TODO |
+| Q092 bounded failure | first gap; exactly one follow-up; terminal report-gap; remaining evidence named | TODO | **must be 0** | TODO |
+| Q005 optional control | ordinary complete-evidence path | TODO | TODO | TODO |
+
+Negative test proving the command exits non-zero on route/contract drift: TODO.
+
+### Live graph answer-quality evidence
+
+Manual workflow/run URL: TODO.
+
+Trusted ref and commit SHA: TODO.
+
+Environment approval evidence: TODO.
+
+Provider/model and bounded call budget: TODO.
+
+Threshold/retry policy: TODO.
+
+| Case | Quality target | Actual answer/eval summary | Citation verdict | Route/abstention verdict | Overall |
+|---|---|---|---|---|---|
+| Q001 | compare graph-generated answer with canonical `expected_answer` | TODO | TODO | direct route TODO | TODO |
+| Q091 | compare answer after recursive recovery with canonical `expected_answer` | TODO | TODO | recursive recovery TODO | TODO |
+| Q092 | no forced answer; bounded gap report and zero LLM calls | not applicable | not applicable | TODO | TODO |
+
+If not run today, write the exact blocker/decision and leave this section pending. Do not label single-pass fixture `--live` output as graph-aware evidence.
+
+### Workflow and remote-run evidence
+
+Workflow file(s): TODO.
+
+Events and filters: TODO.
+
+Default permissions: TODO.
+
+Job dependency graph: TODO.
+
+Concurrency policy: TODO.
+
+Deterministic environment values: TODO.
+
+Full-SHA-pinned action inventory: TODO.
+
+First GitHub-accepted run URL: TODO.
+
+Run commit SHA/ref/event: TODO.
+
+Remote job results and durations: TODO.
+
+Deliberate failure evidence, then revert/fix evidence: TODO.
+
+Branch-protection configuration/status: TODO.
+
+Secret/log inspection result: TODO.
+
+### Docker/API gate evidence
+
+Build job/run URL: TODO.
+
+Image tag and local/registry digest: TODO.
+
+Target platform: TODO (`linux/amd64` expected for Azure parity).
+
+Build duration/cache hit state: TODO. Cache state is timing evidence, not acceptance evidence.
+
+Cold startup/health-poll duration: TODO.
+
+| Probe | Expected | Actual | Verdict |
+|---|---|---|---|
+| `/health` | HTTP 200; `live_llm=false` | TODO | TODO |
+| canonical Q001 | deterministic no-provider status and expected sources | TODO | TODO |
+| canonical Q091/Q092 without decision | `pending_approval`, no run id/sources | TODO | TODO |
+| off-topic or injection-shaped input | `blocked` | TODO | TODO |
+| logs | no unexpected traceback or secret-like output | TODO | TODO |
+| cleanup | container removed even after failure | TODO | TODO |
+
+### Azure deployment/promotion evidence
+
+Current status: **not run at kickoff**. Day 23's disposable resource group no longer exists.
+
+If implemented/exercised, record:
+
+- protected GitHub environment and reviewer rule: TODO;
+- OIDC trust subject/ref/environment: TODO;
+- Azure identity type and non-secret handle: TODO;
+- least-privilege role/scope: TODO;
+- image SHA tag and digest: TODO;
+- target resource group/app/revision: TODO;
+- post-deploy `/health` and deterministic smoke: TODO;
+- rollback handle: TODO;
+- cleanup/retention decision: TODO.
+
+If not implemented/exercised, record the exact next prerequisite and keep deployment evidence pending: TODO.
+
+### Final repo verification
+
+```text
+pytest: TODO
+compileall: TODO
+Ruff: TODO
+frozen regression: TODO
+current retrieval regression: TODO
+deterministic graph regression: TODO
+Docker build/smoke: TODO
+workflow remote run: TODO
+git diff --check: TODO
+git status --short: TODO
+```
+
+No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implementation.
+
+### What failed or was confusing
+
+- TODO: record the first failed layer, exact non-secret error, owner, and resolution or retry path.
+- Keep workflow syntax, permissions, dependency/lock, host/runtime, model supply/cache, retrieval drift, graph drift, answer quality, Docker packaging, API smoke, provider, and Azure deployment failures separate.
+
+### What became clearer
+
+- TODO.
+
+### What I can now explain in an interview
+
+Practice the 12 questions in the Day 24 route without notes. Record concise answers for at least:
+
+1. deterministic versus model-backed versus live/deploy lanes — TODO;
+2. `uv sync --locked` — TODO;
+3. explicit no-live/no-trace environment — TODO;
+4. report versus non-zero gate semantics — TODO;
+5. Q091 recovery and Q092 bounded failure — TODO;
+6. why Q092 should not be forced into answer-quality scoring — TODO;
+7. why live LLM eval does not run on every PR — TODO;
+8. action SHA pins and least privilege — TODO;
+9. Docker build versus host pytest — TODO;
+10. Azure OIDC — TODO;
+11. evaluate one immutable image, then promote that same digest — TODO;
+12. CI flake/infrastructure failure versus product regression — TODO.
+
+### What remains weak
+
+- TODO after implementation/review. Preserve unresolved Day 23 limits unless Day 24 evidence actually closes them: authentication, caller-asserted role, process-local rate limiting, stateless approval, trace persistence/version handle, confidentiality-aware retrieval, live answer quality, model-revision pinning, and deployed-resource availability.
+
+### Next step
+
+1. Complete the exact readings and fill the gate contract.
+2. Juan implements the workflow and graph regression/eval changes.
+3. Exercise local and real GitHub Actions gates, including one deliberate red check.
+4. Fill every evidence field above and practice the interview drill.
+5. Send the route's review prompt to Hermes.
+6. Close HER-292 only after review and real remote CI evidence; then start Day 25 MCP + Week 5 gate review.
