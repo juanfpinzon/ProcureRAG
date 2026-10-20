@@ -6015,7 +6015,7 @@ Juan marked every source below as read in the route doc ("All read." / "Read." /
   - ProcureRAG takeaway. As on Day 22, this maps each section title onto today's evidence (the page is a video course):
     - `Production Hosting`: Day 22's hosting contract is now a hosted artifact with handles:
       - the registry image `procurerag-api:day23` (plus its digest);
-      - revisions `--0000001` (bootstrap), `--0000002` (contract), and `--0000003` (live LLM);
+      - revisions `--0000001` (bootstrap), `--0000002` (contract), `--0000003` (live LLM), and `--0000004` (back to the contract);
       - the FQDN, the ingress, the probes, and the scale settings, all recorded;
       - a one-command cleanup, `az group delete`.
     - `Three Pillars of Production Visibility` (logs, metrics, traces):
@@ -6088,12 +6088,12 @@ Decided on 2026-10-19, before any cloud resource was created. The commands are i
 | Build path | **Path B:** local `docker buildx build --platform linux/amd64 --push` to ACR `procureragday23jp` (Basic, admin user on), then `az containerapp up --image` | `up --source .` with a Dockerfile queues an ACR Tasks build (`queue_acr_build` in the Azure CLI 2.91.0 source). ACR Tasks runs are paused on trial-credit subscriptions (`TasksOperationsNotAllowed`, Microsoft Q&A), and this one is `FreeTrial`. Container Apps runs only `linux/amd64` images | Pushed image `procureragday23jp.azurecr.io/procurerag-api:day23` = `@sha256:f66462bcef47a98fd7e6f8b3f736f1866426db3b7b19fd2ed4ac3893f4ecef09` (local `RepoDigests` after the push). Its image id `sha256:b2cd7f6cc2dc…` is the same as the locally verified amd64 build's. The push build (`docker buildx history`): `linux/amd64`, git `0e9a3ca` plus the uncommitted Day 23 changes, 17/17 steps cached, 4.4 s |
 | Model delivery | **Baked** into the image at build time; `HF_HUB_OFFLINE=1` at run time | Juan's Block 2 choice. A fresh replica has no Docker volume; with the models in the image, it starts with no Hub dependency | Build log: MiniLM `b207367332321f8e44f96e224ef15bc607f4dbf0`, TinyBERT `81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc`, `106M`; no-volume `--network none` container answers Q001 (see "Cloud-target image: local verification") |
 | Ingress / target port | External HTTPS -> target port `8000`; insecure HTTP off | Public only for the smoke window; Uvicorn listens on `0.0.0.0:8000` in the replica | `external: true`, `targetPort: 8000`, `allowInsecure: false`, `revisionsMode: Single` (step 6). `GET /health` through the FQDN: HTTP 200 |
-| Container Apps probes | **Custom HTTP** probes on `/health`, port 8000. Startup: 10 s delay, every 15 s, 10 failures (about 160 s). Readiness: every 10 s, 3 failures. Liveness: every 30 s, 5 s timeout, 3 failures | ACA ignores the Dockerfile `HEALTHCHECK`. Its documented defaults are TCP probes that "the portal" adds, so they are not guaranteed on a CLI-created app, nor visible in its config. Uvicorn opens port 8000 only after `lifespan` (checked in `uvicorn/server.py`), so `/health` fails until the models are loaded. 160 s is about 3x the slowest measured startup (57 s). The API spec caps `failureThreshold` at 10, so the budget comes from the period | Template passed offline through the CLI's own YAML deserializer. On Azure, the system log shows `Probe of StartUp failed with status code: ` 10.06 s after `Started container`. That matches this probe: HTTP ("status code"), first after `initialDelaySeconds: 10`. The portal's TCP default would have probed after 1 s, every 1 s. The probe list itself was not read back before the app was deleted |
-| Runtime environment | `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`; no `OPENROUTER_API_KEY`. No app secret at all: with the `containerapp` extension (1.3.0b5), `up` gave the app a system-assigned managed identity with `AcrPull` on the registry instead of storing the ACR password (observed 2026-10-19; the registry's admin user stays enabled but unused) | Free deterministic path. `OMP_NUM_THREADS` must match the vCPU: measured, it cuts 1-CPU startup from about 106 s to 23 s | On the live revision `--0000003` (read 2026-10-19, before deletion), the template's env was present (`HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`) plus 9b's live vars, with the keys as `secretRef` only. Secret names: only the two 9b secrets, no registry password. Registry: `identity: system`; the app identity holds `AcrPull` on the registry |
-| CPU / memory | 1.0 vCPU / 2.0 GiB | Memory high-water mark 700 MiB (cgroup `memory.peak`, `--cpus 1 --memory 2g`), 529 MiB after the smoke: about 2.8x headroom. 0.5/1.0 GiB would leave about 30% | Applied by `update --yaml` (write accepted 20:14:18 UTC, the write that produced `--0000002`). Not read back from Azure before deletion |
-| Min / max replicas | 0 / 1 | Scaled to zero, no CPU/memory charge. One replica caps spend and keeps the in-process rate limiter to a single counter. The cost: a cold start, measured separately | Scale-to-zero observed: after the cooldown, a request woke a new replica: `HTTP 200 in 59.068821 s` (step 9). `maxReplicas` was not read back |
-| Revision / rollback strategy | Single revision mode. Record the active revision, its image tag, and the ACR digest. Rollback = re-apply the template with the previous `image@sha256:...` | A digest cannot be moved like a tag | Revisions: `--0000001` (`up`, ready at step 6), `--0000002` (template; pulled `:day23` at 20:20:19 UTC), `--0000003` (9b live, created 20:58:22). Image digest `sha256:f66462bc…`. All ran the same image, so no rollback target existed |
-| Cleanup / retention decision | Delete `rg-procurerag-day23` the same day, once the evidence is recorded. Verify `az group exists` -> `false` and no `procurerag` group left; `docker logout` the registry | Unauthenticated public endpoint; no cost tail | `az group delete` accepted 21:26:03 UTC (repeated 21:31:08). App, registry, workspace, and role assignment deleted 21:26:40-41. At 21:43:07 UTC the group was still `Deleting` (the environment remained). See "Cleanup / retention evidence" |
+| Container Apps probes | **Custom HTTP** probes on `/health`, port 8000. Startup: 10 s delay, every 15 s, 10 failures (about 160 s). Readiness: every 10 s, 3 failures. Liveness: every 30 s, 5 s timeout, 3 failures | ACA ignores the Dockerfile `HEALTHCHECK`. Its documented defaults are TCP probes that "the portal" adds, so they are not guaranteed on a CLI-created app, nor visible in its config. Uvicorn opens port 8000 only after `lifespan` (checked in `uvicorn/server.py`), so `/health` fails until the models are loaded. 160 s is about 3x the slowest measured startup (57 s). The API spec caps `failureThreshold` at 10, so the budget comes from the period | Template passed offline through the CLI's own YAML deserializer. On Azure, the system log shows `Probe of StartUp failed with status code: ` 10.06 s after `Started container`. That matches this probe: HTTP ("status code"), first after `initialDelaySeconds: 10`. The portal's TCP default would have probed after 1 s, every 1 s. After deletion, Azure Resource Graph's change history recovered the stored probes: exactly the template's three (see "Runtime configuration") |
+| Runtime environment | `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`; no `OPENROUTER_API_KEY`. No app secret at all: with the `containerapp` extension (1.3.0b5), `up` gave the app a system-assigned managed identity with `AcrPull` on the registry instead of storing the ACR password (observed 2026-10-19; the registry's admin user stayed enabled, unused, until deletion. The runbook now switches it off in step 6) | Free deterministic path. `OMP_NUM_THREADS` must match the vCPU: measured, it cuts 1-CPU startup from about 106 s to 23 s | On the live revision `--0000003` (read 2026-10-19, before deletion), the template's env was present (`HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`) plus 9b's live vars, with the keys as `secretRef` only. Secret names: only the two 9b secrets, no registry password. Registry: `identity: system`; the app identity holds `AcrPull` on the registry |
+| CPU / memory | 1.0 vCPU / 2.0 GiB | Memory high-water mark 700 MiB (cgroup `memory.peak`, `--cpus 1 --memory 2g`), 529 MiB after the smoke: about 2.8x headroom. 0.5/1.0 GiB would leave about 30% | Applied by `update --yaml` (write accepted 20:14:18 UTC, the write that produced `--0000002`). Recovered after deletion from Resource Graph: `cpu` 0.5 -> 1, `memory` 1Gi -> 2Gi in that write |
+| Min / max replicas | 0 / 1 | Scaled to zero, no CPU/memory charge. One replica caps spend and keeps the in-process rate limiter to a single counter. The cost: a cold start, measured separately | Scale-to-zero observed: after the cooldown, a request woke a new replica: `HTTP 200 in 59.068821 s` (step 9). Resource Graph: `minReplicas` unset -> 0, `maxReplicas` 10 -> 1 in the template write |
+| Revision / rollback strategy | Single revision mode. Record the active revision, its image tag, and the ACR digest. Rollback = re-apply the template with the previous `image@sha256:...` | A digest cannot be moved like a tag | Revisions: `--0000001` (`up`, ready at step 6), `--0000002` (template; pulled `:day23` at 20:20:19 UTC), `--0000003` (9b live, created 20:58:22), `--0000004` (9b step 7a, the template re-applied; write accepted 21:23:08). Image digest `sha256:f66462bc…`. All ran the same image, so no rollback target existed |
+| Cleanup / retention decision | Delete `rg-procurerag-day23` the same day, once the evidence is recorded. Verify `az group exists` -> `false` and no `procurerag` group left; `docker logout` the registry | Unauthenticated public endpoint; no cost tail | `az group delete` accepted 21:26:03 UTC (repeated 21:31:08). App, registry, workspace, and role assignment deleted 21:26:40-41. The environment went last (deleted 21:49:55), and the group delete succeeded at 21:51:06 UTC. On 2026-10-20, `az group exists` -> `false` and no `procurerag` group is left. See "Cleanup / retention evidence" |
 
 ### Azure prerequisites and command evidence
 
@@ -6224,7 +6224,7 @@ Executed by Juan on 2026-10-19, from [`docs/azure-container-apps-runbook.md`](az
   - from the template: `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`;
   - from 9b: `PROCURERAG_LIVE_LLM=1`, `LANGSMITH_TRACING=true`, `LANGSMITH_TRACING_V2=true`, `LANGSMITH_PROJECT=ProcureRAG`, `LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com`, and `OPENROUTER_API_KEY` / `LANGSMITH_API_KEY` as `secretRef` only (`openrouter-api-key`, `langsmith-api-key`).
 
-  The deterministic revision `--0000002` ran the template's values. Its `/health` reported `live_llm:false`, but its env list was not read back.
+  The deterministic revision `--0000002` ran the template's values. Its `/health` reported `live_llm:false`, and Resource Graph's change history (below) shows its env list was exactly the template's five variables, with no `secretRef`.
 - `OPENROUTER_API_KEY` absent from the deterministic deployment, three ways:
   - `/health` on `--0000002` returned `live_llm:false`, so startup built no LLM client;
   - the template has no such variable;
@@ -6238,20 +6238,28 @@ Executed by Juan on 2026-10-19, from [`docs/azure-container-apps-runbook.md`](az
   - readiness: every 10 s, 3 failures;
   - liveness: every 30 s, 5 s timeout, 3 failures.
 
-  Azure evidence: the one startup-probe failure came 10.06 s after `Started container` and reported a "status code". That is this HTTP probe after its 10 s delay. The portal's TCP default would have probed after 1 s, every 1 s. The probe list was not read back before deletion.
+  Azure evidence: the one startup-probe failure came 10.06 s after `Started container` and reported a "status code". That is this HTTP probe after its 10 s delay. The portal's TCP default would have probed after 1 s, every 1 s. The stored probe list itself was recovered after deletion, from Resource Graph (below).
 - Why the selected probe timings fit measured startup: the startup budget is about 160 s (10 + 10 x 15).
   - Measured startups: 23 s (Mac, 1 CPU, `OMP_NUM_THREADS=1`), 51 s (Hermes VM), 57 s (emulated amd64).
   - On Azure, one startup failure, then ready; the whole cold start, image pull and scheduling included, took 59.07 s.
 
   So there was no restart loop, and a lot of margin.
-- CPU/memory and min/max replica settings: 1.0 vCPU / 2.0 GiB, `minReplicas: 0`, `maxReplicas: 1`, applied by the `update --yaml` write (accepted 20:14:18 UTC). Scale-to-zero was observed (the cold start of step 9). CPU, memory, and `maxReplicas` were not read back from Azure before deletion.
+- CPU/memory and min/max replica settings: 1.0 vCPU / 2.0 GiB, `minReplicas: 0`, `maxReplicas: 1`, applied by the `update --yaml` write (accepted 20:14:18 UTC). Scale-to-zero was observed (the cold start of step 9). Resource Graph (next bullet) confirms that Azure stored these values.
+- Recovered after deletion, from Azure Resource Graph (read 2026-10-20). Its `resourcechanges` table keeps 14 days of property-level changes (before and after values) for every resource, deleted ones included. It was read through the Resource Graph REST API, which needs no CLI extension: `az rest --method post --url "https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01"`, with the query `resourcechanges | where tostring(properties.targetResourceId) has 'procurerag-api'`.
+  The template's write changed the following. In the activity log it is the write accepted at 20:14:18, the only app write between `up` and 9b. Resource Graph stamps it 20:19:20, because its timestamps trail the activity log.
+  - probes: `Startup` 10 s delay / every 15 s / 5 s timeout / 10 failures; `Readiness` every 10 s / 5 s / 3; `Liveness` every 30 s / 5 s / 3. All three are `httpGet /health` on port 8000: exactly the template;
+  - resources: `cpu` 0.5 -> 1, `memory` 1Gi -> 2Gi, and `ephemeralStorage` 2Gi -> 4Gi (set by the platform with the CPU size; the template does not mention it);
+  - scale: `minReplicas` unset -> 0, `maxReplicas` 10 -> 1;
+  - env: `HF_HUB_OFFLINE=1`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `OMP_NUM_THREADS=1`, `PROCURERAG_LIVE_LLM=0`.
+
+  The "before" values are what `up` left: 0.5 vCPU / 1 GiB and up to 10 replicas, the defaults step 4 of the runbook expected. The same history shows 9b step 7: the env list went back to these five variables with no `secretRef`, and the app's secret list went empty. No image change appears after `up`'s first one. This history expires 14 days after the changes (around 2026-11-02), so the values above are now the record.
 - Cost boundary / budget note (the plan; actual usage pending):
   - Container Apps Consumption bills vCPU-seconds and GiB-seconds while a replica runs, with a monthly free grant of 180,000 vCPU-s, 360,000 GiB-s, and 2 million requests per subscription. At 1 vCPU / 2 GiB, that is about 50 replica-hours. A revision scaled to zero has no CPU/memory charge, and health-probe requests are not billed (Microsoft Learn, "Billing in Azure Container Apps").
   - The ACR Basic registry and Log Analytics ingestion bill while they exist. Prices were not checked here.
   - The subscription is a free trial with the spending limit `On`, so it stops instead of billing beyond its credit. The real cost guard is deleting the resource group the same day.
-- Rollback path: every revision (`--0000001`, `--0000002`, `--0000003`) ran the same image, `procurerag-api@sha256:f66462bc…`, so today there was no earlier image to roll back to.
+- Rollback path: every revision (`--0000001` to `--0000004`) ran the same image, `procurerag-api@sha256:f66462bc…`, so today there was no earlier image to roll back to.
   - For a future image: `export IMAGE=procureragday23jp.azurecr.io/procurerag-api@sha256:f66462bcef47a98fd7e6f8b3f736f1866426db3b7b19fd2ed4ac3893f4ecef09`, then re-run runbook step 5. That is a new revision running exactly this image.
-  - Rolling back CONFIG works the same way. Step 5 replaces the env list, so it takes `--0000003`'s live config back to the deterministic template.
+  - Rolling back CONFIG works the same way. Step 5 replaces the env list, so it takes `--0000003`'s live config back to the deterministic template. That is what 9b step 7a did: `--0000004`.
 
 ### Cleanup / retention evidence
 
@@ -6260,8 +6268,13 @@ Executed by Juan on 2026-10-19, from [`docs/azure-container-apps-runbook.md`](az
 - Verification (activity log and read-only queries, UTC):
   - the app `procurerag-api`, the registry `procureragday23jp`, the workspace `workspace-rgprocureragday23jo8i`, and the `AcrPull` role assignment were deleted at 21:26:40-41, so the public FQDN's app was gone from 21:26:40;
   - `az containerapp show` -> `ResourceNotFound`;
-  - `az acr repository show` -> registry not found.
-- Any asynchronous deletion still pending: yes, at 21:43:07 UTC. `az group exists` -> `true`, the group `Deleting`, and only `cae-procurerag-day23` (the environment) still listed. Still to record: the first time `az group exists --name rg-procurerag-day23` prints `false`, and an empty `az group list --query "[?contains(name, 'procurerag')].name" -o tsv`.
+  - `az acr repository show` -> registry not found;
+  - at 21:43:07, `az group exists` -> `true`: the group was still `Deleting`, with only `cae-procurerag-day23` (the environment) left;
+  - a separate delete of the environment alone, sent from the Azure portal (client app id `c44b4083…`; the CLI's is `04b07795…`), was accepted at 21:49:23 and succeeded at 21:49:55;
+  - the group delete succeeded at 21:51:06 UTC. Same correlation id as the 21:26:03 request: the whole deletion took 25 minutes, most of it waiting on the environment;
+  - 2026-10-20 15:37 UTC: `az group exists --name rg-procurerag-day23` -> `false`, and `az group list --query "[?contains(name, 'procurerag')].name" -o tsv` -> no output.
+- Any asynchronous deletion still pending: no.
+- 9b's IP rule `live-llm-window` was never removed. The activity log shows no app write after 21:23:50 except the delete. Leaving it is what 9b step 7d allows: while it existed, it only narrowed who could reach the app, and it went with the app at 21:26:40.
 - No unrelated/shared resource was deleted. The subscription had 0 resource groups before Day 23 (read 2026-10-19), and every delete in the activity log is a resource of `rg-procurerag-day23`.
 - Left on this Mac: the local image `procureragday23jp.azurecr.io/procurerag-api:day23` (2.09 GB; `docker image rm` frees it). The registry token from `az acr login` expires on its own (about 3 h) once the registry is gone; `docker logout procureragday23jp.azurecr.io` removes it now.
 
@@ -6290,7 +6303,8 @@ cloud gates (2026-10-19, through the public FQDN):
   system log     image pull 17.50 s / 691,011,584 bytes, 1 startup-probe failure, no restart
   console log    access lines OK; LangSmith 429 ingest errors (9b live revision)
   cold / warm    59.07 s cold /health; about 0.150 s warm /health, about 0.219 s warm Q001
-  cleanup        group delete accepted 21:26:03 UTC; app/registry/workspace deleted; group still Deleting at 21:43:07 UTC
+  config         probes, CPU/memory, scale, env recovered after deletion from Resource Graph: = template
+  cleanup        group delete accepted 21:26:03 UTC, succeeded 21:51:06 UTC; az group exists false, no procurerag group (2026-10-20)
 ```
 
 No file under `src/` or `tests/` changed. `deploy/` is outside the `.dockerignore` allow-list, so the template never enters the build context.
@@ -6409,7 +6423,7 @@ Draft answers should cover these shapes, then be practiced without notes:
    - **The alternative.** `minReplicas: 1` means no cold start, but a replica billed all the time (at the reduced idle rate while idle).
    - **Warm latency is a separate number.** `/health` takes about 150 ms and Q001 about 218 ms from my client, including the internet round trip and TLS. The 39 ms of Day 22 was loopback.
 6. **Environment variables versus secrets.**
-   - **Environment variables belong to the REVISION.** Changing them creates a new revision: 9b's switch to live LLM turned `--0000002` into `--0000003`.
+   - **Environment variables belong to the REVISION.** Changing them creates a new revision: 9b's switch to live LLM turned `--0000002` into `--0000003`, and the switch back made `--0000004`.
    - **Secrets belong to the APP.** Adding, changing, or removing one creates no revision. A running revision only sees the change after a restart or in a new revision.
    - **They meet through a reference.** An env var refers to a secret as `secretref:<name>`, and `az containerapp show` returns only that reference, never the value.
    - **Today's deterministic route needs no secret at all.** It has no provider key, and the image pull uses the app's managed identity (`AcrPull`) instead of a registry password.
@@ -6430,7 +6444,7 @@ Draft answers should cover these shapes, then be practiced without notes:
      - the model revisions, recorded in the build log (NOT pinned in the code);
      - the revision template (`deploy/azure/containerapp-template.yaml`);
      - the runbook's commands.
-   - **Artifact identity.** The registry digest identifies the image; the tag `day23` can be moved. The revision names identify immutable snapshots (`--0000001` bootstrap, `--0000002` contract, `--0000003` live).
+   - **Artifact identity.** The registry digest identifies the image; the tag `day23` can be moved. The revision names identify immutable snapshots (`--0000001` bootstrap, `--0000002` contract, `--0000003` live, `--0000004` contract again).
    - **Rollback.** Re-apply the template with the previous image as `@sha256:<digest>`, which makes a new revision running exactly that image. Or, in multiple revision mode, move traffic back to the old revision. Today, every revision runs the same image, so there was no earlier image to roll back to.
 9. **Why the public deployment is temporary.**
    - **Anyone can query.** There is no authentication, and the role is caller-asserted. Anyone with the URL can call `/query` as `buyer`, and so see Confidential-document evidence.
@@ -6461,8 +6475,10 @@ Carried forward, unchanged by Day 23:
 New with Day 23:
 
 - **LangSmith tracing is blocked by the account's monthly quota (`429`).** The deployed tracing path is wired, but no trace from Azure has been stored yet. And the OpenRouter call would not appear as its own LLM run with token usage.
-- **The revision references the image by tag.** The model revisions are recorded in the build log, not pinned in the code. `OMP_NUM_THREADS` must be kept in step with `cpu` by hand.
-- **The registry's admin user is enabled but unused.**
+- **The revision references the image by tag.** The model revisions are recorded in the build log, not pinned in the code. `OMP_NUM_THREADS` must be kept in step with `cpu` by hand. These are disclosed, not blocking. For a production-hardening pass:
+  - deploy by digest: `IMAGE=...@sha256:...` in step 5, as the rollback already does;
+  - pin both models with `revision=<commit>` in the Dockerfile bake step AND the loaders (`src/semantic_search.py`, `src/reranking.py`). Pinning only the build would leave the runtime asking for `main`.
+- **The registry's admin user stayed enabled, unused, until the registry was deleted (21:26:41).** The runbook now switches it off in step 6, once the managed-identity pull and `AcrPull` are verified. That step has not been run against Azure yet.
 - **The deployment is manual:** CLI commands from a runbook, run from one laptop. There is no CI/CD and no infrastructure-as-code beyond the revision template.
 - **The performance numbers are single measurements from one client network.** One cold start, and ten-request warm medians. No load test, no p95, and no Azure Monitor metrics. Costs are estimated from the free-grant arithmetic, not read from Azure billing.
 - **`az containerapp logs show` is the only log access used.** History beyond the running replica (Log Analytics) was not queried.
@@ -6474,7 +6490,7 @@ New with Day 23:
    - steps 2-6 (Block 3A): the extension and providers, Path B build/push, `up --image`, the template, the handles;
    - steps 7-11 (Block 4): the smoke, logs, cold/warm latency, the optional live 9b run, and cleanup.
 
-   The evidence is recorded above. One item is left: the time the group deletion completes (`az group exists` -> `false`), to be added under "Cleanup / retention evidence".
+   The evidence is recorded above, cleanup included: the group deletion completed at 21:51:06 UTC, and `az group exists` -> `false` (2026-10-20). The probe, resource, and scale values were recovered after deletion from Azure Resource Graph.
 3. **Drafted (2026-10-19):** the source takeaways, "What became clearer", the interview drill answers, and "What remains weak". Next (Juan): confirm each takeaway against your own reading, and practice the drill without notes.
 4. Send Hermes the exact review prompt from `docs/day-23-azure-container-apps-deployment.md`.
 5. After a clean Day 23 review, start **Day 24 — eval-gated CI/CD and graph-aware regression evidence (HER-292)**: deterministic merge/deploy gates for dependency sync, pytest, compileall, Ruff, retrieval regression, API smoke, and Docker build, with paid/live graph-answer checks kept optional/manual.

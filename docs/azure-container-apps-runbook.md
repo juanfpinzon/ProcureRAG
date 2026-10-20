@@ -150,7 +150,7 @@ az acr login --name "$ACR_NAME"
 docker buildx build --platform linux/amd64 --tag "$IMAGE" --push .
 ```
 
-- `--admin-enabled true` turns on the registry's admin user (a username and password). The built-in `az containerapp up` needs it: it looks those credentials up and stores the password as an app secret (checked in the Azure CLI 2.91.0 source). But with the `containerapp` extension from step 2 installed (1.3.0b5), `up` did something better. It gave the app a system-assigned managed identity, granted that identity `AcrPull` on the registry, and stored no password (observed on 2026-10-19, see step 6). The admin user then stays enabled but unused. `az acr update --name "$ACR_NAME" --admin-enabled false` turns it off.
+- `--admin-enabled true` turns on the registry's admin user (a username and password). The built-in `az containerapp up` needs it: it looks those credentials up and stores the password as an app secret (checked in the Azure CLI 2.91.0 source). With the `containerapp` extension from step 2 installed (1.3.0b5), `up` does not. It gave the app a system-assigned managed identity, granted that identity `AcrPull` on the registry, and stored no password (observed on 2026-10-19). The extension's source agrees: `up --image` never reads the admin credentials. Running it with the admin user OFF was not tried, so this step keeps it on, and step 6 switches it off once the identity path is verified.
 - `docker buildx build --platform linux/amd64` builds an x86-64 image on an Apple Silicon Mac by emulating x86-64. Measured on 2026-10-19 with `--load` instead of `--push`: 45 s, including the amd64 base image pull and every dependency download. The bake step printed the same two model revisions as the arm64 build. That emulated image then started offline in 57 s with 1 CPU and answered Q001 with the same 5 chunks. The push uploads the compressed layers of a 2.09 GB image, so its time depends on your upload speed.
 - `--push` sends the image straight to the registry. Nothing is left under that tag in your local image list.
 
@@ -224,7 +224,7 @@ az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_G
 rm "$RENDERED"
 ```
 
-- `update --yaml` is a PATCH: it only replaces what the file contains, which is the revision template. Ingress, the registry, and the registry secret are untouched.
+- `update --yaml` is a PATCH: it only replaces what the file contains, which is the revision template. Ingress, the registry, and the app's identity are untouched.
 - A template change creates a new revision. In single revision mode, traffic moves to it once its readiness probe succeeds, and the old revision is deactivated.
 - Reading `IMAGE` back from the app means the same commands also work after Path A, where `up` picked the image name.
 
@@ -278,6 +278,32 @@ az containerapp replica list --name "$CONTAINERAPP_NAME" --resource-group "$RESO
 ```
 
 Printing `env` is safe here, and stays safe in general: for a variable backed by a secret, Azure returns only `secretRef: <name>`, never the value.
+
+Then check how replicas pull the image, and switch off the registry's admin user, which nothing uses.
+
+**(changes an Azure resource: a registry setting)**
+
+```bash
+# How the app authenticates to the registry. Expect "identity": "system" and NO passwordSecretRef
+az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query 'properties.configuration.registries' -o json
+
+# The app's identity holds AcrPull on the registry. Expect: AcrPull
+PRINCIPAL_ID=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query identity.principalId -o tsv)
+ACR_ID=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+az role assignment list --assignee-object-id "$PRINCIPAL_ID" --scope "$ACR_ID" --query '[].roleDefinitionName' -o tsv
+
+# Only if both checks passed: the admin username and passwords stop working
+az acr update --name "$ACR_NAME" --admin-enabled false -o none
+az acr show --name "$ACR_NAME" --query adminUserEnabled -o tsv     # expect: false
+```
+
+- The admin user is a shared username and password with push and pull access to the whole registry. Step 3 enabled it only as a fallback for the built-in CLI. With the managed identity in place, it is unused attack surface, so it goes now, not at step 11.
+- Do NOT switch it off if `registries` shows a `passwordSecretRef` (the built-in CLI path, without the extension). The app pulls with that password, and the next replica that has to pull the image would fail.
+- Pushing still works: `az acr login` (step 3) gives Docker a token from your Entra ID sign-in, not the admin password.
+- `--assignee-object-id` takes the principal id as is, without a Microsoft Graph lookup.
+- The checks above read what Azure stored, and that is the real proof. Step 9's cold start then runs with the admin user off, but it only exercises the pull if the new replica lands on a host that does not have the image cached.
 
 ## 7. Cloud smoke test
 
@@ -668,9 +694,9 @@ Never point `az group delete` at a group you did not create for this deployment.
 
 - Every Day 21/22 limit still applies, now on the public internet: the role is caller-asserted (no authentication), approval is a stateless re-submission, free-text evidence is unchecked, and trace rows are not persisted. Anyone with the URL can call `/query` as `buyer`. That is why the deployment is temporary.
 - The rate limiter counts by `request.client.host`. Behind the Container Apps ingress, that is the proxy's address, not the caller's, so callers can share one 30-per-minute budget. Fixing it means trusting `X-Forwarded-For` from the proxy (`--forwarded-allow-ips`), or moving rate limiting to the ingress.
-- The registry pull uses the app's managed identity (`AcrPull`), so no password exists. But the registry's admin user was enabled in step 3 and is now unused attack surface until the group is deleted (or `--admin-enabled false`).
-- The revision references the image by tag (`day23`). A tag can be moved to another image, so the recorded digest is the real identity. Referencing `@sha256:...` in the template would pin it.
-- The model revisions are not pinned in the code. The build log records which commit each model's `main` pointed to at build time. A rebuild on another day may bake newer weights.
+- The registry pull uses the app's managed identity (`AcrPull`), so the app stores no password. Step 6 switches the registry's admin user off once that is verified. On 2026-10-19 that step did not exist yet: the admin user stayed enabled, unused, until the registry was deleted at 21:26:41 UTC.
+- The revision references the image by tag (`day23`). A tag can be moved to another image, so the recorded digest is the real identity. To pin it, step 5 would set `IMAGE` to `$ACR_NAME.azurecr.io/procurerag-api@sha256:<digest from step 3>` (the form step 10 uses), instead of reading the tag back.
+- The model revisions are not pinned in the code. The bake step and the loaders (`src/semantic_search.py`, `src/reranking.py`) both ask for each model's `main`, and the build log only records which commit `main` pointed to at build time. A rebuild on another day may bake newer weights. Pinning means passing `revision=<commit>` in BOTH places: pinning only the build would leave the runtime asking for `main`.
 - `OMP_NUM_THREADS` must be changed by hand whenever `cpu` changes.
 - `az containerapp logs show` reads recent logs from one replica. Older logs, or a replica that is gone, need a Log Analytics query (not done today).
 - Cold-start and warm timings are single measurements from one client network.
