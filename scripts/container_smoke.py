@@ -18,16 +18,27 @@ blocks an off-topic question, and logs no traceback or secret-like text. It
 says nothing about answer quality, and nothing about any other image: it must
 be run against the exact tag the workflow just built.
 
-**Exit codes.**
+**Second mode: a deployment that is already running** (the deploy workflow's
+last step, after Azure has switched to the new revision):
+
+    python3 scripts/container_smoke.py --url https://<app-fqdn>
+
+The same HTTP probes, sent to that URL. Nothing is started or removed, so no
+`docker` is needed. There is no log probe in this mode: the logs live on the
+platform, not in a local container. The deploy workflow checks the logs of
+the same image in its local container smoke, before the image is pushed.
+
+**Exit codes** (both modes).
 
 - `0`: every probe passed.
-- `1`: the container is healthy, but an endpoint or log contract differs
+- `1`: the service is healthy, but an endpoint or log contract differs
   (API smoke failure).
-- `2`: the container never became healthy: it exited, or `/health` did not
-  answer within the budget (packaging/startup failure).
+- `2`: the service never became healthy: the container exited, or `/health`
+  did not answer within the budget (packaging/startup failure).
 
-The container is ALWAYS removed at the end (`finally`), even when a probe
-fails or the script is interrupted, so a failed CI run leaves nothing behind.
+In image mode, the container is ALWAYS removed at the end (`finally`), even
+when a probe fails or the script is interrupted, so a failed CI run leaves
+nothing behind.
 """
 
 import argparse
@@ -181,16 +192,21 @@ def http_post_json(url, body, timeout=60):
         return None, {"_error": f"{type(error).__name__}: {error}"}
 
 
-def wait_for_health(base_url, budget_seconds):
+def wait_for_health(base_url, budget_seconds, local_container=True):
     """Poll `/health` until it answers 200, or fail fast if the container dies.
 
     Returns `(seconds_until_healthy, health_json)`. While the models load,
     Uvicorn is not accepting connections yet, so a refused connection is the
     expected "still starting" answer, not a failure.
+
+    `local_container=False` (URL mode): there is no local container to watch,
+    so only the time budget can end the wait. Behind Azure's ingress, a
+    scaled-to-zero app holds the first request while a replica starts, so a
+    timed-out attempt is also "still starting".
     """
     started = time.monotonic()
     while time.monotonic() - started < budget_seconds:
-        if not container_is_running():
+        if local_container and not container_is_running():
             raise StartupFailure("the container exited before /health answered")
         try:
             status, body = http_get_json(f"{base_url}/health")
@@ -303,17 +319,65 @@ def check_logs(logs):
 # ---------------------------------------------------------------------------
 
 
+def http_probes(base_url, health):
+    """The HTTP contract, identical for a local container and a deployed revision."""
+    return [
+        ("/health contract", check_health(health)),
+        ("Q001 labeled, local retrieval", check_q001(*http_post_json(f"{base_url}/query", Q001_REQUEST))),
+        ("Q091 without a decision", check_q091_pending(*http_post_json(f"{base_url}/query", Q091_REQUEST))),
+        ("off-topic question", check_off_topic_blocked(*http_post_json(f"{base_url}/query", OFF_TOPIC_REQUEST))),
+    ]
+
+
+def print_probes(probes):
+    """Print one [ok]/[FAIL] line per probe, with its failures. Returns True if any probe failed."""
+    failed = False
+    for name, failures in probes:
+        print(f"[{'FAIL' if failures else 'ok'}] {name}")
+        for failure in failures:
+            print(f"       - {failure}")
+        failed = failed or bool(failures)
+    return failed
+
+
+def smoke_running_service(base_url, health_budget):
+    """URL mode: the HTTP probes against a service someone else started (e.g. an Azure revision).
+
+    The URL itself is never printed: in a public CI log it would advertise
+    an unauthenticated endpoint. (The deploy workflow also masks it.)
+    """
+    try:
+        seconds, health = wait_for_health(base_url, health_budget, local_container=False)
+    except StartupFailure as error:
+        print(f"STARTUP FAILURE: {error}")
+        print(f"\nexit code: {EXIT_STARTUP_FAILED}")
+        return EXIT_STARTUP_FAILED
+    print(f"[ok] /health answered after {seconds:.1f} s: {health}")
+
+    failed = print_probes(http_probes(base_url, health))
+    print("[skip] logs: not readable over HTTP (the image's own logs are checked in image mode)")
+
+    print(f"\nexit code: {EXIT_CONTRACT_FAILED if failed else EXIT_PASSED}")
+    return EXIT_CONTRACT_FAILED if failed else EXIT_PASSED
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description="Start one ProcureRAG image and gate its HTTP/log contract.")
-    parser.add_argument("image", help="the exact image tag to test, e.g. procurerag-api:ci-<sha>")
+    parser = argparse.ArgumentParser(description="Gate the HTTP/log contract of one ProcureRAG image or deployment.")
+    parser.add_argument("image", nargs="?", help="the exact image tag to start and test, e.g. procurerag-api:ci-<sha>")
+    parser.add_argument("--url", help="instead of an image: the base URL of a running deployment, e.g. https://<fqdn>")
     parser.add_argument("--port", type=int, default=8000, help="host loopback port to publish (default 8000)")
     parser.add_argument(
         "--health-budget", type=int, default=DEFAULT_HEALTH_BUDGET_SECONDS,
         help=f"seconds to wait for /health (default {DEFAULT_HEALTH_BUDGET_SECONDS})",
     )
     args = parser.parse_args(argv)
-    base_url = f"http://127.0.0.1:{args.port}"
+    # Exactly one target: an image to start, or a URL that is already serving.
+    if (args.image is None) == (args.url is None):
+        parser.error("give either an IMAGE to start, or --url of a running deployment (not both)")
+    if args.url:
+        return smoke_running_service(args.url.rstrip("/"), args.health_budget)
 
+    base_url = f"http://127.0.0.1:{args.port}"
     remove_container()  # a leftover container from an interrupted run would block the name/port
     try:
         # Startup: `docker run` itself can fail (e.g. the tag was never
@@ -333,21 +397,11 @@ def main(argv=None) -> int:
             return EXIT_STARTUP_FAILED
         print(f"[ok] /health answered after {seconds:.1f} s: {health}")
 
-        probes = [
-            ("/health contract", check_health(health)),
-            ("Q001 labeled, local retrieval", check_q001(*http_post_json(f"{base_url}/query", Q001_REQUEST))),
-            ("Q091 without a decision", check_q091_pending(*http_post_json(f"{base_url}/query", Q091_REQUEST))),
-            ("off-topic question", check_off_topic_blocked(*http_post_json(f"{base_url}/query", OFF_TOPIC_REQUEST))),
-        ]
+        probes = http_probes(base_url, health)
         # The logs are read AFTER the requests, so they include every request's handling.
         probes.append(("logs", check_logs(container_logs())))
 
-        failed = False
-        for name, failures in probes:
-            print(f"[{'FAIL' if failures else 'ok'}] {name}")
-            for failure in failures:
-                print(f"       - {failure}")
-            failed = failed or bool(failures)
+        failed = print_probes(probes)
 
         if failed:
             # The server's own traceback, if any, is in these lines, and the

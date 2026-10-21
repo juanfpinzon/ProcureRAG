@@ -78,3 +78,65 @@ def test_log_check_names_the_keyword_and_line_but_never_prints_the_line():
     assert all(fake_key not in failure for failure in failures)
     assert fake_key not in printed  # the debugging tail hides it too
     assert smoke.check_logs("INFO: startup complete\nINFO: GET /health 200\n") == []
+
+
+# ---------------------------------------------------------------------------
+# URL mode (`--url`): the deploy workflow's post-deployment smoke. The HTTP
+# layer is replaced by the measured answers, and `subprocess.run` (every
+# docker call goes through it) is made to fail the test if it is ever used.
+# ---------------------------------------------------------------------------
+
+
+def _serve_measured_answers(monkeypatch, smoke, health=None):
+    """Make the script's two HTTP helpers return the measured answers, and forbid docker."""
+
+    def no_docker(*args, **kwargs):
+        raise AssertionError("URL mode must not call docker")
+
+    def fake_post(url, body, timeout=60):
+        answers = {"Q001": (200, Q001_ANSWER), "Q091": (200, Q091_PENDING)}
+        return answers.get(body.get("query_id"), (200, OFF_TOPIC_BLOCKED))
+
+    monkeypatch.setattr(smoke.subprocess, "run", no_docker)
+    monkeypatch.setattr(smoke, "http_get_json", lambda url, timeout=5: (200, health or {"status": "ok", "live_llm": False}))
+    monkeypatch.setattr(smoke, "http_post_json", fake_post)
+
+
+def test_url_mode_passes_on_the_measured_answers_without_touching_docker(monkeypatch, capsys):
+    smoke = _load_container_smoke_module()
+    _serve_measured_answers(monkeypatch, smoke)
+
+    assert smoke.main(["--url", "https://procurerag-api.example.invalid/"]) == smoke.EXIT_PASSED
+    output = capsys.readouterr().out
+    assert "[skip] logs" in output
+    assert "example.invalid" not in output  # the deployment's URL is never printed
+
+
+def test_url_mode_fails_when_the_deployed_revision_has_the_live_llm_on(monkeypatch):
+    smoke = _load_container_smoke_module()
+    _serve_measured_answers(monkeypatch, smoke, health={"status": "ok", "live_llm": True})
+
+    assert smoke.main(["--url", "https://procurerag-api.example.invalid"]) == smoke.EXIT_CONTRACT_FAILED
+
+
+def test_url_mode_reports_a_service_that_never_answers_as_a_startup_failure(monkeypatch):
+    smoke = _load_container_smoke_module()
+    _serve_measured_answers(monkeypatch, smoke)
+
+    # A zero-second budget: the wait loop never gets to ask, exactly like a
+    # revision that never answers. It must exit 2 without asking docker for logs.
+    assert smoke.main(["--url", "https://procurerag-api.example.invalid", "--health-budget", "0"]) == (
+        smoke.EXIT_STARTUP_FAILED
+    )
+
+
+def test_exactly_one_target_is_required():
+    smoke = _load_container_smoke_module()
+
+    for argv in ([], ["procurerag-api:ci-abc", "--url", "https://procurerag-api.example.invalid"]):
+        try:
+            smoke.main(argv)
+        except SystemExit as error:
+            assert error.code == 2  # argparse's usage error
+        else:
+            raise AssertionError(f"{argv} was accepted")
