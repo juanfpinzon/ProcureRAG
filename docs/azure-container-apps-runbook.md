@@ -691,19 +691,27 @@ az identity create --name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" 
 # The subject GitHub will write into the deploy job's token. Read it from GitHub instead of typing it:
 # repositories created after 2026-07-15 use the immutable format, with the owner and repository ids.
 SUB_PREFIX=$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)
-echo "$SUB_PREFIX:environment:production"
+# The braces in ${SUB_PREFIX} are required in zsh (see the note below)
+export OIDC_SUBJECT="${SUB_PREFIX}:environment:production"
+echo "$OIDC_SUBJECT"
 # expect: repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production
 
 az identity federated-credential create --name github-production \
   --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" \
   --issuer https://token.actions.githubusercontent.com \
-  --subject "$SUB_PREFIX:environment:production" \
+  --subject "$OIDC_SUBJECT" \
   --audiences api://AzureADTokenExchange -o none
 
 az identity federated-credential list --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" \
   --query '[].{name:name, issuer:issuer, subject:subject, audiences:audiences}' -o json
+
+# Exact comparison: a near-miss (one extra character) looks right to the eye. Expect: subject OK
+STORED=$(az identity federated-credential show --name github-production \
+  --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" --query subject -o tsv)
+[ "$STORED" = "$OIDC_SUBJECT" ] && echo "subject OK" || echo "subject MISMATCH: $STORED"
 ```
 
+- **zsh and `$NAME:`**: in zsh, a `:` right after an unbraced variable starts a modifier. `"$SUB_PREFIX:environment:production"` is read as `$SUB_PREFIX` with the `:e` modifier ("file extension", empty here), followed by `nvironment:production`. Bash prints the whole subject. `${SUB_PREFIX}:...` means the same thing in both shells. On 2026-10-21 the unbraced form, plus a hand edit, stored the subject `...@1356961914$:environment:production`, and the first deploy failed at sign-in (see Troubleshooting).
 - The issuer is GitHub's token service. The audience is the default that `azure/login` asks for.
 - Entra ID compares the subject character by character. The name-only form `repo:juanfpinzon/ProcureRAG:environment:production` is what GitHub documented for years, and what the Day 24 plan first wrote down. It would never match a token from this repository, and every sign-in would be refused.
 - With the ids in the subject, a repository created later under the same name (after a rename or a deletion) cannot reuse this trust: its ids would differ.
@@ -759,6 +767,22 @@ gh secret list --env production --repo "$GITHUB_REPO"        # names only: expec
 4. Read the job summary: the pushed tag, the deployed digest, the previous revision, the rollback handle, and the new revision.
 
 The workflow's own comments explain each of its 8 steps.
+
+Observed on 2026-10-21 (run 39625296505, attempt 2, commit `6bd0b3e`): the `deploy` job took 5m07s after the approval. The build took 71 s (9 cached layers), the container smoke reached `/health` after 36.4 s, the OIDC sign-in took 7 s, the push and digest read-back took 78 s, the update 17 s, and the wait for the new revision 62 s. The URL smoke finished in 4 s, because a replica was already running. Afterwards, Azure showed:
+
+```text
+procurerag-api--0000003  active  traffic 100  Healthy  procureragday24jp.azurecr.io/procurerag-api@sha256:ba8cb277...
+procurerag-api--0000002  inactive  traffic 0            procureragday24jp.azurecr.io/procurerag-api:day24-azure
+```
+
+To read the same thing yourself:
+
+```bash
+az containerapp revision list --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --all \
+  --query '[].{revision:name, active:properties.active, traffic:properties.trafficWeight, image:properties.template.containers[0].image}' -o table
+```
+
+`--all` includes the inactive revisions. Without it, only the active one is listed.
 
 ### 6. Roll back
 
@@ -822,6 +846,14 @@ After step 10b, two more things exist:
 - **The console log shows `LocalEntryNotFoundError ... outgoing traffic has been disabled`.** The image running is not the baked one, for example an image built before Day 23. Check `image` in step 6 and the bake lines in the build output.
 - **The replica restarts with exit code 137 / an OOM event in the system log.** Memory ran out. Move to the next pair (1.25 vCPU / 2.5 GiB) in the template, and set `OMP_NUM_THREADS` to match.
 - **`az containerapp logs show --type console` fails.** No replica is running (scaled to zero). Send one request, then retry.
+- **`deploy.yml` fails at "3a. Sign in to Azure" with `AADSTS700213: No matching federated identity record found for presented assertion subject '...'`.** GitHub issued a token, but no federated credential on the identity named by `AZURE_CLIENT_ID` has exactly that subject (and issuer and audience). The log prints the token's subject (`subject claim - ...`). Compare it with the stored one (step 10b, item 2). Fix the stored one in place, then re-run only the failed job (`gh run rerun <run-id> --failed`, which asks for approval again):
+
+  ```bash
+  az identity federated-credential update --name github-production \
+    --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" \
+    --issuer https://token.actions.githubusercontent.com --subject "$OIDC_SUBJECT" \
+    --audiences api://AzureADTokenExchange -o none
+  ```
 - **The ACR build log says `Unknown flag: start-interval`.** That builder runs a Docker older than 25, which cannot parse the `HEALTHCHECK` flag. Path B builds with your local Docker (29.x), which can.
 
 ## Honest limits
@@ -829,7 +861,7 @@ After step 10b, two more things exist:
 - Every Day 21/22 limit still applies, now on the public internet: the role is caller-asserted (no authentication), approval is a stateless re-submission, free-text evidence is unchecked, and trace rows are not persisted. Anyone with the URL can call `/query` as `buyer`. That is why the deployment is temporary.
 - The rate limiter counts by `request.client.host`. Behind the Container Apps ingress, that is the proxy's address, not the caller's, so callers can share one 30-per-minute budget. Fixing it means trusting `X-Forwarded-For` from the proxy (`--forwarded-allow-ips`), or moving rate limiting to the ingress.
 - The registry pull uses the app's managed identity (`AcrPull`), so the app stores no password. Step 6 switches the registry's admin user off once that is verified. On 2026-10-19 that step did not exist yet: the admin user stayed enabled, unused, until the registry was deleted at 21:26:41 UTC.
-- The revision references the image by tag (`day23`). A tag can be moved to another image, so the recorded digest is the real identity. To pin it, step 5 would set `IMAGE` to `$ACR_NAME.azurecr.io/procurerag-api@sha256:<digest from step 3>` (the form step 10 uses), instead of reading the tag back.
+- The revision references the image by tag (`day23`). A tag can be moved to another image, so the recorded digest is the real identity. To pin it, step 5 would set `IMAGE` to `$ACR_NAME.azurecr.io/procurerag-api@sha256:<digest from step 3>` (the form step 10 uses), instead of reading the tag back. Since Day 24, `deploy.yml` (step 10b) always deploys by digest. Only the hand-made first deployment of a re-run still uses a tag.
 - The model revisions are not pinned in the code. The bake step and the loaders (`src/semantic_search.py`, `src/reranking.py`) both ask for each model's `main`, and the build log only records which commit `main` pointed to at build time. A rebuild on another day may bake newer weights. Pinning means passing `revision=<commit>` in BOTH places: pinning only the build would leave the runtime asking for `main`.
 - `OMP_NUM_THREADS` must be changed by hand whenever `cpu` changes.
 - `az containerapp logs show` reads recent logs from one replica. Older logs, or a replica that is gone, need a Log Analytics query (not done today).
