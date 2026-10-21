@@ -203,6 +203,24 @@ docker volume rm procurerag-hf-cache            # the next run must warm the cac
 docker image rm procurerag-api:day22
 ```
 
+## Automated smoke: steps 4-7 as one gated command (Day 24)
+
+[`scripts/container_smoke.py`](../scripts/container_smoke.py) runs steps 4-7 against one image tag and checks the answers instead of leaving them to be read by eye. The GitHub Actions job `docker-build-smoke` runs it on the image it just built, so CI and this runbook check the same contract. When a probe changes here, change it in the script as well, and the reverse.
+
+```bash
+docker build --tag procurerag-api:day24-local .
+python3 scripts/container_smoke.py procurerag-api:day24-local
+```
+
+What the script does differently from the hand-run steps above:
+
+- **No model volume.** Since Day 23 the models are baked into the image, so the container starts with `HF_HUB_OFFLINE=1` and nothing mounted.
+- **Resource limits:** `--cpus 1 --memory 2g`, plus `OMP_NUM_THREADS=1`, close to one Azure Container Apps replica. Measured on 2026-10-20 (Mac, arm64): `/health` answered after 26-29 s with one CPU, against 9-10 s without the limit.
+- **Health:** it polls `GET /health` every 2 s for up to 240 s, and fails at once if the container exits. There is no fixed sleep, so a slow cold start (59 s on Azure) is not mistaken for a failure.
+- **Assertions:** probes 1-4 of step 5 (`live_llm=false`; Q001 `not_generated` with 5 sources including `POL-001` and a `run_id`; Q091 `pending_approval` with no sources and no `run_id`; off-topic `blocked` with an `off_topic` finding), then step 6's log checks (no `Traceback`, no secret-like line; only counts are printed).
+- **Cleanup:** the container is always removed in a `finally` block, even when a probe fails.
+- **Exit codes:** `0` passed, `1` the image is healthy but a contract differs, `2` it never became healthy (it exited, or `/health` timed out).
+
 ## Optional: prove the offline steady state
 
 With the cache warmed, the service needs no network at all. `--network none` gives the container no network interface except its own loopback:

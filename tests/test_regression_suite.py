@@ -585,3 +585,63 @@ def test_render_table_marks_a_mismatch_case_as_a_regression_in_the_overall_verdi
 
     assert "MISMATCH" in table_text
     assert "REGRESSION" in table_text
+
+
+# ---------------------------------------------------------------------------
+# Day 24: the exit code is the gate. CI only sees the process exit status, so
+# a drift must turn into a non-zero exit, in both deterministic lanes.
+# ---------------------------------------------------------------------------
+
+
+def test_gate_exit_code_is_0_only_when_both_lanes_match():
+    regression_suite = _load_regression_suite_module()
+    matching_row = {"deterministic_match": True}
+    drifted_row = {"deterministic_match": False}
+    matching_pipeline = {"matches_expectation": True}
+    drifted_pipeline = {"matches_expectation": False}
+
+    assert regression_suite.gate_exit_code([matching_row]) == regression_suite.EXIT_ALL_MATCH
+    assert regression_suite.gate_exit_code([matching_row], [matching_pipeline]) == regression_suite.EXIT_ALL_MATCH
+    # Fixture drift alone, and retrieval-pipeline drift alone, are each enough.
+    assert regression_suite.gate_exit_code([matching_row, drifted_row]) == regression_suite.EXIT_DRIFT
+    assert regression_suite.gate_exit_code([matching_row], [drifted_pipeline]) == regression_suite.EXIT_DRIFT
+
+
+def test_main_returns_0_on_the_committed_fixtures(monkeypatch):
+    regression_suite = _load_regression_suite_module()
+    monkeypatch.setattr(sys, "argv", ["regression_suite.py"])
+
+    assert regression_suite.main() == regression_suite.EXIT_ALL_MATCH
+
+
+def test_main_returns_1_when_a_fixture_no_longer_matches_its_expectation(monkeypatch):
+    """The Day 24 bug this closes: before, `main()` printed the drift and the
+    process still exited 0, so CI would have shown green. A stale expectation
+    (Q091 back to its pre-repair missing documents) must now return 1.
+    """
+    regression_suite = _load_regression_suite_module()
+    q091_case = next(case for case in regression_suite.REGRESSION_CASES if case["case_id"] == "retrieval-miss-q091")
+    monkeypatch.setitem(q091_case, "expected_missing_primary_doc_ids", ["GUIDE-002", "POL-001"])
+    monkeypatch.setattr(sys, "argv", ["regression_suite.py"])
+
+    assert regression_suite.main() == regression_suite.EXIT_DRIFT
+
+
+def test_main_returns_2_when_verify_retrieval_cannot_load_its_pipeline(monkeypatch):
+    """A model or corpus that cannot be loaded is "could not check" (2), not
+    drift (1), the same convention as `graph_regression.py`.
+    `main()` imports `preprocessing.load_data` at call time, so replacing it
+    on the module object is enough. `src` goes on `sys.path` for this test
+    only, so the test also works when run on its own.
+    """
+    regression_suite = _load_regression_suite_module()
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "src"))
+    import preprocessing
+
+    def offline_with_an_empty_cache():
+        raise OSError("Cannot find the requested files in the disk cache and outgoing traffic has been disabled")
+
+    monkeypatch.setattr(preprocessing, "load_data", offline_with_an_empty_cache)
+    monkeypatch.setattr(sys, "argv", ["regression_suite.py", "--verify-retrieval"])
+
+    assert regression_suite.main() == regression_suite.EXIT_INFRASTRUCTURE
