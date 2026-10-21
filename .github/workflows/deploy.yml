@@ -13,8 +13,9 @@
 # The `deploy` job, in order:
 #
 #   1. build the linux/amd64 image of this commit, once;
-#   2. smoke THAT image on the runner (scripts/container_smoke.py, image mode);
-#   3. sign in to Azure, and push the same image as :<commit sha>;
+#   2. evaluate THAT image on the runner: the container smoke (2a), then CI's
+#      two model-backed gates run INSIDE it, with no network (2b, 2c);
+#   3. sign in to Azure, and push the same, unchanged image as :<commit sha>;
 #   4. read its digest back from the registry (the immutable handle);
 #   5. record what the app runs now (the rollback handle);
 #   6. update the app to the DIGEST, through the repo's revision template;
@@ -130,8 +131,28 @@ jobs:
           # Read the layer cache that CI's pushes to main wrote; never write it.
           cache-from: type=gha
 
-      - name: 2. Container smoke on the runner (the exact image about to be pushed)
+      - name: 2a. Container smoke on the runner (the exact image about to be pushed)
         run: python3 scripts/container_smoke.py "$IMAGE"
+
+      # 2b and 2c: the same two commands as CI's model-backed job, but run
+      # INSIDE the image about to be pushed. CI ran them on the runner's own
+      # install, earlier, with the model revisions the Hub served then. This
+      # image is a separate build that baked its own copy of the models, and
+      # its base images are named by tag, not digest. So CI's pass does not
+      # cover these bytes. Running the gates here does: this code, these
+      # installed packages, these model weights.
+      # `--network none`: nothing can be downloaded, so the result cannot
+      # come from anywhere but the image. `docker run --rm` leaves the image
+      # itself unchanged; the container is thrown away.
+      - name: 2b. Retrieval verification inside the image (no network)
+        run: |
+          docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 \
+            "$IMAGE" python src/regression_suite.py --verify-retrieval
+
+      - name: 2c. Graph route regression inside the image (no network)
+        run: |
+          docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 \
+            "$IMAGE" python src/graph_regression.py
 
       - name: 3a. Sign in to Azure with OIDC (no client secret exists)
         # azure/login asks GitHub for this job's OIDC token and exchanges it
@@ -166,6 +187,7 @@ jobs:
           echo "DEPLOY_IMAGE=$ACR_NAME.azurecr.io/procurerag-api@$digest" >> "$GITHUB_ENV"
           {
             echo "### Deploy $GITHUB_SHA"
+            echo "- evaluated before the push: container smoke, retrieval verification, graph route regression (2b-2c inside the image, no network)"
             echo "- pushed tag: \`$IMAGE\`"
             echo "- deployed by digest: \`$ACR_NAME.azurecr.io/procurerag-api@$digest\`"
           } >> "$GITHUB_STEP_SUMMARY"

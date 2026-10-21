@@ -784,18 +784,49 @@ az containerapp revision list --name "$CONTAINERAPP_NAME" --resource-group "$RES
 
 `--all` includes the inactive revisions. Without it, only the active one is listed.
 
+Since the 2026-10-21 review, the job also runs steps 2b and 2c before the push: the retrieval verification and the graph route regression inside the image, with no network. Measured locally, they take about 25 s each. Their first GitHub run is still to come.
+
 ### 6. Roll back
 
-The job summary's rollback handle is the previous image, named by its digest. Rolling back means deploying that digest again with the same template: step 5 of this runbook, with `IMAGE` set by hand instead of read back from the app:
+The job summary's rollback handle is the previous image, named by its digest. Rolling back means deploying that digest again with the same template. Do NOT re-run step 5 as written: its first command reads the app's CURRENT image back into `IMAGE`, which would overwrite the handle.
 
 ```bash
-export IMAGE="<rollback handle from the job summary>"     # ...azurecr.io/procurerag-api@sha256:...
-# then step 5's render-and-update commands, then step 7's smoke:
+# a) The handle, from the job summary's "rollback handle" line
+export ROLLBACK_IMAGE="<rollback handle from the job summary>"     # ...azurecr.io/procurerag-api@sha256:...
+
+# b) Render the template with THAT image, and apply it (a new revision)
+RENDERED=$(mktemp)
+sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$ROLLBACK_IMAGE|" \
+  deploy/azure/containerapp-template.yaml > "$RENDERED"
+grep -c '__' "$RENDERED"           # expect 0
+az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --yaml "$RENDERED" -o none
+rm "$RENDERED"
+
+# c) The evidence: a NEW revision whose image IS the handle. Expect: rollback image OK
+NEW_REVISION=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query properties.latestRevisionName -o tsv)
+RUNNING=$(az containerapp revision show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --revision "$NEW_REVISION" --query 'properties.template.containers[0].image' -o tsv)
+echo "$NEW_REVISION"; [ "$RUNNING" = "$ROLLBACK_IMAGE" ] && echo "rollback image OK" || echo "MISMATCH: $RUNNING"
+
+# d) Wait until Azure calls it ready (Ctrl-C if it never does: the previous revision keeps serving)
+until [ "$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query properties.latestReadyRevisionName -o tsv)" = "$NEW_REVISION" ]; do sleep 10; done
+az containerapp revision list --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --all \
+  --query '[].{revision:name, active:properties.active, traffic:properties.trafficWeight, image:properties.template.containers[0].image}' -o table
+
+# e) Smoke it
 python3 scripts/container_smoke.py --url "https://$(az containerapp show --name "$CONTAINERAPP_NAME" \
   --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+
+# f) Azure's own record of the change. The Activity Log keeps it for 90 days, even after step 11.
+az monitor activity-log list --resource-group "$RESOURCE_GROUP" --offset 2h \
+  --query "[?operationName.value=='Microsoft.App/containerApps/write'].{time:eventTimestamp, status:status.value}" -o table
 ```
 
 This creates a new revision running the old image, and traffic moves to it once it is ready. Nothing is rebuilt, so the rollback runs exactly the bytes that ran before.
+
+Why c) and f), and not only e): the old and the new image answer the four smoke probes in exactly the same way. A green smoke after a rollback that never happened looks the same as one after a rollback that did. On 2026-10-21 a rollback was believed done, but the Activity Log showed no `containerApps/write` after the pipeline's own. The revision's image and the logged write are the evidence.
 
 ## 11. Clean up
 
