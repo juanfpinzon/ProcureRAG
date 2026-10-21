@@ -6606,7 +6606,7 @@ Juan read every source below (confirmed 2026-10-21). Each takeaway was checked a
     - **No cloud secret in GitHub:** the cloud provider "issues a short-lived access token that is only valid for a single job". A leaked workflow log or a forked PR has no reusable Azure password to steal.
     - **Claims scope the trust:** the token carries `sub`, `environment`, `ref`, `sha`, `repository`, `job_workflow_ref`, and more. With an environment, the subject looks like `repo:octo-org/octo-repo:environment:prod`. Only a job in the `production` environment (which only `main` may use) should get Azure access.
     - **Correction (2026-10-21, while building the deploy lane):** the subject first planned here, `repo:juanfpinzon/ProcureRAG:environment:production`, is WRONG for this repository. GitHub's API reports `use_immutable_subject: true` and the prefix `repo:juanfpinzon@32948087/ProcureRAG@1356961914`. Repositories created after 2026-07-15 get the immutable format by default: names plus the owner and repository ids. A rename, transfer, or new repository under the same name then cannot match an old trust. The real subject is therefore `repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production`. Entra ID compares it exactly, so the planned subject would have refused every sign-in. Lesson: read the subject from `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, never from an example.
-    - **`id-token: write` belongs on the deploy job only.** No Day 24 workflow requests it, because there is no deploy job.
+    - **`id-token: write` belongs on the deploy job only.** Applied in `deploy.yml` (2026-10-21): only its `deploy` job requests it, together with `contents: read`. `ci.yml`, `live-eval.yml`, and `deploy.yml`'s `ci-passed` job never do.
 - [x] Microsoft Learn — `Use the Azure Login action with OpenID Connect`.
   - [x] Federated identity credential.
   - [x] Least-privilege Azure role/scope.
@@ -6624,7 +6624,7 @@ Juan read every source below (confirmed 2026-10-21). Each takeaway was checked a
     - **Tags:** "use a unique tag such as the commit SHA instead of a stable tag like `latest`". CI already tags `ci-<sha>`. A tag can still be re-pushed in ACR, so the promotion should record and deploy the digest.
     - **Push vs. pull:** pushing to ACR uses the identity `azure/login` signed in with. Pulling is the container app's own job, with a managed identity ("recommended") holding `AcrPull`: the Day 23 setup.
     - **The page's own sample is not OIDC.** It uses `creds: ${{ secrets.AZURE_CREDENTIALS }}`, a long-lived service-principal JSON with Contributor on the resource group. ProcureRAG would replace that with OIDC (the two sources above).
-    - **Route question: what must exist before a deploy job can update a revision?** The resource group, ACR, the Container Apps environment, and the app itself (with its managed identity, `AcrPull`, and its registry configured), plus the GitHub deployment identity, its federated credential, and its role assignments. Day 23 deleted all of it, which is why deployment stays deferred.
+    - **Route question: what must exist before a deploy job can update a revision?** The resource group, ACR, the Container Apps environment, and the app itself (with its managed identity, `AcrPull`, and its registry configured), plus the GitHub deployment identity, its federated credential, and its role assignments. Day 23 deleted all of it, which is why deployment was deferred on 2026-10-20. (Recreated on 2026-10-21 as `rg-procurerag-day24`, deployed to by `deploy.yml`, and deleted again the same day.)
 
 ### Starting baseline
 
@@ -6672,7 +6672,7 @@ Kickoff interpretation: the first exit 132 is a host/runtime observation, not re
 - Day 23 deployed and smoked one `linux/amd64` image on Azure Container Apps.
 - The app, ACR, environment, workspace, and dedicated resource group were then deleted.
 - Day 24 therefore begins with a verified deployment design but no live target resource.
-- An Actions Docker build is not an Azure deployment. An Azure job remains pending unless infrastructure and OIDC trust are intentionally recreated and exercised.
+- An Actions Docker build is not an Azure deployment. An Azure job remains pending unless infrastructure and OIDC trust are intentionally recreated and exercised. (Both happened on 2026-10-21: see "Azure deployment/promotion evidence".)
 - Day 23's remaining quality gap is still real: live graph-path answers were not evaluated against `expected_answer`.
 
 ### Block 0 — baseline re-run and gate inventory (2026-10-20, Mac)
@@ -6713,7 +6713,7 @@ The kickoff's exit 132 did not reproduce on the Mac (every model-backed run toda
 | Command | Proves | Does not prove |
 |---|---|---|
 | `uv sync --locked --dev` | the environment is exactly `uv.lock`, and the lock still matches `pyproject.toml` | that the code works |
-| `pytest -q` | 383 deterministic unit/boundary tests pass with fakes (357 before Day 24) | real models, real retrieval, a real container, answer quality |
+| `pytest -q` | 383 deterministic unit/boundary tests pass with fakes (357 before Day 24; 387 since the deploy lane's `--url` tests) | real models, real retrieval, a real container, answer quality |
 | `compileall -q src tests scripts` | every file parses as Python | that imports or runtime paths work |
 | `ruff check src tests scripts` | the configured E4/E7/E9/F rules pass | behavior, types, or style beyond those rules |
 | `regression_suite.py` | the 7 frozen fixture cases still match their committed expectations; **exit 1 on drift since Day 24** | what the current retrieval pipeline returns |
@@ -6721,7 +6721,7 @@ The kickoff's exit 132 did not reproduce on the Mac (every model-backed run toda
 | `graph_regression.py` (new) | 6 committed graph route contracts hold on real retrieval: route, retrieval passes, approval pause, stop reason, evidence before/after, LLM-call count; exit 1 on drift, 2 on infrastructure | answer quality (the stand-in client writes a fixed answer) |
 | `graph_regression.py --live` (new) | the live slice's routes, ≤ 2 logical LLM calls, and 2 answers' citations + curated `expected_answer` terms | semantic correctness beyond a few literal terms |
 | `agent_graph.py --all-queries-summary` | the whole-corpus route distribution, printed | anything: it cannot fail |
-| `scripts/container_smoke.py IMAGE` (new) | that exact image starts with no key and the Hub offline, and its `/health`, Q001, Q091-pending, off-topic-blocked, and log contracts hold | answer quality, any other image, Azure |
+| `scripts/container_smoke.py IMAGE` (new) | that exact image starts with no key and the Hub offline, and its `/health`, Q001, Q091-pending, off-topic-blocked, and log contracts hold. With `--url` (added with the deploy lane): the same HTTP contracts on an already-running deployment, with no log probe | answer quality, any other image, Azure |
 | `actionlint` | workflow structure, expressions, `needs`, and shell snippets (shellcheck) are valid | inputs of SHA-pinned actions (it cannot resolve their metadata), or that GitHub accepts and runs the workflow |
 | `git diff --check` | no whitespace errors in tracked changes | anything about untracked new files |
 
@@ -6759,15 +6759,15 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 
 | Check/job | PR | Push to `main` | Manual live | Deployment | Secrets | Blocks merge? | Blocks deploy? |
 |---|---:|---:|---:|---:|---|---:|---:|
-| locked dependency sync | yes | yes | yes | n/a (no deploy lane) | none | yes | yes, once a deploy lane exists |
-| pytest | yes | yes | no | n/a | none | yes | yes |
-| compileall | yes | yes | no | n/a | none | yes | yes |
-| Ruff | yes | yes | no | n/a | none | yes | yes |
-| frozen fixture regression | yes | yes | no | n/a | none | yes | yes |
-| current retrieval verification | yes (7 s warm, 42 s with a fresh download, locally) | yes | no | n/a | none | yes | yes |
-| deterministic graph route regression | yes | yes | live slice only | n/a | none | yes | yes |
-| Docker build, no push | yes (15-minute rule above) | yes, and only this event writes the layer cache | no | n/a | none | yes | yes |
-| container API smoke | yes, on the image just built | yes | no | n/a | none | yes | yes |
+| locked dependency sync | yes | yes | yes | via `ci-passed` (CI's push run on the commit must be green); the image build runs `uv sync --locked` too | none | yes | yes |
+| pytest | yes | yes | no | via `ci-passed` | none | yes | yes |
+| compileall | yes | yes | no | via `ci-passed` | none | yes | yes |
+| Ruff | yes | yes | no | via `ci-passed` | none | yes | yes |
+| frozen fixture regression | yes | yes | no | via `ci-passed`, and again inside the deploy image (2b runs it first) | none | yes | yes |
+| current retrieval verification | yes (7 s warm, 42 s with a fresh download, locally) | yes | no | via `ci-passed`, and again inside the deploy image (2b, no network) | none | yes | yes |
+| deterministic graph route regression | yes | yes | live slice only | via `ci-passed`, and again inside the deploy image (2c, no network) | none | yes | yes |
+| Docker build, no push | yes (15-minute rule above) | yes, and only this event writes the layer cache | no | the deploy job builds once more (same Dockerfile, CI's layer cache) and pushes only that build | none | yes | yes |
+| container API smoke | yes, on the image just built | yes | no | on the deploy image before the push (2a), and through the app's URL after (8) | none | yes | yes |
 | Q001/Q091 live graph answer eval | no | no | explicit dispatch on `main`, `live-eval` environment | not a deploy gate yet | `OPENROUTER_API_KEY` (environment secret, one step) | no | no today: becomes a gate only with an explicit retry and false-positive policy |
 | Q092 bounded-abstention live check | no | no | explicit, same run | same | the key is present, and must stay unused (0 calls) | no | no today |
 | image push | no | no | no | `deploy.yml` only: after CI passed on the commit, a reviewer approved, and the image passed its container smoke | Azure OIDC (`production` environment) | no | yes; first green push 2026-10-21 (run 39625296505) |
@@ -6775,15 +6775,15 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 
 | Check/job | Trigger | Secrets? | Expected exit/failure rule | Blocks merge? | Blocks deploy? | Final evidence |
 |---|---|---|---|---:|---:|---|
-| locked dependency sync | PR + push (`ci.yml`, every job) | none | lock drift/install failure -> non-zero | yes | yes (design) | local exit 0, also in a clean copy; remote exit 0 in every job (7 s with a cold uv cache, 1-3 s restored) |
-| pytest | PR + push (`fast-deterministic`) | none | any failed test -> non-zero | yes | yes (design) | local 383 passed; remote `383 passed in 8.01s` (run 39600740553); deliberate red commit: `3 failed, 380 passed`, exit 1 (run 39601321038) |
-| compileall | PR + push (`fast-deterministic`) | none | compile error -> non-zero | yes | yes (design) | local exit 0; remote exit 0 |
-| Ruff | PR + push (`fast-deterministic`) | none | configured lint violation -> non-zero | yes | yes (design) | local exit 0; remote `All checks passed!` |
-| frozen fixture regression | PR + push (`fast-deterministic`) | none | expected-state drift -> exit 1 (new) | yes | yes (design) | local exit 0; deliberate stale expectation -> exit 1; remote exit 0 |
-| current retrieval pipeline | PR + push (`model-backed-deterministic`) | none | expected evidence drift -> exit 1; models not loadable -> exit 2 (new) | yes | yes (design) | local exit 0 (fresh cache, 42 s); stale Q016 expectation -> exit 1; remote 6 x [OK], exit 0, 35 s including the model download |
-| deterministic graph route regression | PR + push (`model-backed-deterministic`) | none | route/attempt/approval/stop/evidence/LLM-call drift -> exit 1; models unavailable -> exit 2 | yes | yes (design) | local exit 0 (6 cases); route doc's Q092 contract -> exit 1; offline + empty cache -> exit 2; remote 6/6 passed, exit 0, 29 s |
-| Docker build | PR + push (`docker-build-smoke`) | none | image build failure -> non-zero | yes | yes (design) | local arm64; remote `linux/amd64` 108 s (no cache), 158 s on the push to `main` (cache written) |
-| container API smoke | PR + push (`docker-build-smoke`) | none | contract/log failure -> exit 1; never healthy -> exit 2; cleanup always | yes | yes (design) | local exit 0; exit 1 and both exit-2 paths shown; remote exit 0, `/health` after 28.2 s |
+| locked dependency sync | PR + push (`ci.yml`, every job) | none | lock drift/install failure -> non-zero | yes | yes (via `ci-passed`) | local exit 0, also in a clean copy; remote exit 0 in every job (7 s with a cold uv cache, 1-3 s restored) |
+| pytest | PR + push (`fast-deterministic`) | none | any failed test -> non-zero | yes | yes (via `ci-passed`) | local 383 passed; remote `383 passed in 8.01s` (run 39600740553); 387 at `3a334e5` after the `--url` tests (`387 passed in 7.68s`, run 39632604151); deliberate red commit: `3 failed, 380 passed`, exit 1 (run 39601321038) |
+| compileall | PR + push (`fast-deterministic`) | none | compile error -> non-zero | yes | yes (via `ci-passed`) | local exit 0; remote exit 0 |
+| Ruff | PR + push (`fast-deterministic`) | none | configured lint violation -> non-zero | yes | yes (via `ci-passed`) | local exit 0; remote `All checks passed!` |
+| frozen fixture regression | PR + push (`fast-deterministic`) | none | expected-state drift -> exit 1 (new) | yes | yes (via `ci-passed`; again in the image) | local exit 0; deliberate stale expectation -> exit 1; remote exit 0 |
+| current retrieval pipeline | PR + push (`model-backed-deterministic`) | none | expected evidence drift -> exit 1; models not loadable -> exit 2 (new) | yes | yes (via `ci-passed`; again in the image, 2b) | local exit 0 (fresh cache, 42 s); stale Q016 expectation -> exit 1; remote 6 x [OK], exit 0, 35 s including the model download |
+| deterministic graph route regression | PR + push (`model-backed-deterministic`) | none | route/attempt/approval/stop/evidence/LLM-call drift -> exit 1; models unavailable -> exit 2 | yes | yes (via `ci-passed`; again in the image, 2c) | local exit 0 (6 cases); route doc's Q092 contract -> exit 1; offline + empty cache -> exit 2; remote 6/6 passed, exit 0, 29 s |
+| Docker build | PR + push (`docker-build-smoke`) | none | image build failure -> non-zero | yes | yes (the deploy job's own build) | local arm64; remote `linux/amd64` 108 s (no cache), 158 s on the push to `main` (cache written) |
+| container API smoke | PR + push (`docker-build-smoke`) | none | contract/log failure -> exit 1; never healthy -> exit 2; cleanup always | yes | yes (2a before the push, 8 after) | local exit 0; exit 1 and both exit-2 paths shown; remote exit 0, `/health` after 28.2 s |
 | live graph answer eval | manual, protected (`live-eval.yml`) | provider secret | route/quality failure -> 1; missing key/provider/model failure -> 2 | no | no today | missing key -> exit 2 (local); run 39602202292: exit 1, Q091 missing `usage data` |
 | Azure promotion | manual (`deploy.yml`), `main` only, `production` approval | Azure OIDC, no stored credential | no green CI on the commit / container smoke / push / digest / revision not ready / URL smoke -> non-zero | no | yes | run 39625296505: attempt 1 red at the OIDC sign-in (subject mismatch, fails closed); attempt 2 green, 5m07s: digest `sha256:ba8cb277…` deployed as revision `0000003`, URL smoke 4/4 |
 
@@ -6791,7 +6791,7 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 
 Implementation path/file: [`src/graph_regression.py`](../src/graph_regression.py). It runs the graph the API serves (`agent_observability.build_observed_graph`, through `run_and_trace`) on real local retrieval, against six committed case dicts (`GRAPH_CASES`). Each case fixes the route, the number of retrieval calls, the approval decision, the stop reason, the missing evidence after pass 1 and at the end, and the number of LLM calls.
 
-Test path/file: [`tests/test_graph_regression.py`](../tests/test_graph_regression.py) (17 tests: fake retrieval that reproduces the measured evidence, fake clients, no models). [`tests/test_regression_suite.py`](../tests/test_regression_suite.py) has 4 new exit-code tests, and [`tests/test_container_smoke.py`](../tests/test_container_smoke.py) has 5 tests for the smoke script's checks. Every new test also passes when run on its own.
+Test path/file: [`tests/test_graph_regression.py`](../tests/test_graph_regression.py) (17 tests: fake retrieval that reproduces the measured evidence, fake clients, no models). [`tests/test_regression_suite.py`](../tests/test_regression_suite.py) has 4 new exit-code tests, and [`tests/test_container_smoke.py`](../tests/test_container_smoke.py) has 9 tests for the smoke script: 5 for its checks, plus 4 for the `--url` mode added with the deploy lane. Every new test also passes when run on its own.
 
 How "zero LLM calls" is made checkable: the deterministic lane wires in a counted stand-in client that answers instantly. A `generate` route must call it once. A `report_gap` route must not call it, although it is wired in. With no client at all, "0 calls" would be true for every route and would prove nothing.
 
@@ -6960,7 +6960,7 @@ After the review: a probe that gets a non-JSON 500 or no HTTP answer at all (a s
 
 Status on 2026-10-20: **deferred, not run**. Day 23's `rg-procurerag-day23` had been deleted, so there was nothing to update.
 
-Status on 2026-10-21: **deploy lane proven once: one red attempt (fails closed), one green deployment.** Rollback exercise and cleanup pending. The prerequisite list written on 2026-10-20 held, with three corrections: the OIDC subject (immutable format), the app role (`Contributor` on the app), and the three ids (environment secrets, not variables).
+Status at the end of 2026-10-21: **one green deployment, one fail-closed sign-in, and one remote `ci-passed` refusal. The rollback was NOT exercised. The target is deleted.** After review, the deploy job now also runs the model-backed gates inside the exact image before the push. That change is checked locally but has not run on GitHub, because no target exists (item 6 below). The prerequisite list written on 2026-10-20 held, with three corrections: the OIDC subject (immutable format), the app role (`Contributor` on the app), and the three ids (environment secrets, not variables).
 
 **1. Target, recreated by Juan from the Day 23 runbook (steps 1-6):**
 
@@ -7028,7 +7028,34 @@ Status on 2026-10-21: **deploy lane proven once: one red attempt (fails closed),
 | Public-log hygiene | app FQDN: 0 occurrences in the log; subscription id: 0; the three ids show as `***` |
 | Registry afterwards | two manifests: `a03b392b…` (`day24-azure`, the hand-made first deployment) and `ba8cb277…` (`6bd0b3e…`, the pipeline's) |
 
-Still pending: one exercised rollback (runbook 10b, item 6), the red path of `ci-passed` on GitHub (dispatch while CI's push run is still running), and the cleanup decision.
+**6. The `ci-passed` red path on GitHub (run 39632679354, 2026-10-21 16:12 UTC).** `deploy.yml` was dispatched on `3a334e5` (the merge of PR #4) while CI's push run on that commit was still running. The log shows `CI on 3a334e5…: still running …/runs/39632604151`, then `CI has not passed on this commit (still running). Deploy refused.` (exit 1). The `deploy` job was skipped: no approval was requested, no image was built, and Azure was not contacted. That CI run finished green two minutes later (`387 passed in 7.68s`).
+
+**7. Rollback: NOT exercised.** A rollback was attempted from the laptop before the cleanup, but Azure has no record of it. The subscription's Activity Log (kept 90 days, even after the resources are gone; 269 events for the group between 15:30 and 18:00 UTC, so the listing is complete) shows:
+
+- `Microsoft.App/containerApps/write` at 15:43:17, by the deploy identity: the pipeline's update to `0000003`;
+- nothing else on any container app, in any resource group, until the deletion. And no failed operation anywhere in the subscription between 15:44 and 16:00.
+
+So no update request reached Azure Resource Manager. Most likely the `az containerapp update` never ran or stopped in the CLI before sending anything; the terminal history would say which. The lesson is the useful part: **a passing smoke is not rollback evidence.** The rollback image (`a03b392b…`) and the deployed one (`ba8cb277…`) answer the same four probes identically, so a smoke after a rollback that did not happen still passes. The evidence of a rollback is a NEW revision whose image is the rollback digest (`az containerapp revision show … image`), plus its `containerApps/write` in the Activity Log. Runbook 10b item 6 now checks the revision's image explicitly. The route makes rollback evidence a closure condition when a deployment exists, so Day 24 cannot close on this point without recreating the target.
+
+**8. Cleanup (2026-10-21, from the Activity Log, UTC).** `resourcegroups/delete` started at 15:58:52 (and was issued again at 16:02:55); the app's delete succeeded at 15:59:30; the group's delete succeeded at 16:25:54. Afterwards: `az group exists --name rg-procurerag-day24` -> `false`; no group whose name contains `procurerag`; no role assignment whose scope mentions the group (the two deploy-identity assignments went with their resources, as expected). Kept on purpose: the GitHub `production` environment (required reviewer, `main` only) and its three secrets. They point at a deleted identity, so they can no longer sign anyone in. On a re-run, only `AZURE_CLIENT_ID` changes.
+
+**9. After review: make the promoted image itself eval-gated (2026-10-21, not yet run on GitHub).** The review's point holds. The deploy job rebuilds the commit, and before this change it only ran the API smoke on that rebuild. The models are fetched at their default (mutable) revision, and the base images are named by tag, not by digest. So the deployed bytes had passed `/health`, Q001, Q091-pending, and off-topic, but not the retrieval or graph gates. The fix keeps the single build and avoids moving a 2 GB image between workflows. Steps `2b` and `2c` run CI's two model-backed commands INSIDE the image about to be pushed, with `--network none`, so only the image's own code, packages, and baked weights can produce the result:
+
+```bash
+docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 "$IMAGE" python src/regression_suite.py --verify-retrieval
+docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 "$IMAGE" python src/graph_regression.py
+```
+
+Then the same, unchanged image is pushed and deployed by its registry digest. Checked locally on an arm64 build of the current tree:
+
+| Check | Result |
+|---|---|
+| `2b` exactly as written in `deploy.yml` | exit 0 in 24 s: the frozen fixtures all as expected, then 6 x `[OK]` against the current pipeline |
+| `2c` exactly as written | exit 0 in 26 s: 6/6 graph contracts, 4 stand-in LLM calls |
+| `2c` with a wrong contract mounted over the script (`control-q001` expecting 2 retrieval calls) | `contract_failure`, exit 1: the step fails, so nothing would be pushed |
+| actionlint 1.7.12, all three workflows | exit 0 |
+
+The defensible claim is now: **"CI passed on this commit, and the exact image that was pushed and deployed (by digest) passed the container smoke, the retrieval verification, and the graph route regression inside itself, offline."** It is still NOT "CI's own artifact was promoted byte for byte": CI's image and the deployed image are two builds of the same commit, each fully gated. Not yet proven remotely: the first `deploy.yml` run after this change needs a target to exist.
 
 ### Exact local command map (Day 24, final)
 
@@ -7057,6 +7084,12 @@ python3 scripts/container_smoke.py procurerag-api:day24-local
 read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
 uv run python src/graph_regression.py --live
 
+# deploy lane, before the push (deploy.yml 2b/2c): the model-backed gates INSIDE a built image, offline
+docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 \
+  procurerag-api:day24-local python src/regression_suite.py --verify-retrieval
+docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_OPT_OUT=1 \
+  procurerag-api:day24-local python src/graph_regression.py
+
 # deploy lane (added 2026-10-21): the post-deploy smoke, against the running Azure app
 python3 scripts/container_smoke.py --url "https://$(az containerapp show --name procurerag-api \
   --resource-group rg-procurerag-day24 --query properties.configuration.ingress.fqdn -o tsv)"
@@ -7067,9 +7100,10 @@ git diff --check
 ### Final repo verification
 
 ```text
-pytest: 383 passed (357 + 17 graph regression + 4 regression-suite exit codes + 5 container-smoke checks);
-        also 383 passed in a clean copy (no .env, no .venv, empty HF cache, HF_HUB_OFFLINE=1): 27 s for the
-        whole fast lane
+pytest: 387 passed (357 + 17 graph regression + 4 regression-suite exit codes + 9 container-smoke tests,
+        4 of them for the `--url` mode added with the deploy lane); remote: CI push run 39632604151 on
+        3a334e5, `387 passed in 7.68s`. The clean-copy run (no .env, no .venv, empty HF cache,
+        HF_HUB_OFFLINE=1: 27 s for the whole fast lane) was made at 383, before the `--url` tests
 compileall: src tests scripts, exit 0
 Ruff: src tests scripts, All checks passed!
 frozen regression: 7/7 as expected, exit 0
@@ -7079,11 +7113,15 @@ Docker build/smoke: local arm64 (sha256:3b4c832e…) and remote linux/amd64 (sha
                    /health after 28.5 s / 28.2 s
 live lane without a key: exit 2 before any model loads
 workflow remote runs: PR #1 39600740553 green; deliberate red 39601321038 (exit 1, slow jobs skipped);
-                     revert 39601542224 green; main push 39602096614 green; live eval 39602202292 red (Q091 quality, exit 1)
-actionlint: 0 errors in both workflows
+                     revert 39601542224 green; main push 39602096614 green; live eval 39602202292 red (Q091 quality, exit 1);
+                     deploy 39625296505 (attempt 1 red at the OIDC sign-in, attempt 2 green); deploy 39632679354
+                     refused by ci-passed (CI still running)
+in-image gates (deploy.yml 2b/2c, after review): local exit 0 / exit 0; wrong contract -> exit 1; not yet run on GitHub
+actionlint 1.7.12: 0 errors in all three workflows (ci, live-eval, deploy)
 git diff --check: clean (tracked files; new files checked separately: no trailing whitespace)
-git status --short: clean. The Day 24 implementation is on main via PR #1 (merge 02308a6); this
-                    remote evidence goes through PR #2, because main now requires the three checks
+git status --short: clean at each merge. The Day 24 work reached main through PRs, because main requires
+                    the three checks: #1 implementation (02308a6), #2 remote evidence (f3ab218),
+                    #3 deploy lane (6bd0b3e), #4 deploy evidence (3a334e5)
 ```
 
 No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implementation.
@@ -7094,13 +7132,17 @@ No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implem
 - **Route doc vs. measurement: Q092.** The route doc's "bounded failure" contract does not match the real pipeline (Q092 is recovered). Resolution: commit what is measured, and gate the bounded abstention on the cases where it really happens (Q092 rejected, Q012).
 - **Diagnostics: the drift message hid chunk/term drift.** A chunk-level drift printed `expected [], got []`, because the message only showed the document lists. Now it prints each field that moved.
 - **Workflow validation has a ceiling locally.** actionlint cannot check inputs of SHA-pinned actions (a misspelled `persist-credential` passed). Only a GitHub run proves the workflow.
-- **Hidden network call: deepeval telemetry.** It is a pytest plugin with PostHog analytics on by default. Switched off in both workflows.
+- **Hidden network call: deepeval telemetry.** It is a pytest plugin with PostHog analytics on by default. Switched off in `ci.yml` and `live-eval.yml`, and passed into the container for `deploy.yml`'s in-image gates.
 - **An independent review of the Day 24 changes (2026-10-20)** found nothing critical and no false-green path. It did find five real defects, all fixed and tested:
   - one new test only passed after other tests had imported `agentic_retrieval` (it failed when run alone);
   - the smoke script crashed on a non-JSON 500 and lost the container logs;
   - "at most 2 LLM calls" ignored the OpenAI SDK's own retries (now documented as logical calls, with up to 6 HTTP requests);
   - a schema-invalid live reply aborted the whole run before the Q092 zero-call check;
   - the live lane's real boundary is the environment's branch rule, not the YAML's ref check. A dispatch runs the workflow file from the chosen ref, and GitHub silently creates an unprotected environment the first time a job names one that does not exist.
+
+- **Deploy lane: the OIDC subject was stored with one stray `$`.** The runbook's `"$SUB_PREFIX:environment:production"` is wrong in zsh (`:e` is a modifier there), and the hand-fixed command kept a `$`. The first deploy attempt failed closed at the sign-in (`AADSTS700213`). Fixed with `${SUB_PREFIX}`, an exact `subject OK` comparison, and `federated-credential update`.
+- **Deploy lane: a rollback that was believed done never reached Azure.** The Activity Log shows no `containerApps/write` after the pipeline's own. The smoke could not have caught this: the old and new images answer the four probes identically. The evidence of a rollback is the new revision's image digest plus the Activity Log write, not a green smoke.
+- **Deploy lane: the promoted image was not eval-gated (review finding, 2026-10-21).** The deploy job rebuilt the commit and only smoked the rebuild. Fixed by running CI's two model-backed gates inside that exact image, offline, before the push (`deploy.yml` 2b/2c).
 
 ### What became clearer
 
@@ -7115,20 +7157,139 @@ No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implem
 
 ### What I can now explain in an interview
 
-Practice the 12 questions in the Day 24 route without notes. Record concise answers for at least:
+Draft answers should cover these shapes (the 12 questions of the Day 24 route), then be practiced without notes:
 
-1. deterministic versus model-backed versus live/deploy lanes — TODO;
-2. `uv sync --locked` — TODO;
-3. explicit no-live/no-trace environment — TODO;
-4. report versus non-zero gate semantics — TODO;
-5. Q091 recovery and Q092 bounded failure — TODO (note: measured Q092 is a recovery; the bounded abstention is Q092 rejected and Q012);
-6. why Q092 should not be forced into answer-quality scoring — TODO;
-7. why live LLM eval does not run on every PR — TODO;
-8. action SHA pins and least privilege — TODO;
-9. Docker build versus host pytest — TODO;
-10. Azure OIDC — TODO;
-11. evaluate one immutable image, then promote that same digest — TODO;
-12. CI flake/infrastructure failure versus product regression — TODO.
+1. **Why split fast deterministic, model-backed deterministic, and live/deployment lanes?**
+   - The lanes differ in trust, cost, speed, and what a red MEANS. One big job would mix those, and a red would say nothing about its cause.
+     - **`fast-deterministic`** (38 s on GitHub): no models, no secret, no network in the code under test. Locked install, pytest (fakes only), compileall, Ruff, the frozen fixture regression. Safe to run on any pull request, including untrusted code.
+     - **`model-backed-deterministic`** (about 1.5 min): the two real local models (MiniLM, TinyBERT), downloaded from the Hugging Face Hub. Still deterministic and still no secret: the current retrieval verification and the six graph route contracts. Heavier, and it depends on something outside the repo (the Hub), so it has its own "could not check" exit code (2).
+     - **`docker-build-smoke`** (about 3 min): builds the real `linux/amd64` image and smokes it. That is the packaging surface.
+     - **live** (`live-eval.yml`): a paid provider, a secret, and stochastic output. Manual dispatch, `main` only, behind the `live-eval` environment's approval, at most 2 logical LLM calls.
+     - **deploy** (`deploy.yml`): Azure OIDC, and it changes production. Manual, `main` only, behind `production` approval, and refused unless CI passed on that exact commit.
+   - `needs:` orders the CI jobs, so a red is attributed to the cheapest layer that can see it. The deliberate wrong Q092 contract went red at pytest in 32 s, and the two slow jobs were skipped (run 39601321038).
+   - The three CI jobs are required checks on `main`. The live lane blocks nothing yet. The deploy lane is its own gate.
+2. **What does `uv sync --locked` add to CI?**
+   - It installs exactly what `uv.lock` records, and it FAILS if `pyproject.toml` and `uv.lock` disagree (the lock would need to be regenerated), instead of quietly re-resolving.
+   - An unpinned install that succeeds only proves that some set of versions resolved on that day. A new release of a transitive dependency can change what is tested without any commit. That is not reproducible evidence.
+   - ProcureRAG pins the rest of the chain too:
+     - uv `0.12.2` in CI, in the `Dockerfile`, and on the Mac, so the lockfile is read the same way everywhere;
+     - Python from `.python-version` (3.11) via `uv python install`, never the runner's default (3.12 on `ubuntu-24.04`). The job prints the interpreter it really used (CPython 3.11.15);
+     - the image runs `uv sync --locked --no-dev`.
+   - The setup-uv cache is keyed on `uv.lock` and only saves time (7 s cold, 1-3 s restored). The locked sync still decides what gets installed.
+   - The rule: never drop `--locked` to turn CI green. Fix the lock.
+   - What it does NOT prove: that the code works.
+3. **Why force `PROCURERAG_LIVE_LLM=0` and both LangSmith flags false?**
+   - A process inherits its environment. A shell profile, a runner image, or a `.env` file can switch tracing or the live provider on without anyone deciding it. "There is no `.env` on the runner" is luck, not a contract. So the contract is written in the workflow's top-level `env:`, and every step sees it.
+   - It already happened in this project:
+     - Day 22's baseline: the run tried to send LangSmith traces (429 ingest warnings), because the tracing settings were in the shell;
+     - Day 23: `.env` sets `LANGSMITH_TRACING_V2=true`, and the scripts' `main()` functions call `load_dotenv()`. Batch runs traced every query, and the free tier's monthly trace limit was used up (3,906 root traces in October; uploads rejected with 429 after the 14th).
+   - Why an explicit value wins: `load_dotenv()` does not override a variable that is already set, so `false` in the process beats `true` in `.env`.
+   - Why BOTH flags: the installed `langsmith` SDK reads `*_TRACING_V2` first and falls back to `*_TRACING` only when V2 is unset. So `LANGSMITH_TRACING=false` alone would LOSE to `.env`'s `LANGSMITH_TRACING_V2=true`. Setting both makes the contract independent of that precedence. The SDK also caches the lookup, so the value has to be in place before the process starts. Workflow-level `env:` guarantees that.
+   - `PROCURERAG_LIVE_LLM=0`: no provider, no cost, and no key needed. The container smoke checks that `/health` reports `live_llm=false`.
+   - The same lesson, found on Day 24: deepeval's pytest plugin sends PostHog telemetry by default, a hidden network call in a "no network" lane. Hence `DEEPEVAL_TELEMETRY_OPT_OUT=1`.
+4. **Why is a printed eval report not automatically a gate?**
+   - GitHub reads one thing: the process exit code. A table that prints "REGRESSION" and exits 0 shows up green.
+   - ProcureRAG had exactly that bug. In Block 0, `regression_suite.py` printed "N case(s) no longer match" and then returned normally: exit 0 on drift. The kickoff's "fixture lane: exit 0" was true and proved nothing.
+   - The fix: `gate_exit_code` plus `sys.exit(main())`. It was proved with a deliberate stale expectation, which now exits 1. `agent_graph.py --all-queries-summary` has no expectations, so it cannot fail. It stays a report and is not registered as a check.
+   - Three exit codes keep two questions apart:
+     - 0: every expectation holds;
+     - 1: drift, the product did something other than its committed contract;
+     - 2: could not check (models not loadable, key missing, provider error).
+   - Two guards against a false green: an empty run is 2, never a pass; and if both drift and an infrastructure error happen, drift (1) wins.
+   - The report still matters. It is the diagnosis (each field that moved, the failing answer in the log). The exit code is the verdict. And every gate needs a negative test that shows it CAN go red.
+5. **What is graph-aware about the Q091/Q092 regression?**
+   - It checks the PATH through the LangGraph state graph, not only the documents that were retrieved at the end. `graph_regression.py` runs the same graph the API serves (`build_observed_graph`, through `run_and_trace`) on real local retrieval. Each case fixes: the route, the number of retrieval calls, the approval decision, the stop reason, the missing evidence after pass 1 and at the end, and the number of LLM calls.
+   - **Q091 (recovery):** the first pass misses `POL-001::chunk-5`/`-6` → approval pause (answered with the labeled `AUTO_APPROVE_FOR_DEMO`, never silently) → exactly one recursive pass (2 retrieval calls) → final gap empty, `fixed_after_second_pass` → `generate`, 1 LLM call.
+   - **Q092: the route doc was wrong, and I measured it.** The route doc wanted "one follow-up, still incomplete, `report_gap`". On the real pipeline, Q092's one follow-up recovers both `CONTRACT-005` and `POL-002` and ends `fixed_after_second_pass`, as it has since Day 16. Committing the route doc's contract makes CI red on day one, and that was the deliberate red run.
+   - The bounded behavior the route doc wanted is real, and it is gated on two cases:
+     - Q092 with the follow-up REJECTED: `report_gap`, 1 retrieval, `followup_rejected_by_reviewer`, the gap text names both documents, 0 LLM calls;
+     - Q012: `trigger_detected_no_followup_query_defined`, names `CONTRACT-002`, 0 LLM calls.
+   - The bound itself is `MAX_RETRIEVAL_PASSES = 2`. No real query reaches `still_missing_after_max_passes`, so that one route is covered by fake retrieval only.
+   - "0 LLM calls" means something only because a counted stand-in client IS wired in, and a `generate` route must call it exactly once. With no client at all, "0 calls" would be true for every route.
+6. **Why should Q092 not be scored as a normal generated answer?**
+   - In the bounded case, the correct output is NO answer: stop, name the gap, never call the model. Scoring it like an answer would reward generating from incomplete evidence, which is exactly what the control policy forbids, and it would punish the correct abstention.
+   - So its quality measures are control-plane measures: route `report_gap`, 1 retrieval call (the bound held), the stop reason, the gap text naming the right documents (`CONTRACT-005`, `POL-002`), and 0 LLM calls.
+   - In the live lane, that zero is measured with the REAL client wired in and the key present: run 39602202292, Q092-rejected passed with 0 calls.
+   - Answer-quality scoring (the curated `expected_answer` terms plus the citation contract) is only for cases that SHOULD answer: Q001 and Q091. Q092-rejected has `live_required_terms: None`.
+   - Approved Q092 does answer (it is a recovery). It is gated deterministically, but it is not in the live slice today.
+7. **Why not run live LLM eval on every PR?**
+   - **Secrets:** a `pull_request` run gets no secrets, by design, because PR code is untrusted. The way around that, `pull_request_target`, would hand the key and a write-capable token to PR code.
+   - **Cost:** every push would pay again, and retries multiply it. The live lane is bounded: at most 2 logical calls per run, at most 6 HTTP requests counting the SDK's own retries.
+   - **Stochastic output:** `openai/gpt-4o` at temperature 0 is not guaranteed to be deterministic. One run is a sample, not a rate. A required check that flips at random trains people to re-run until green.
+   - **False reds from outside:** provider outages, 429s, and quotas have nothing to do with the PR.
+   - **The check itself is literal:** a case-insensitive substring match. A correct paraphrase ("Band three") fails it. That is not robust enough to block merges.
+   - What ProcureRAG does instead:
+     - `live-eval.yml` is `workflow_dispatch` only, `main` only. The environment's branch rule is the real boundary; the YAML ref check is defense in depth, because a dispatch runs the workflow file from the chosen ref;
+     - the `live-eval` approval comes before GitHub hands the key to the job, and the key is an environment secret mapped into one step;
+     - exit 2 may be re-dispatched once by a person. Exit 1 is read, never retried.
+   - The deterministic lanes stay merge-blocking, and they cover routes, retrieval, and packaging at no cost.
+   - Why the live lane is still worth having: its first run was red on Q091 (`usage data` missing). That is a real generation-quality finding the deterministic lanes cannot see.
+8. **Why pin actions to full commit SHAs?**
+   - A tag is a movable pointer. If an action's repository is compromised, or a maintainer moves `v4`, your workflow runs new code with your token and secrets, and nothing in your repo changed. A full 40-character SHA names the content. It cannot be moved. It must also come from the action's OWN repository, not from a fork.
+   - ProcureRAG: 5 actions, each SHA resolved with `gh api` (latest release → tag → commit), with the release tag kept as a comment for humans, and `action.yml` read at that SHA to confirm the inputs used. 4 of them are verified commits. `azure/login` v3.1.0 is unsigned (made by `github-actions[bot]`). The pin still fixes the code that runs, but no signature says who produced it.
+   - A pin is not a review: pinned code can still be bad, and updates have to be made on purpose.
+   - Least privilege is the other half. It limits what compromised code could DO:
+     - `permissions: contents: read` at workflow level. Naming any permission sets every unnamed one to `none`;
+     - `persist-credentials: false` on every checkout, because nothing pushes;
+     - `id-token: write` only on the one `deploy` job, together with `contents: read` (or checkout stops working);
+     - the `ci-passed` job has only `actions: read`;
+     - the provider secret is mapped into one step's `env`, and `ci.yml` names no secret at all.
+   - A limit found: actionlint cannot check the inputs of SHA-pinned actions (a misspelled `persist-credential` passed). Only a real GitHub run proves them.
+9. **Why is a Docker build a separate gate from pytest?**
+   - pytest tests the code in the runner's own `.venv` (Python 3.11 via uv, dev dependencies, fakes). The image is a different artifact: a different install, a different OS image, different files.
+   - Surfaces only the image exercises:
+     - the `Dockerfile` itself, and the `.dockerignore` allow-list (a file left out of the build context is an import error at startup);
+     - `uv sync --locked --no-dev`: a runtime import of a dev-only package passes pytest and fails in the image;
+     - the CPU-only `torch` wheel on Linux;
+     - the models baked at build time (`HF_HUB_OFFLINE=0` for that one `RUN`), then offline at run time;
+     - `linux/amd64`, Azure's platform (the Mac builds arm64);
+     - the non-root `procurerag` user and its file permissions;
+     - the Uvicorn command, the `0.0.0.0` bind, and `lifespan` loading both models;
+     - starting within 1 CPU / 2 GiB.
+   - "Dockerfile parsed" or "image built" proves none of the behavior. The smoke starts THAT image (`ci-<sha>`, loaded with `load: true`, not rebuilt) with no key, the Hub offline, and `--cpus 1 --memory 2g`. It checks `/health` (`live_llm=false`), Q001 (local retrieval, 5 sources including `POL-001`), Q091 (`pending_approval`), off-topic input (`blocked`), and the logs (0 tracebacks, 0 secret-like lines). Cleanup always runs. Exit 1 = a contract failed; exit 2 = never healthy.
+   - Measured: cold start 28.2 s on the runner (budget 240 s). The whole job takes 2m43s-3m30s, far under the 15-minute rule, so it runs on every PR and is required.
+10. **What does OIDC improve for Azure deployment?**
+    - Without it: a long-lived client secret stored in GitHub. Microsoft Learn's own sample does this, with `AZURE_CREDENTIALS`, a service-principal JSON with Contributor on the resource group. Anyone who steals it has Azure access, from anywhere, until someone rotates it.
+    - With OIDC, no password exists:
+      1. the job asks GitHub for a signed token, which needs `id-token: write`;
+      2. `azure/login` exchanges it with Microsoft Entra ID against a federated identity credential (issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, an exact subject);
+      3. Entra ID returns a short-lived access token that is valid for that one job.
+    - The three ids (client, tenant, subscription) are identifiers, not credentials. They are environment secrets only so they stay masked in a public log.
+    - **Claims limit WHO:** the subject is `repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production`. Only a job in the `production` environment of this exact repository matches. The immutable format includes the owner and repository ids, so a rename, or a new repository under the same name, cannot match. And `production` is `main`-only with a required reviewer, so the token can only be issued after approval.
+    - **Roles limit WHAT:** a user-assigned managed identity with `AcrPush` on the one registry and `Contributor` on the one app. Not the resource group, not the subscription.
+    - **It fails closed, measured:** attempt 1 of run 39625296505. The stored subject had one stray `$` (a zsh `:e` modifier in the runbook), Entra ID refused it with `AADSTS700213`, every later step was skipped, and nothing was pushed. Lesson: read the subject from `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, never from an example, and compare it exactly.
+    - Limits: `id-token: write` covers the whole `deploy` job, so its build and smoke steps could also request a token. And `Contributor` on the app can also delete the app; a custom role would be tighter.
+11. **What is eval-gated deployment in this project?**
+    - The idea: nothing reaches production unless the exact bytes being deployed passed the gates, and the deploy names them by an immutable handle (the digest), never by a tag.
+    - `deploy.yml` (manual, `main` only, concurrency group `production` with `cancel-in-progress: false`):
+      1. `ci-passed-for-this-commit` refuses unless CI's push run on this exact SHA concluded `success`. It runs BEFORE the approval, so nobody is asked to approve a red commit. Proven on GitHub: run 39632679354 was refused while CI was still running;
+      2. `production` approval, then the `deploy` job builds the commit once (it reads CI's layer cache and never writes it);
+      3. it evaluates THAT image: 2a, the container smoke; 2b and 2c, the retrieval verification and the graph route regression run INSIDE the image with `--network none`;
+      4. it signs in with OIDC, pushes the image as `:<sha>`, and reads its digest back from the registry;
+      5. it records the current image as a digest (the rollback handle);
+      6. it updates the app through the template with the image `@sha256:…`, waits until the new revision is ready and running that digest, then smokes it through its URL.
+    - Evidence: run 39625296505, attempt 2. Digest `sha256:ba8cb277…` became revision `0000003` with 100% traffic, and the URL smoke passed 4/4.
+    - **Where it differs from the textbook answer ("never rebuild between evaluation and deployment"):** CI never pushes, and a 2 GB image is too big to hand between workflows, so the deploy job rebuilds the commit. The base images are named by tag and the models use their default revision, so two builds of one commit can differ. That is why 2b/2c re-run CI's model-backed gates inside the image that is pushed.
+    - The defensible claim: "CI passed on this commit, AND the exact image that was pushed and deployed (by digest) passed the smoke, the retrieval verification, and the graph regression inside itself, offline." Not: "CI's artifact was promoted byte for byte." 2b/2c have only run locally so far.
+    - Live eval is NOT a deploy gate today (red on Q091, and no retry or false-positive policy yet).
+    - **Rollback: the handle was recorded, but the rollback was never exercised.** The Activity Log shows no write after the pipeline's own. A passing smoke is not rollback evidence: the old and new images answer the four probes identically. The evidence is a NEW revision whose image IS the rollback digest, plus its `containerApps/write` in the Activity Log.
+12. **How do you distinguish CI flakiness from product regression?**
+    - Classify the FIRST failed layer, from evidence, before re-running anything.
+    - The tools encode the split:
+      - exit 1 = the product did something other than its committed contract;
+      - exit 2 = we could not check;
+      - drift (1) wins over infrastructure (2); an empty run is 2.
+    - The job layout encodes it too. `needs:` means a red model-backed job is known NOT to be a unit or lint failure, and one step per check means the red step's name says which layer failed.
+    - **Infrastructure/runtime, measured here:**
+      - exit 132 (`Illegal instruction`) on the Hermes VM at kickoff, before `OMP_NUM_THREADS=1`;
+      - offline with an empty model cache, both model-backed commands exit 2, not 1;
+      - Hub outages, 429s, OOM, and timeouts belong here too;
+      - in the live lane: a missing key, or a provider 401/429/5xx, is exit 2;
+      - in the smoke: a container that never becomes healthy is exit 2.
+    - **Product drift:** a stable, reproducible wrong route, stop reason, source set, missing term, or citation. The same deterministic case fails the same way on a re-run AND locally with the exact command map. Example: the wrong Q092 contract was exit 1 at pytest and exit 1 in the real-model graph regression.
+    - **Re-run policy, declared in advance:** exit 2 may be re-dispatched once by a person. Exit 1 is never retried: it is read (the failing answer is printed in the log). The SDK's transport retries (up to 2 per call) never re-ask a question that was answered. Re-running until green turns a gate into a lottery.
+    - **Keep the evidence:** run URL, commit SHA, exit code, the tested model snapshots (printed with `if: always()`, even after a failure), the image id, and the redacted log tail.
+    - **The grey zones:** a live red could be sampling noise (one run is one sample; it needs repeated runs before it is a rate). And the model revisions are not pinned, so an upstream model change would show up as drift (exit 1). The printed snapshot hash is what separates "the model changed" from "our code changed".
 
 ### What remains weak
 
@@ -7139,19 +7300,19 @@ Practice the 12 questions in the Day 24 route without notes. Record concise answ
 - **`still_missing_after_max_passes` has no real-data case.** It is only exercised with fake retrieval.
 - **The model-backed lane depends on the Hugging Face Hub.** It is uncached on purpose, so a Hub outage or a 429 makes it red (exit 2, "could not check"), and while it is a required check, that blocks merges. The fix, if it happens: cache the models keyed on the recorded revision.
 - **Model revisions are not pinned.** CI downloads each model's default revision (today `b2073673…` MiniLM, `81d1926f…` TinyBERT, the same as Day 22/23) and prints it, but a new upstream revision would show up as drift, not as "model changed".
-- **The deploy lane is proven once, not routinely.** One green deployment (run 39625296505, attempt 2) and one fail-closed sign-in. The `ci-passed` refusal has only been shown locally, and the rollback handle has not been exercised yet.
-- **The deployed image is a second build of the commit, not CI's image.** CI never pushes, and a 2 GB image is too big to hand between workflows. So `deploy.yml` rebuilds the commit (from the same layer cache) and re-runs the container smoke on that rebuild before pushing it. The claim is "CI passed on this commit, AND the pushed image passed the container smoke", not "CI tested these exact bytes".
+- **The deploy lane is proven once, not routinely, and the rollback is unproven.** One green deployment (run 39625296505, attempt 2), one fail-closed sign-in, and one remote `ci-passed` refusal (run 39632679354). The rollback handle was recorded but never applied: the Activity Log has no write for it. The in-image gates (2b/2c) have only run locally.
+- **The deployed image is a second build of the commit, not CI's image.** CI never pushes, and a 2 GB image is too big to hand between workflows. Since the review, `deploy.yml` runs the container smoke AND the two model-backed gates inside that second build before pushing it. So the deployed bytes are fully gated, but they are not the bytes CI tested. The base images are tagged, not digest-pinned, and the models use their default revision, so two builds of one commit can differ..
 - **One job holds both the build and the OIDC permission.** `id-token: write` is granted to the whole `deploy` job, so the build and smoke steps could also request a token. Splitting them into separate jobs would mean moving the image between jobs. The commit is reviewed code on `main`, and the sign-in step comes after the smoke.
 - **`Contributor` on the app can also delete the app.** Its scope is one disposable app. A custom role (read, write, and revision read on `Microsoft.App/containerApps`) would be the tighter choice for a deployment meant to last.
 - **No automatic rollback.** A revision that never becomes ready never receives traffic (single revision mode). But a revision that is ready and answers wrongly stays live until a person deploys the recorded rollback handle.
 - **The Azure CLI on the runner is not pinned.** The runner image's version is recorded in each run, not chosen.
-- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval. A public, unauthenticated endpoint exists again while `rg-procurerag-day24` is up.
+- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval. No deployed resource again: `rg-procurerag-day24` was deleted on 2026-10-21 (group gone at 16:25:54 UTC).
 
 ### Next step
 
 Steps 1-7 of the original list were done on 2026-10-21 (evidence above): the sources were read and the takeaways written; PR #1 was opened; the first run was green; a deliberate red was pushed and reverted; the Docker 15-minute rule was applied; PR #1 was merged and `main` protected; the `live-eval` environment was created and the first live run made.
 
-1. Fill the interview drill (above) without notes.
+1. Review the drafted interview answers (above), then practice them without notes.
 2. Decide the Q091 follow-up. The owner is generation: the usage-data evidence (`GUIDE-002::chunk-1`) is in the merged context, but the answer drops it. Measure before changing anything (for example, which sources the answer cites, out of 19).
 3. Send the route's review prompt to Hermes, including PR #1, the five run URLs, and the live result.
 4. Close HER-292 only after that review.
@@ -7160,6 +7321,7 @@ Deploy lane (added 2026-10-21, after the Azure target was recreated):
 
 5. ~~Trust setup (runbook 10b, items 2-4).~~ Done 2026-10-21; the subject was corrected after attempt 1.
 6. ~~Review, PR #3, merge.~~ Done (`6bd0b3e`).
-7. ~~First green deployment.~~ Done: run 39625296505, attempt 2. Still open: the `ci-passed` red path on GitHub. It needs no Azure: dispatch `deploy.yml` right after the next merge to `main`, while CI's push run is still running. Expect a refusal before any approval request.
-8. Exercise the rollback handle once (runbook 10b, item 6), smoke it, and record it. This is the last step that needs the Azure resources.
-9. Then clean up the same day: runbook step 11, plus the role-assignment check. Keep the `production` environment and its protection rules. On a re-run of the runbook, only `AZURE_CLIENT_ID` changes (a new identity has a new client id); the tenant and subscription ids stay.
+7. ~~First green deployment, and the `ci-passed` red path on GitHub.~~ Done: runs 39625296505 (attempt 2) and 39632679354.
+8. ~~Cleanup.~~ Done 2026-10-21 (group gone at 16:25:54 UTC); the `production` environment is kept.
+9. **Open, and blocking Day 24 closure: rollback evidence.** The rollback never reached Azure (Activity Log), and the target is deleted. To close, recreate the target once: Day 23 runbook steps 1-6, then 10b items 1-4 with a NEW identity, then update `AZURE_CLIENT_ID`. Then run `deploy.yml`, which also gives the first remote proof of the in-image gates (2b/2c). Then apply the rollback handle (runbook 10b, item 6), check that the new revision's image IS the rollback digest and that the Activity Log shows the write, smoke it, record it, and clean up again. The alternative, closing with rollback explicitly unproven, contradicts the route's closure rule.
+10. **Open, and blocking Day 24 closure: the interview drill** (item 1). The twelve answers are drafted above. Closure needs Juan to give them without notes.
