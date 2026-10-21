@@ -55,22 +55,22 @@ In the build output (`--progress=plain` shows it in full), the model step prints
 Now start it the way a fresh Azure replica starts: no volume. Add `--network none` (no network at all, so any Hub call would fail), and a 1 CPU / 2 GiB limit matching the Azure size:
 
 ```bash
-docker run --detach --name procurerag-day23-offline \
+docker run --detach --name procurerag-day24-offline \
   --network none --cpus 1 --memory 2g \
   --env PROCURERAG_LIVE_LLM=0 \
   --env LANGSMITH_TRACING=false \
   --env LANGSMITH_TRACING_V2=false \
   --env OMP_NUM_THREADS=1 \
-  procurerag-api:day23
+  procurerag-api:day24
 
 # Wait for Uvicorn's startup line (complete OR failed), then print the two timestamps that bracket startup
-until docker logs procurerag-day23-offline 2>&1 | grep -qE "Application startup (complete|failed)"; do sleep 1; done
-docker logs --timestamps procurerag-day23-offline 2>&1 | grep -E "Started server process|Application startup"
+until docker logs procurerag-day24-offline 2>&1 | grep -qE "Application startup (complete|failed)"; do sleep 1; done
+docker logs --timestamps procurerag-day24-offline 2>&1 | grep -E "Started server process|Application startup"
 
 # With no network, query from INSIDE the container (as in the Day 22 offline check)
-docker exec procurerag-day23-offline python -c "import json, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/query', data=json.dumps({'query': 'What approval is required for a EUR 60,000 purchase order?', 'role': 'buyer', 'query_id': 'Q001'}).encode(), headers={'Content-Type': 'application/json'}); r = json.load(urllib.request.urlopen(req)); print(r['status'], [s['chunk_id'] for s in r['sources']])"
+docker exec procurerag-day24-offline python -c "import json, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/query', data=json.dumps({'query': 'What approval is required for a EUR 60,000 purchase order?', 'role': 'buyer', 'query_id': 'Q001'}).encode(), headers={'Content-Type': 'application/json'}); r = json.load(urllib.request.urlopen(req)); print(r['status'], [s['chunk_id'] for s in r['sources']])"
 
-docker rm --force procurerag-day23-offline
+docker rm --force procurerag-day24-offline
 ```
 
 No `--rm` this time: if startup fails, the container and its log stay around to be read, and the last line removes it.
@@ -83,11 +83,11 @@ Why `OMP_NUM_THREADS=1`: run the same container without it, and startup takes ab
 
 ```bash
 export LOCATION=northeurope                           # not westeurope: it refuses this subscription (see Troubleshooting)
-export RESOURCE_GROUP=rg-procurerag-day23
-export CONTAINERAPP_ENV=cae-procurerag-day23
+export RESOURCE_GROUP=rg-procurerag-24
+export CONTAINERAPP_ENV=cae-procurerag-24
 export CONTAINERAPP_NAME=procurerag-api
-export ACR_NAME=procureragday23jp                     # must be globally unique: 5-50 letters/digits
-export IMAGE="$ACR_NAME.azurecr.io/procurerag-api:day23"
+export ACR_NAME=procureragday24jp2                     # must be globally unique: 5-50 letters/digits
+export IMAGE="$ACR_NAME.azurecr.io/procurerag-api:day24"
 ```
 
 Every Azure resource name above is visible in the URLs and resource ids. None of them is a credential. If `ACR_NAME` is taken (step 3 checks), pick another and re-export `IMAGE`.
@@ -135,7 +135,7 @@ Container Apps only runs `linux/amd64` images, and this Mac builds `linux/arm64`
 ```bash
 # A dedicated group. Tags let you find (and bill-check) everything Day 23 created.
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION" \
-  --tags project=procurerag day=23 purpose=disposable-smoke
+  --tags project=procurerag day=24 purpose=disposable-smoke
 
 # Registry names are global (they become <name>.azurecr.io). Expect: true
 az acr check-name --name "$ACR_NAME" --query nameAvailable -o tsv
@@ -158,7 +158,7 @@ Record the immutable handle of what you pushed:
 
 ```bash
 az acr repository show-tags --name "$ACR_NAME" --repository procurerag-api -o tsv           # expect: day23
-az acr repository show --name "$ACR_NAME" --image procurerag-api:day23 --query digest -o tsv  # sha256:...
+az acr repository show --name "$ACR_NAME" --image procurerag-api:day24 --query digest -o tsv  # sha256:...
 ```
 
 The tag `day23` can be moved to another image later. The digest (`sha256:...`) cannot: it is the hash of the image's manifest. The digest is what a rollback should name.
@@ -652,17 +652,18 @@ With multiple revision mode, the alternative is to keep the old revision active 
 
 Steps 3 to 5 deploy from this laptop, signed in as you. [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) does the same job from GitHub, and no Azure password or client secret is stored anywhere. Instead, Azure trusts one specific kind of GitHub job: a job of THIS repository running in its `production` environment. This section is the one-time setup for that trust, then how to run a deployment and roll it back.
 
-It assumes steps 1 to 6 already ran. On 2026-10-21 they ran with these names, which are also written in the workflow's `env:` block (change both together):
+It assumes steps 1 to 6 already ran, in this same terminal, so step 1's variables are still set. Do NOT re-type the target's names here. Item 4 copies them from these variables into the `production` environment, and `deploy.yml` reads them from there. One source of truth: whatever names this run created are the names the workflow deploys to.
 
 ```bash
-export LOCATION=northeurope
-export RESOURCE_GROUP=rg-procurerag-day24
-export CONTAINERAPP_ENV=cae-procurerag-day24
-export CONTAINERAPP_NAME=procurerag-api
-export ACR_NAME=procureragday24jp
-export DEPLOY_IDENTITY=id-procurerag-github-deploy   # the identity GitHub signs in as
+# From step 1. Expect four non-empty values: the names this run actually created
+echo "group=$RESOURCE_GROUP registry=$ACR_NAME app=$CONTAINERAPP_NAME location=$LOCATION"
+
+# New in this section
+export DEPLOY_IDENTITY=id-procurerag-github-deploy   # the identity GitHub signs in as (any new name per re-run is fine)
 export GITHUB_REPO=juanfpinzon/ProcureRAG
 ```
+
+On 2026-10-21 the evening re-run used `rg-procurerag-24`, `procureragday24jp2`, and `id-procurerag-github-deploy2`. The workflow still had the morning's names written into it, so its push went to the wrong registry and was refused (see Troubleshooting). That is why the names now live only here and in the environment.
 
 ### What trusts what
 
@@ -736,7 +737,7 @@ az role assignment list --assignee-object-id "$PRINCIPAL_ID" --all \
 - A managed identity is a service principal. Passing `--assignee-principal-type ServicePrincipal` skips a Microsoft Graph lookup, which can fail for a few minutes after the identity is created.
 - A new role assignment can take a few minutes to take effect.
 
-### 4. The GitHub environment `production` and its three ids
+### 4. The GitHub environment `production`: its three ids and the target's three names
 
 ```bash
 # The same protection as `live-eval`: you are the required reviewer, and only `main` may deploy.
@@ -754,10 +755,18 @@ gh secret set AZURE_TENANT_ID --env production --repo "$GITHUB_REPO" --body "$(a
 gh secret set AZURE_SUBSCRIPTION_ID --env production --repo "$GITHUB_REPO" --body "$(az account show --query id -o tsv)"
 
 gh secret list --env production --repo "$GITHUB_REPO"        # names only: expect the three above
+
+# The target's names, from step 1's variables (not re-typed). deploy.yml reads them as vars.*
+gh variable set AZURE_RESOURCE_GROUP --env production --repo "$GITHUB_REPO" --body "$RESOURCE_GROUP"
+gh variable set ACR_NAME --env production --repo "$GITHUB_REPO" --body "$ACR_NAME"
+gh variable set CONTAINERAPP_NAME --env production --repo "$GITHUB_REPO" --body "$CONTAINERAPP_NAME"
+
+gh variable list --env production --repo "$GITHUB_REPO"      # names AND values (not secret): expect this run's three names
 ```
 
 - `prevent_self_review: false`: in a one-person repository, the person who starts the run must also be allowed to approve it.
 - The three ids are not passwords. None of them lets anyone sign in without a token from this repository's `production` environment. They are stored as secrets for two reasons: GitHub masks secret values in the Actions logs, which are public for this repository, and an environment secret only reaches the job after the approval.
+- The three names are variables, not secrets: they appear in Azure's URLs anyway, and the job prints them (`target: ...`). On every re-run of this runbook, re-run all of item 4's `secret set` and `variable set` lines: a new identity has a new client id, and new names must reach the workflow.
 
 ### 5. Run a deployment
 
@@ -877,6 +886,7 @@ After step 10b, two more things exist:
 - **The console log shows `LocalEntryNotFoundError ... outgoing traffic has been disabled`.** The image running is not the baked one, for example an image built before Day 23. Check `image` in step 6 and the bake lines in the build output.
 - **The replica restarts with exit code 137 / an OOM event in the system log.** Memory ran out. Move to the next pair (1.25 vCPU / 2.5 GiB) in the template, and set `OMP_NUM_THREADS` to match.
 - **`az containerapp logs show --type console` fails.** No replica is running (scaled to zero). Send one request, then retry.
+- **`deploy.yml` fails at "3b-4. Push" with `CONNECTIVITY_REFRESH_TOKEN_ERROR ... Access to registry '<name>.azurecr.io' was denied. Response code: 401`.** The OIDC sign-in worked (step 3a is green), but the identity has no `AcrPush` on THAT registry. Check that the job's `target: ...` line names the registry from step 1, and that the identity's role is on it (step 10b, item 3, last command). The second warning, `Unable to get admin user credentials ... could not be found in subscription`, is a symptom, not the cause. After the refused token, the CLI falls back to the registry's admin user. To read that, it must see the registry's settings, which an identity with `AcrPush` at most cannot do. Seen on 2026-10-21 (run 39680878243): the workflow still named the morning's registry `procureragday24jp`, while the evening re-run's identity had `AcrPush` on `procureragday24jp2`. Fixed by moving the names into the environment's variables (10b, item 4).
 - **`deploy.yml` fails at "3a. Sign in to Azure" with `AADSTS700213: No matching federated identity record found for presented assertion subject '...'`.** GitHub issued a token, but no federated credential on the identity named by `AZURE_CLIENT_ID` has exactly that subject (and issuer and audience). The log prints the token's subject (`subject claim - ...`). Compare it with the stored one (step 10b, item 2). Fix the stored one in place, then re-run only the failed job (`gh run rerun <run-id> --failed`, which asks for approval again):
 
   ```bash

@@ -26,11 +26,12 @@
 # has no retry or false-positive policy yet (see docs/learning-log.md, Day 24).
 #
 # Prerequisites, made once by hand (docs/azure-container-apps-runbook.md,
-# "Day 24: deploy from GitHub Actions"): the Azure resources below; a
-# user-assigned managed identity that trusts this repository's `production`
-# environment (federated credential) and holds AcrPush on the registry and
-# Contributor on the one app; and the GitHub environment `production` (main
-# only, a required reviewer) holding the three Azure ids as secrets.
+# "Day 24: deploy from GitHub Actions"): the Azure resources; a user-assigned
+# managed identity that trusts this repository's `production` environment
+# (federated credential) and holds AcrPush on the registry and Contributor on
+# the one app; and the GitHub environment `production` (main only, a required
+# reviewer) holding the three Azure ids as secrets and the three target names
+# as variables.
 
 name: Deploy
 
@@ -54,16 +55,6 @@ defaults:
 concurrency:
   group: production
   cancel-in-progress: false
-
-# The Day 24 target (runbook step 1). Names, not credentials: they are visible
-# in Azure's URLs and resource ids anyway.
-env:
-  AZURE_RESOURCE_GROUP: rg-procurerag-day24
-  ACR_NAME: procureragday24jp
-  CONTAINERAPP_NAME: procurerag-api
-  # One tag per commit. A tag can be moved later; the digest read back in
-  # step 4 cannot, so the app is updated by digest, never by this tag.
-  IMAGE: procureragday24jp.azurecr.io/procurerag-api:${{ github.sha }}
 
 jobs:
   ci-passed:
@@ -110,7 +101,29 @@ jobs:
     permissions:
       contents: read # check out the commit
       id-token: write # let azure/login request this job's OIDC token. No other job has it.
+    # The target, read from the `production` environment's VARIABLES (runbook
+    # step 10b, item 4). They are set from the same shell variables that
+    # created the resources, so a re-run of the runbook under new names needs
+    # no change to this file. (Written here by hand, they once pointed at the
+    # previous run's registry, and the push was refused.) Names, not
+    # credentials: they appear in Azure's URLs and resource ids anyway.
+    env:
+      AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      CONTAINERAPP_NAME: ${{ vars.CONTAINERAPP_NAME }}
+      # One tag per commit. A tag can be moved later; the digest read back in
+      # step 4 cannot, so the app is updated by digest, never by this tag.
+      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/procurerag-api:${{ github.sha }}
     steps:
+      - name: Check that the target names are set
+        # Fail in seconds, before a two-minute build, if a variable is missing.
+        run: |
+          if [ -z "$AZURE_RESOURCE_GROUP" ] || [ -z "$ACR_NAME" ] || [ -z "$CONTAINERAPP_NAME" ]; then
+            echo "::error::Set AZURE_RESOURCE_GROUP, ACR_NAME, and CONTAINERAPP_NAME as variables of the production environment (runbook step 10b, item 4)."
+            exit 1
+          fi
+          echo "target: app $CONTAINERAPP_NAME in $AZURE_RESOURCE_GROUP, registry $ACR_NAME"
+
       - name: Check out the commit to deploy
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
