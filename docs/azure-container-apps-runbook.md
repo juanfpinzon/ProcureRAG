@@ -837,6 +837,23 @@ This creates a new revision running the old image, and traffic moves to it once 
 
 Why c) and f), and not only e): the old and the new image answer the four smoke probes in exactly the same way. A green smoke after a rollback that never happened looks the same as one after a rollback that did. On 2026-10-21 a rollback was believed done, but the Activity Log showed no `containerApps/write` after the pipeline's own. The revision's image and the logged write are the evidence.
 
+Read back on 2026-10-21 on the second target (`rg-procurerag-24`), with the same commands, after `deploy.yml` run 39684854693 had put `0000003` live and this rollback had run (excerpts):
+
+```text
+c)  procurerag-api--0000004
+    rollback image OK
+d)  procurerag-api--umzdhez  False  0    mcr.microsoft.com/k8se/quickstart:latest              (created by step 4)
+    procurerag-api--0000001  False  0    ...procurerag-api:day24                               (created by step 4)
+    procurerag-api--0000002  False  0    ...procurerag-api:day24                               (step 5)
+    procurerag-api--0000003  False  0    ...procurerag-api@sha256:ba8cb277...                  (deploy.yml)
+    procurerag-api--0000004  True   100  ...procurerag-api@sha256:a03b392b...                  (this rollback)
+e)  [ok] /health, Q001, Q091 pending, off-topic; exit code: 0
+f)  2026-10-21T22:17:33Z  Started   (deploy.yml, the deploy identity)
+    2026-10-21T22:21:14Z  Started   (this rollback, your user)
+```
+
+`0000004` runs the digest that `:day24` pointed to, not the tag. The pipeline's revision, `0000003`, is still there, inactive, so rolling forward again is the same command with its digest.
+
 ## 11. Clean up
 
 **(deletes Azure resources: everything in the resource group)**
