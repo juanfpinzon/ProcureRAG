@@ -793,7 +793,7 @@ az containerapp revision list --name "$CONTAINERAPP_NAME" --resource-group "$RES
 
 `--all` includes the inactive revisions. Without it, only the active one is listed.
 
-Since the 2026-10-21 review, the job also runs steps 2b and 2c before the push: the retrieval verification and the graph route regression inside the image, with no network. Measured locally, they take about 25 s each. Their first GitHub run is still to come.
+Since the 2026-10-21 review, the job also runs steps 2b and 2c before the push: the retrieval verification and the graph route regression inside the image, with no network. They passed remotely in runs 39680878243 and 39684854693; the second run then pushed and deployed that same gated image by digest.
 
 ### 6. Roll back
 

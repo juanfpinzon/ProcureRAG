@@ -6960,7 +6960,7 @@ After the review: a probe that gets a non-JSON 500 or no HTTP answer at all (a s
 
 Status on 2026-10-20: **deferred, not run**. Day 23's `rg-procurerag-day23` had been deleted, so there was nothing to update.
 
-Status at the end of 2026-10-21: **two green deployments (one on each target), one fail-closed sign-in, one refused push, one remote `ci-passed` refusal, and one rollback exercised (22:21 UTC, on `rg-procurerag-24`; entry 11).** The in-image gates (2b/2c) ran on GitHub in both evening runs. The morning target is deleted. The evening target, `rg-procurerag-24`, is still up until its evidence is recorded (then runbook step 11). The prerequisite list written on 2026-10-20 held, with three corrections: the OIDC subject (immutable format), the app role (`Contributor` on the app), and the three ids (environment secrets, not variables). A fourth came later: the target's names are environment variables, not written in the workflow.
+Final status: **two green deployments (one on each target), one fail-closed sign-in, one refused push, one remote `ci-passed` refusal, and one rollback exercised (22:21 UTC on 2026-10-21, on `rg-procurerag-24`; entry 11).** The in-image gates (2b/2c) ran on GitHub in both evening runs. Both disposable targets are deleted; the second deletion was requested at 22:39:10 UTC and first read back as absent at 23:06:13 UTC, with no remaining ProcureRAG group or group-scoped role assignment. The prerequisite list written on 2026-10-20 held, with three corrections: the OIDC subject (immutable format), the app role (`Contributor` on the app), and the three ids (environment secrets, not variables). A fourth came later: the target's names are environment variables, not written in the workflow.
 
 **1. Target, recreated by Juan from the Day 23 runbook (steps 1-6):**
 
@@ -7142,8 +7142,8 @@ docker run --rm --network none --env OMP_NUM_THREADS=1 --env DEEPEVAL_TELEMETRY_
   procurerag-api:day24-local python src/graph_regression.py
 
 # deploy lane (added 2026-10-21): the post-deploy smoke, against the running Azure app
-python3 scripts/container_smoke.py --url "https://$(az containerapp show --name procurerag-api \
-  --resource-group rg-procurerag-day24 --query properties.configuration.ingress.fqdn -o tsv)"
+python3 scripts/container_smoke.py --url "https://$(az containerapp show --name "$CONTAINERAPP_NAME" \
+  --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
 
 git diff --check
 ```
@@ -7152,8 +7152,8 @@ git diff --check
 
 ```text
 pytest: 387 passed (357 + 17 graph regression + 4 regression-suite exit codes + 9 container-smoke tests,
-        4 of them for the `--url` mode added with the deploy lane); remote: CI push run 39632604151 on
-        3a334e5, `387 passed in 7.68s`. The clean-copy run (no .env, no .venv, empty HF cache,
+        4 of them for the `--url` mode added with the deploy lane); remote: CI push run 39688135620 on
+        d08aba7, `387 passed in 7.10s`. The clean-copy run (no .env, no .venv, empty HF cache,
         HF_HUB_OFFLINE=1: 27 s for the whole fast lane) was made at 383, before the `--url` tests
 compileall: src tests scripts, exit 0
 Ruff: src tests scripts, All checks passed!
@@ -7177,7 +7177,8 @@ actionlint 1.7.12: 0 errors in all three workflows (ci, live-eval, deploy)
 git diff --check: clean (tracked files; new files checked separately: no trailing whitespace)
 git status --short: clean at each merge. The Day 24 work reached main through PRs, because main requires
                     the three checks: #1 implementation (02308a6), #2 remote evidence (f3ab218),
-                    #3 deploy lane (6bd0b3e), #4 deploy evidence (3a334e5)
+                    #3 deploy lane (6bd0b3e), #4 deploy evidence (3a334e5), #5 exact-image gates
+                    (4e343da), #6 target-variable fix (0d31f60), and #7 rollback evidence (d08aba7)
 ```
 
 No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implementation.
@@ -7324,11 +7325,11 @@ Answered by Juan without notes as per req.
       4. it signs in with OIDC, pushes the image as `:<sha>`, and reads its digest back from the registry;
       5. it records the current image as a digest (the rollback handle);
       6. it updates the app through the template with the image `@sha256:…`, waits until the new revision is ready and running that digest, then smokes it through its URL.
-    - Evidence: run 39625296505, attempt 2. Digest `sha256:ba8cb277…` became revision `0000003` with 100% traffic, and the URL smoke passed 4/4.
+    - Evidence: run 39684854693. Digest `sha256:ba8cb277…` became revision `0000003` with 100% traffic, and the URL smoke passed 4/4.
     - **Where it differs from the textbook answer ("never rebuild between evaluation and deployment"):** CI never pushes, and a 2 GB image is too big to hand between workflows, so the deploy job rebuilds the commit. The base images are named by tag and the models use their default revision, so two builds of one commit can differ. That is why 2b/2c re-run CI's model-backed gates inside the image that is pushed.
-    - The defensible claim: "CI passed on this commit, AND the exact image that was pushed and deployed (by digest) passed the smoke, the retrieval verification, and the graph regression inside itself, offline." Not: "CI's artifact was promoted byte for byte." 2b/2c have only run locally so far.
+    - The defensible claim: "CI passed on this commit, AND the exact image that was pushed and deployed (by digest) passed the smoke, the retrieval verification, and the graph regression inside itself, offline." Not: "CI's artifact was promoted byte for byte." Steps 2b/2c passed remotely in runs 39680878243 and 39684854693.
     - Live eval is NOT a deploy gate today (red on Q091, and no retry or false-positive policy yet).
-    - **Rollback: the handle was recorded, but the rollback was never exercised.** The Activity Log shows no write after the pipeline's own. A passing smoke is not rollback evidence: the old and new images answer the four probes identically. The evidence is a NEW revision whose image IS the rollback digest, plus its `containerApps/write` in the Activity Log.
+    - **Rollback was exercised on the second target.** Revision `0000004` runs the recorded rollback digest `sha256:a03b392b…`, carries 100% of traffic, and passed all four URL probes. Azure's Activity Log records the separate rollback `containerApps/write` at 22:21:14 UTC after the pipeline's write at 22:17:33 UTC.
 12. **How do you distinguish CI flakiness from product regression?**
     - Classify the FIRST failed layer, from evidence, before re-running anything.
     - The tools encode the split:
@@ -7357,21 +7358,21 @@ Answered by Juan without notes as per req.
 - **The model-backed lane depends on the Hugging Face Hub.** It is uncached on purpose, so a Hub outage or a 429 makes it red (exit 2, "could not check"), and while it is a required check, that blocks merges. The fix, if it happens: cache the models keyed on the recorded revision.
 - **Model revisions are not pinned.** CI downloads each model's default revision (today `b2073673…` MiniLM, `81d1926f…` TinyBERT, the same as Day 22/23) and prints it, but a new upstream revision would show up as drift, not as "model changed".
 - **The deploy lane is proven twice, and the rollback once, by hand.** Two green deployments (39625296505 on the first target, 39684854693 on the second), one fail-closed sign-in, one refused push, one remote `ci-passed` refusal. The rollback (revision `0000004`) was applied from the laptop with an Owner sign-in, so it went around the `production` approval and the deploy identity. The pipeline records the handle but cannot apply it. The next step would be a dispatch input that names a digest, deployed through the same approval, without the build.
-- **The deployed image is a second build of the commit, not CI's image.** CI never pushes, and a 2 GB image is too big to hand between workflows. Since the review, `deploy.yml` runs the container smoke AND the two model-backed gates inside that second build before pushing it. So the deployed bytes are fully gated, but they are not the bytes CI tested. The base images are tagged, not digest-pinned, and the models use their default revision, so two builds of one commit can differ..
+- **The deployed image is a second build of the commit, not CI's image.** CI never pushes, and a 2 GB image is too big to hand between workflows. Since the review, `deploy.yml` runs the container smoke AND the two model-backed gates inside that second build before pushing it. So the deployed bytes are fully gated, but they are not the bytes CI tested. The base images are tagged, not digest-pinned, and the models use their default revision, so two builds of one commit can differ.
 - **One job holds both the build and the OIDC permission.** `id-token: write` is granted to the whole `deploy` job, so the build and smoke steps could also request a token. Splitting them into separate jobs would mean moving the image between jobs. The commit is reviewed code on `main`, and the sign-in step comes after the smoke.
 - **`Contributor` on the app can also delete the app.** Its scope is one disposable app. A custom role (read, write, and revision read on `Microsoft.App/containerApps`) would be the tighter choice for a deployment meant to last.
 - **No automatic rollback.** A revision that never becomes ready never receives traffic (single revision mode). But a revision that is ready and answers wrongly stays live until a person deploys the recorded rollback handle.
 - **The Azure CLI on the runner is not pinned.** The runner image's version is recorded in each run, not chosen.
-- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval. No deployed resource again: `rg-procurerag-day24` was deleted on 2026-10-21 (group gone at 16:25:54 UTC).
+- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval. No deployed resource remains: `rg-procurerag-day24` was gone at 16:25:54 UTC and `rg-procurerag-24` was first read back as absent at 23:06:13 UTC on 2026-10-21.
 
 ### Next step
 
 Steps 1-7 of the original list were done on 2026-10-21 (evidence above): the sources were read and the takeaways written; PR #1 was opened; the first run was green; a deliberate red was pushed and reverted; the Docker 15-minute rule was applied; PR #1 was merged and `main` protected; the `live-eval` environment was created and the first live run made.
 
-1. Review the drafted interview answers (above), then practice them without notes.
+1. ~~Review the twelve answers and practice them without notes.~~ Done by Juan before the closure re-review.
 2. Decide the Q091 follow-up. The owner is generation: the usage-data evidence (`GUIDE-002::chunk-1`) is in the merged context, but the answer drops it. Measure before changing anything (for example, which sources the answer cites, out of 19).
-3. Send the route's review prompt to Hermes, including PR #1, the five run URLs, and the live result.
-4. Close HER-292 only after that review.
+3. ~~Send the route's review prompt to Hermes.~~ Done; Hermes re-reviewed the post-feedback deployment, rollback, CI, and documentation evidence.
+4. Close HER-292 only after that review and verified Azure cleanup.
 
 Deploy lane (added 2026-10-21, after the Azure target was recreated):
 
@@ -7380,5 +7381,19 @@ Deploy lane (added 2026-10-21, after the Azure target was recreated):
 7. ~~First green deployment, and the `ci-passed` red path on GitHub.~~ Done: runs 39625296505 (attempt 2) and 39632679354.
 8. ~~Cleanup.~~ Done 2026-10-21 (group gone at 16:25:54 UTC); the `production` environment is kept.
 9. ~~Rollback evidence.~~ Done 2026-10-21 22:21 UTC on `rg-procurerag-24`: revision `0000004` runs exactly the handle `a03b392b…`, carries 100% of the traffic, the Activity Log shows the write, and the URL smoke passes (entry 11).
-10. Clean up `rg-procurerag-24` now that the evidence is recorded: runbook step 11, the role-assignment check, and `docker logout procureragday24jp2.azurecr.io`. Then record the deletion time from the Activity Log. Keep the `production` environment. Its variables and secrets point at deleted resources until the next re-run, which must reset them (runbook 10b, item 4).
+10. ~~Clean up `rg-procurerag-24` after recording the evidence.~~ Done: deletion was accepted at 22:39:10 UTC and the group was first read back as absent at 23:06:13 UTC on 2026-10-21. The subscription has zero remaining ProcureRAG groups and zero role assignments scoped to `rg-procurerag-24`. The `production` environment is kept; its variables and secrets point at deleted resources until the next re-run, which must reset them (runbook 10b, item 4).
+
+### Closure re-review — 2026-10-22
+
+Hermes re-reviewed the post-feedback state at implementation/evidence head `d08aba7` and accepted Day 24 for closure.
+
+- Current `main` CI run 39688135620 passed all three required jobs: `fast-deterministic`, `model-backed-deterministic`, and `docker-build-smoke`; its log records 387 tests, clean Ruff, frozen/current retrieval exit 0, all six graph contracts, and a successful container smoke.
+- Fresh local re-validation passed: 387 tests in 7.43 s, compileall, Ruff, frozen regression, current retrieval verification, all six graph contracts, actionlint 1.7.12 on all three workflows, and `git diff --check`.
+- Deploy run 39684854693 proves the exact image later pushed and deployed by digest passed container smoke plus offline in-image retrieval and graph gates before Azure sign-in and promotion.
+- The rollback is real rather than inferred from smoke: Azure records a separate app write at 22:21:14 UTC, revision `0000004` runs the recorded previous digest `sha256:a03b392b…` with 100% traffic, and the post-rollback URL smoke passed 4/4.
+- Juan recorded that he answered the twelve-question interview drill without notes; the full answers and measured caveats remain above.
+- Cleanup is complete and verified by readback: both disposable resource groups are absent, no ProcureRAG group remains, and no role assignment remains scoped to the second group.
+- The stale pre-fix statements in this entry and the Azure runbook were reconciled with the executed remote evidence.
+
+Closure decision: all Day 24 route-level blockers are resolved. The remaining items under “What remains weak” are explicitly accepted hardening/backlog work, not false-green paths or missing closure evidence. HER-292 may move to Done.
 
