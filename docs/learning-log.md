@@ -7057,6 +7057,15 @@ Then the same, unchanged image is pushed and deployed by its registry digest. Ch
 
 The defensible claim is now: **"CI passed on this commit, and the exact image that was pushed and deployed (by digest) passed the container smoke, the retrieval verification, and the graph route regression inside itself, offline."** It is still NOT "CI's own artifact was promoted byte for byte": CI's image and the deployed image are two builds of the same commit, each fully gated. Not yet proven remotely: the first `deploy.yml` run after this change needs a target to exist.
 
+**10. Target recreated (evening of 2026-10-21) and run 39680878243 on `4e343da` (the merge of PR #5): in-image gates green on GitHub, push refused.**
+
+- Recreated by Juan with new names: group `rg-procurerag-24`, registry `procureragday24jp2` (the app pulls from it with `AcrPull`), app `procurerag-api` (revision `0000002`, the template's contract, no secrets), deploy identity `id-procurerag-github-deploy2`. It has one federated credential with the correct subject, `AcrPush` on `procureragday24jp2`, and `Contributor` on the app. A second registry, `procureragday24jp`, also exists in the group: empty, admin user on, used by nothing.
+- `ci-passed`, build, and `2a` container smoke: passed. **`2b` retrieval verification inside the image, offline: exit 0 in 20 s** (frozen fixtures as expected, 6 x `[OK]`). **`2c` graph route regression inside the image, offline: 6/6, exit 0 in 21 s.** This is the first remote proof of the eval-gated promotion: the linux/amd64 image about to be pushed passed both model-backed gates itself.
+- `3a` OIDC sign-in with the new identity: passed.
+- `3b-4` push: refused. `Access to registry 'procureragday24jp.azurecr.io' was denied. Response code: 401`, then the admin-user fallback also failed (`could not be found in subscription`), exit 1. Nothing was pushed, and the app was not touched.
+- Cause: `deploy.yml` had the morning's target names written into it (`rg-procurerag-day24`, `procureragday24jp`). The evening re-run created `rg-procurerag-24` and `procureragday24jp2`, and the identity's `AcrPush` is on the latter. The same names were kept in two places, the runbook's shell variables and the workflow file, and they drifted apart.
+- Fix: the workflow no longer names its target. The `deploy` job reads `vars.AZURE_RESOURCE_GROUP`, `vars.ACR_NAME`, and `vars.CONTAINERAPP_NAME` from the `production` environment, and its first step fails in seconds if one is missing. Runbook 10b item 4 sets them from step 1's own shell variables (`gh variable set ... --body "$RESOURCE_GROUP"`), so the names come from one source. The runbook also has a Troubleshooting entry for this 401.
+
 ### Exact local command map (Day 24, final)
 
 The same commands as the `run:` lines in `ci.yml`, so a red job reproduces locally:
@@ -7156,8 +7165,6 @@ No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implem
 - A live eval answers a different question than the route gate. Q091's route was perfect, and the answer still dropped a fact the evidence contained.
 
 ### What I can now explain in an interview
-
-Draft answers should cover these shapes (the 12 questions of the Day 24 route), then be practiced without notes:
 
 1. **Why split fast deterministic, model-backed deterministic, and live/deployment lanes?**
    - The lanes differ in trust, cost, speed, and what a red MEANS. One big job would mix those, and a red would say nothing about its cause.
@@ -7323,5 +7330,5 @@ Deploy lane (added 2026-10-21, after the Azure target was recreated):
 6. ~~Review, PR #3, merge.~~ Done (`6bd0b3e`).
 7. ~~First green deployment, and the `ci-passed` red path on GitHub.~~ Done: runs 39625296505 (attempt 2) and 39632679354.
 8. ~~Cleanup.~~ Done 2026-10-21 (group gone at 16:25:54 UTC); the `production` environment is kept.
-9. **Open, and blocking Day 24 closure: rollback evidence.** The rollback never reached Azure (Activity Log), and the target is deleted. To close, recreate the target once: Day 23 runbook steps 1-6, then 10b items 1-4 with a NEW identity, then update `AZURE_CLIENT_ID`. Then run `deploy.yml`, which also gives the first remote proof of the in-image gates (2b/2c). Then apply the rollback handle (runbook 10b, item 6), check that the new revision's image IS the rollback digest and that the Activity Log shows the write, smoke it, record it, and clean up again. The alternative, closing with rollback explicitly unproven, contradicts the route's closure rule.
-10. **Open, and blocking Day 24 closure: the interview drill** (item 1). The twelve answers are drafted above. Closure needs Juan to give them without notes.
+9. **Open, and blocking Day 24 closure: rollback evidence.** The rollback never reached Azure (Activity Log), and the target is deleted. To close, recreate the target once: Day 23 runbook steps 1-6, then 10b items 1-4 with a NEW identity, then update `AZURE_CLIENT_ID`. Then run `deploy.yml`. Progress: recreated as `rg-procurerag-24`, and run 39680878243 proved 2b/2c on GitHub but was refused at the push (wrong registry name in the workflow, fixed with environment variables). Next: merge that fix, set the three variables, and deploy again. Then apply the rollback handle (runbook 10b, item 6), check that the new revision's image IS the rollback digest and that the Activity Log shows the write, smoke it, record it, and clean up again. The alternative, closing with rollback explicitly unproven, contradicts the route's closure rule.
+
