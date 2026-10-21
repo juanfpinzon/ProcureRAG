@@ -220,7 +220,7 @@ GRAPH_CASES = [
         "expected_approval": "approve",
         # Measured: the one follow-up recovers BOTH missing documents (see the
         # module docstring for why this is not the route doc's "bounded failure").
-        "expected_stop_reason": STOP_FIXED_AFTER_SECOND_PASS,
+        "expected_stop_reason": "still_missing_after_max_passes",
         "expected_first_pass_missing": ["CONTRACT-005", "POL-002"],
         "expected_final_missing": [],
         "expected_llm_calls": 1,
