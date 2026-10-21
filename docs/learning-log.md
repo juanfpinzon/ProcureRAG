@@ -6727,7 +6727,7 @@ The kickoff's exit 132 did not reproduce on the Mac (every model-backed run toda
 
 Final workflow split: **two files**. `.github/workflows/ci.yml` is the deterministic gate (pull requests and pushes to `main`, no secret). `.github/workflows/live-eval.yml` is the paid, manual, protected lane. There is **no `deploy.yml`**: Day 23's resources are deleted, and a deploy workflow that has never run would invite exactly the "implied passed" claim the route forbids. Two files make the secret boundary auditable at a glance: nothing in `ci.yml` can name `OPENROUTER_API_KEY`.
 
-Pinned Python: `.python-version` = `3.11`, installed by `uv python install` (uv reads the file). The runner's default `python3` (3.12 on `ubuntu-24.04`) is never used for the project. The exact 3.11 patch is whatever uv 0.12.2 installs on the runner: TODO-remote, read it from the `Show the interpreter under test` step. Local `.venv`: 3.11.7. Docker image: 3.11.17.
+Pinned Python: `.python-version` = `3.11`, installed by `uv python install` (uv reads the file). The runner's default `python3` (3.12 on `ubuntu-24.04`) is never used for the project. Measured on the runner: uv 0.12.2 installed **CPython 3.11.15** (`cpython-3.11.15-linux-x86_64-gnu`, in 1.08 s), and `uv sync` reported `Using CPython 3.11.15`. Local `.venv`: 3.11.7. Docker image: 3.11.17.
 
 Pinned uv: `0.12.2` in CI (`setup-uv` `version:`), in the `Dockerfile` (`ghcr.io/astral-sh/uv:0.12.2`), and on this Mac. One uv version everywhere.
 
@@ -6740,9 +6740,9 @@ Action pins reviewed against their source repositories: done, 2026-10-20. Each S
 | `docker/setup-buildx-action` | v4.4.1 | `f87e5991a6d7451dcb8d9637bfbc97413f497069` | 2026-09-16 | yes |
 | `docker/build-push-action` | v7.4.0 | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` | 2026-09-15 | yes |
 
-Branch protection required checks (to select after the first green run; GitHub only offers check names it has already seen): `fast-deterministic`, `model-backed-deterministic`, `docker-build-smoke`. Status: **not configured**. `main` is unprotected today (`gh api .../branches/main/protection` → 404 "Branch not protected"). The repository is public, so branch protection and environment protection rules are available on the free plan.
+Branch protection required checks: `fast-deterministic`, `model-backed-deterministic`, `docker-build-smoke`, each pinned to the GitHub Actions app (`app_id` 15368), so a status with the same name from any other source cannot satisfy it. Status: **configured on 2026-10-21**, after PR #1's checks had run once (GitHub only offers check names it has already seen). The rule: `strict: true` (a PR must be up to date with `main`); `enforce_admins: true` (Juan's choice: the rule binds the admin too); force pushes and branch deletion off; no required review (one-person repo). Proof: a direct push of an empty commit to `main` was refused with `GH006: Protected branch update failed for refs/heads/main. - 3 of 3 required status checks are expected.` The local commit was then dropped.
 
-Docker PR-versus-push policy and measured reason: **run on every PR and every push, and require it**. It is the only check that builds and starts the artifact Azure would run. Measured so far, on the Mac only (arm64, cached base layers): build 2 s, smoke 26-29 s. The remote `linux/amd64` duration is unmeasured. Rule written down in advance: if the remote `docker-build-smoke` job takes more than 15 minutes with a warm cache, move it to push-only and drop it from the required checks, with the measured number recorded here.
+Docker PR-versus-push policy and measured reason: **run on every PR and every push, and require it**. It is the only check that builds and starts the artifact Azure would run. Measured on GitHub (`ubuntu-24.04`, `linux/amd64`): the whole `docker-build-smoke` job took 2m43s and 3m04s on the two green PR runs. That includes a 108 s build with NO cache: PR runs may only read it, and none existed yet. The push to `main` took 3m30s (a 158 s build including a 32 s cache export). The 15-minute rule written down in advance is nowhere near triggered, so the policy stands.
 
 Live case/call budget: 3 cases (Q001, Q091, Q092 rejected), **at most 2 logical LLM calls per run**, enforced in code (`LIVE_LLM_CALL_BUDGET`: a third call is refused before it is made, and counted as a contract failure). Below that, the OpenAI SDK retries a failed request up to 2 more times on its own (`max_retries=2` default, 60 s timeout per attempt), so the worst case is 6 HTTP requests. The model is written in the workflow file (`OPENROUTER_MODEL: openai/gpt-4o`).
 
@@ -6768,16 +6768,16 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 
 | Check/job | Trigger | Secrets? | Expected exit/failure rule | Blocks merge? | Blocks deploy? | Final evidence |
 |---|---|---|---|---:|---:|---|
-| locked dependency sync | PR + push (`ci.yml`, every job) | none | lock drift/install failure -> non-zero | yes | yes (design) | local exit 0, also in a clean copy; remote TODO |
-| pytest | PR + push (`fast-deterministic`) | none | any failed test -> non-zero | yes | yes (design) | local 383 passed; remote TODO |
-| compileall | PR + push (`fast-deterministic`) | none | compile error -> non-zero | yes | yes (design) | local exit 0; remote TODO |
-| Ruff | PR + push (`fast-deterministic`) | none | configured lint violation -> non-zero | yes | yes (design) | local exit 0; remote TODO |
-| frozen fixture regression | PR + push (`fast-deterministic`) | none | expected-state drift -> exit 1 (new) | yes | yes (design) | local exit 0; deliberate stale expectation -> exit 1; remote TODO |
-| current retrieval pipeline | PR + push (`model-backed-deterministic`) | none | expected evidence drift -> exit 1; models not loadable -> exit 2 (new) | yes | yes (design) | local exit 0 (fresh cache, 42 s); stale Q016 expectation -> exit 1; remote TODO |
-| deterministic graph route regression | PR + push (`model-backed-deterministic`) | none | route/attempt/approval/stop/evidence/LLM-call drift -> exit 1; models unavailable -> exit 2 | yes | yes (design) | local exit 0 (6 cases); route doc's Q092 contract -> exit 1; offline + empty cache -> exit 2; remote TODO |
-| Docker build | PR + push (`docker-build-smoke`) | none | image build failure -> non-zero | yes | yes (design) | local arm64 build only; remote amd64 TODO |
-| container API smoke | PR + push (`docker-build-smoke`) | none | contract/log failure -> exit 1; never healthy -> exit 2; cleanup always | yes | yes (design) | local exit 0; exit 1 and both exit-2 paths shown; remote TODO |
-| live graph answer eval | manual, protected (`live-eval.yml`) | provider secret | route/quality failure -> 1; missing key/provider/model failure -> 2 | no | no today | missing key -> exit 2 (local); paid run not made |
+| locked dependency sync | PR + push (`ci.yml`, every job) | none | lock drift/install failure -> non-zero | yes | yes (design) | local exit 0, also in a clean copy; remote exit 0 in every job (7 s with a cold uv cache, 1-3 s restored) |
+| pytest | PR + push (`fast-deterministic`) | none | any failed test -> non-zero | yes | yes (design) | local 383 passed; remote `383 passed in 8.01s` (run 39600740553); deliberate red commit: `3 failed, 380 passed`, exit 1 (run 39601321038) |
+| compileall | PR + push (`fast-deterministic`) | none | compile error -> non-zero | yes | yes (design) | local exit 0; remote exit 0 |
+| Ruff | PR + push (`fast-deterministic`) | none | configured lint violation -> non-zero | yes | yes (design) | local exit 0; remote `All checks passed!` |
+| frozen fixture regression | PR + push (`fast-deterministic`) | none | expected-state drift -> exit 1 (new) | yes | yes (design) | local exit 0; deliberate stale expectation -> exit 1; remote exit 0 |
+| current retrieval pipeline | PR + push (`model-backed-deterministic`) | none | expected evidence drift -> exit 1; models not loadable -> exit 2 (new) | yes | yes (design) | local exit 0 (fresh cache, 42 s); stale Q016 expectation -> exit 1; remote 6 x [OK], exit 0, 35 s including the model download |
+| deterministic graph route regression | PR + push (`model-backed-deterministic`) | none | route/attempt/approval/stop/evidence/LLM-call drift -> exit 1; models unavailable -> exit 2 | yes | yes (design) | local exit 0 (6 cases); route doc's Q092 contract -> exit 1; offline + empty cache -> exit 2; remote 6/6 passed, exit 0, 29 s |
+| Docker build | PR + push (`docker-build-smoke`) | none | image build failure -> non-zero | yes | yes (design) | local arm64; remote `linux/amd64` 108 s (no cache), 158 s on the push to `main` (cache written) |
+| container API smoke | PR + push (`docker-build-smoke`) | none | contract/log failure -> exit 1; never healthy -> exit 2; cleanup always | yes | yes (design) | local exit 0; exit 1 and both exit-2 paths shown; remote exit 0, `/health` after 28.2 s |
+| live graph answer eval | manual, protected (`live-eval.yml`) | provider secret | route/quality failure -> 1; missing key/provider/model failure -> 2 | no | no today | missing key -> exit 2 (local); run 39602202292: exit 1, Q091 missing `usage data` |
 | Azure promotion | not built | Azure OIDC (planned) | push/revision/smoke failure -> non-zero | no | yes (design) | deferred: no infrastructure |
 
 ### Deterministic graph regression evidence
@@ -6831,13 +6831,13 @@ Test quality: 10 deliberate mutations of `graph_regression.py` (no gap-naming ch
 
 ### Live graph answer-quality evidence
 
-Status: **pending**. The workflow and the code exist, and no paid call was made today.
+Status: **run once, on 2026-10-21. RED: exit 1, answer quality on Q091.** It is not a deploy gate, so the red blocks nothing. The red result is the evidence.
 
-Manual workflow/run URL: TODO-remote. It needs the `live-eval` environment and its secret (see "Next step"), and `live-eval.yml` on `main`, because a `workflow_dispatch` workflow only gets a "Run workflow" button once the file is on the default branch.
+Manual workflow/run URL: <https://github.com/juanfpinzon/ProcureRAG/actions/runs/39602202292> (`workflow_dispatch` on `main`, started with `gh workflow run live-eval.yml --ref main` once `live-eval.yml` was on the default branch).
 
-Trusted ref and commit SHA: `refs/heads/main` only. The boundary is the `live-eval` environment's deployment-branch rule (`main` only), checked by GitHub before the job gets the secret. The workflow's first step also fails any other ref, but that is defense in depth only: a dispatch runs the workflow file as it exists on the chosen ref, so a pushed branch could delete that step. SHA: TODO-remote.
+Trusted ref and commit SHA: `refs/heads/main` only. The boundary is the `live-eval` environment's deployment-branch rule (`main` only), checked by GitHub before the job gets the secret. The workflow's first step also fails any other ref, but that is defense in depth only: a dispatch runs the workflow file as it exists on the chosen ref, so a pushed branch could delete that step. SHA: `02308a6` (the PR #1 merge commit). The ref-check step was `skipped`, because the ref was `main`.
 
-Environment approval evidence: TODO-remote.
+Environment approval evidence: the run waited at the `live-eval` gate from 12:45:45 to 12:47:36 UTC (1m51s), until Juan approved it in the GitHub UI. The run's approvals API records `state: approved`, `user: juanfpinzon`, environment `live-eval`. GitHub created deployment 7226392925 (`ref: main`, `sha: 02308a6`). The environment existed before the merge: only `main` may deploy to it, Juan is the required reviewer, and self-review prevention is off. `OPENROUTER_API_KEY` is an environment secret only: `gh secret list` shows no repository secret, and `gh secret list --env live-eval` shows the key. In the log, the key appears only as `***` (0 matches for `sk-or-v1`).
 
 Provider/model and bounded call budget: OpenRouter, `openai/gpt-4o` (pinned in `live-eval.yml`; same as `generation.DEFAULT_OPENROUTER_MODEL`), structured `GeneratedAnswer` output, temperature 0.0. At most 2 logical calls per run, and at most 6 HTTP requests counting the SDK's own retries.
 
@@ -6851,11 +6851,28 @@ Prediction from data already in the repo, not a new live run: an offline replay 
 
 Missing secret, checked locally: `env -u OPENROUTER_API_KEY uv run python src/graph_regression.py --live` → `INFRASTRUCTURE: OPENROUTER_API_KEY is not set in the process environment ... (exit 2)`, before any model loads.
 
+First live run (run 39602202292, job 66 s, eval step 49 s):
+
+```text
+lane: LIVE | provider: openrouter | model: openai/gpt-4o | cases: 3 | LLM call budget: 2
+case_id                            route                              retr llm  verdict
+control-q001                       generate                              1   1  passed
+recursive-recovery-q091            recursive_retrieve -> generate        2   1  contract_failure
+bounded-abstention-q092-rejected   report_gap                            1   0  passed
+
+recursive-recovery-q091 (contract_failure):
+  - quality: answer is missing required term(s) ['usage data'] from expected_answer
+LLM calls made in this run: 2
+exit code: 1 (contract/quality drift)
+```
+
+The prediction held. Q091's route contract held, citations passed, and the answer now states "Band 3, which requires approval by the VP Procurement, supported by a documented Finance review [11]". The recursive pass repaired the band gap that `regression_suite.py` still tracks as the frozen single-pass `expected_missing_terms=["Band 3"]`. But the answer skips the renewal process: no 12-month usage data, no 9-month viability check, and none of the Day 14 single-pass answer's 120-day steps. Nor does it mention the Tier-1 / €5M cyber-liability point. Owner: generation over the 19-source merged context, not retrieval (the evidence is present) and not routing. The terms were not edited.
+
 | Case | Quality target | Actual answer/eval summary | Citation verdict | Route/abstention verdict | Overall |
 |---|---|---|---|---|---|
-| Q001 | graph answer contains `VP Procurement`, `Finance review`; answered | TODO-remote | TODO-remote | direct route: deterministic pass | pending |
-| Q091 | after recursive recovery: contains `Band 3`, `usage data`; answered | TODO-remote (predicted fail on `usage data`) | TODO-remote | recursive recovery: deterministic pass | pending |
-| Q092 rejected | no forced answer; gap report names both docs; 0 LLM calls with the real client wired in | not applicable | not applicable | deterministic pass (0 stand-in calls); live TODO-remote | pending |
+| Q001 | graph answer contains `VP Procurement`, `Finance review`; answered | answered; both terms present | pass (Day 10 contract) | `generate`, 1 retrieval, 1 LLM call | **pass** |
+| Q091 | after recursive recovery: contains `Band 3`, `usage data`; answered | answered; `Band 3` → VP Procurement + Finance review [11] (repaired by the recursive pass); **`usage data` missing** | pass | `recursive_retrieve -> generate`, 2 retrievals, approved, 1 LLM call | **FAIL (quality)** |
+| Q092 rejected | no forced answer; gap report names both docs; 0 LLM calls with the real client wired in | not applicable | not applicable | `report_gap`, 1 retrieval, both docs named, **0 LLM calls with the real client wired in** | **pass** |
 
 ### Workflow and remote-run evidence
 
@@ -6883,29 +6900,29 @@ actionlint 1.7.12 (rhysd/actionlint:1.7.12 image, shellcheck + pyflakes included
   inputs are unknown to actionlint), so only a real GitHub run proves the inputs.
 ```
 
-First GitHub-accepted run URL: TODO-remote. Nothing has been pushed (Day 24 work is uncommitted).
+First GitHub-accepted run URL: <https://github.com/juanfpinzon/ProcureRAG/actions/runs/39600740553> (PR #1, <https://github.com/juanfpinzon/ProcureRAG/pull/1>). GitHub accepted both workflow files: `ci.yml` ran on the PR, and `live-eval.yml` was dispatched after the merge.
 
-Run commit SHA/ref/event: TODO-remote. On a pull request, `github.sha` (and so the image tag `ci-<sha>`) is GitHub's test MERGE commit, not the branch head. Record both: the merge SHA from the run, and `pull_request.head.sha` from the PR page.
+Run commit SHA/ref/event: `pull_request`, PR head `6b595ca23e5360e22a63c47b7c72b6538cb5dc6e`, tested as GitHub's merge commit `0836455c2c4d2760a1602ad96918f774cd3973fd`. The checkout log says `HEAD is now at 0836455 Merge 6b595ca… into e49c152…`, checked out from `refs/remotes/pull/1/merge`. That merge SHA is also the image tag (`ci-0836455…`), not the branch head.
 
-Remote job results and durations: TODO-remote. Local timings for comparison (Mac): fast lane 27-29 s in a clean copy, including a fresh `uv sync` from the uv cache; `--verify-retrieval` 42 s with a fresh model download, 7 s warm; `graph_regression.py` 13 s right after the download, 6-8 s warm; Docker smoke 29 s.
+Remote job results and durations (run 39600740553, all `success`): `fast-deterministic` 38 s (uv sync 7 s, pytest 14 s: `383 passed in 8.01s`); `model-backed-deterministic` 1m23s (`--verify-retrieval` 35 s including the model download, graph regression 29 s, both exit 0); `docker-build-smoke` 2m43s (Buildx setup 10 s, `linux/amd64` build 108 s with no cache, smoke 29 s). The whole run took about 3.5 minutes. Later runs: the revert on the PR, 28 s / 97 s / 184 s; the push to `main` (<https://github.com/juanfpinzon/ProcureRAG/actions/runs/39602096614>), 34 s / 72 s / 210 s, all green. Model snapshots tested: `b207367332321f8e44f96e224ef15bc607f4dbf0` (MiniLM) and `81d1926f67cb8eee2c2be17ca9f793c7c3bd20cc` (TinyBERT), the same as Day 22/23 and the Mac. Local timings for comparison (Mac): fast lane 27-29 s in a clean copy, including a fresh `uv sync` from the uv cache; `--verify-retrieval` 42 s with a fresh model download, 7 s warm; `graph_regression.py` 13 s right after the download, 6-8 s warm; Docker smoke 29 s.
 
-Deliberate failure evidence, then revert/fix evidence: local only so far (graph and retrieval negatives above, smoke exit 1/2 below). Remote: TODO, one red run on the PR, then the revert's green run.
+Deliberate failure evidence, then revert/fix evidence: commit `fdce465` put the route doc's Q092 contract back (`expected_stop_reason: "still_missing_after_max_passes"`). Run <https://github.com/juanfpinzon/ProcureRAG/actions/runs/39601321038> went red in 32 s: `fast-deterministic` failed at pytest (`3 failed, 380 passed`, `Process completed with exit code 1`), and `model-backed-deterministic` and `docker-build-smoke` were **skipped** by `needs:`. The red came from the CHEAPEST layer, not the model-backed job the plan expected. The unit tests replay the measured evidence through fake retrieval, so a wrong contract fails there before any model loads. The revert `d694a36` (tree identical to `6b595ca`) went green in run <https://github.com/juanfpinzon/ProcureRAG/actions/runs/39601542224>. Both commits stay on `main`, because PR #1 was merged with a merge commit (`02308a6`), not squashed. Locally, the same wrong contract also made the real-model graph regression exit 1 (above).
 
-Branch-protection configuration/status: not configured (`main` unprotected). See "Next step".
+Branch-protection configuration/status: configured (see "Gate contract"). A direct admin push to `main` is refused (`GH006 ... 3 of 3 required status checks are expected`).
 
-Secret/log inspection result: `grep -nE '\$\{\{ *secrets\.' .github/workflows/*.yml` finds one secret expression, `${{ secrets.OPENROUTER_API_KEY }}` at `live-eval.yml:89`, in the eval step's `env` only. `ci.yml` has none. Remote log inspection: TODO-remote.
+Secret/log inspection result: `grep -nE '\$\{\{ *secrets\.' .github/workflows/*.yml` finds one secret expression, `${{ secrets.OPENROUTER_API_KEY }}` at `live-eval.yml:89`, in the eval step's `env` only. `ci.yml` has none. Remote logs: 0 matches for `sk-or-v1` in the first CI run and in the live run. In the live run, the key appears only as `***` (GitHub masking). No `##[warning]` lines in run 39600740553.
 
 ### Docker/API gate evidence
 
-Build job/run URL: TODO-remote.
+Build job/run URL: <https://github.com/juanfpinzon/ProcureRAG/actions/runs/39600740553> (`docker-build-smoke`).
 
-Image tag and local/registry digest: CI tags `procurerag-api:ci-<commit sha>` and records `docker image inspect` (id, platform, size). There is no registry digest, because nothing is pushed. The local evidence image is `procurerag-api:day24-local`.
+Image tag and local/registry digest: CI tags `procurerag-api:ci-<commit sha>` and records `docker image inspect` (id, platform, size). There is no registry digest, because nothing is pushed. Remote (run 39600740553): `procurerag-api:ci-0836455c2c4d2760a1602ad96918f774cd3973fd`, `id=sha256:8b6f94ccae2a62f119f9c6fb8c01a038c2cc13ca8c5b3a69f72f18d19589d2a7`, `linux/amd64`, 2,085,273,035 bytes. Its build log shows the same baked model snapshots (`refs/main` lines). The local evidence image is `procurerag-api:day24-local`.
 
 Target platform: CI `linux/amd64` (native on `ubuntu-24.04`, the Azure platform). The local run is **`linux/arm64`** (Mac), so it proves the smoke script and the API contract, not amd64 packaging.
 
-Build duration/cache hit state: local 2 s (base layers and dependencies cached; only `COPY src` re-ran). Final local image: `sha256:3b4c832ecfb894f2129c3495a13fb7470c62a226c80e7fc1119eb19bdef68026`, `linux/arm64`, 1,983,176,147 bytes. Remote: TODO. Cache state is timing evidence, not acceptance evidence.
+Build duration/cache hit state: local 2 s (base layers and dependencies cached; only `COPY src` re-ran). Final local image: `sha256:3b4c832ecfb894f2129c3495a13fb7470c62a226c80e7fc1119eb19bdef68026`, `linux/arm64`, 1,983,176,147 bytes. Remote: 108 s with no cache (PR runs read the cache but may not write it, and none existed before the merge); 158 s on the push to `main`, including `sending cache export 32.2s`. After that run, all 14 Docker cache entries are scoped to `refs/heads/main`, and none to a PR ref. setup-uv's own cache behaves differently: it also saved one entry for `refs/pull/1/merge`. GitHub scopes that entry to the PR, so `main` never reads it, and uv checks every package against `uv.lock`. Cache state is timing evidence, not acceptance evidence.
 
-Cold startup/health-poll duration: 26.5-28.5 s on the Mac with `--cpus 1 --memory 2g` (Day 22: 9-10 s with no limit). Budget: 240 s, polled every 2 s.
+Cold startup/health-poll duration: 26.5-28.5 s on the Mac and 28.2 s on the GitHub runner (`linux/amd64`), both with `--cpus 1 --memory 2g` (Day 22: 9-10 s with no limit). Budget: 240 s, polled every 2 s.
 
 ```text
 python3 scripts/container_smoke.py procurerag-api:day24-local
@@ -6921,11 +6938,11 @@ cleanup: container procurerag-smoke removed
 
 | Probe | Expected | Actual (local arm64) | Verdict |
 |---|---|---|---|
-| `/health` | HTTP 200; `live_llm=false` | 200 after 28.5 s; `live_llm: False` | pass (remote TODO) |
-| canonical Q001 | `not_generated`, `run_id`, 5 sources incl. `POL-001` | as expected | pass (remote TODO) |
-| canonical Q091 without decision | `pending_approval`, approval request, no run id, no sources | as expected | pass (remote TODO) |
-| off-topic input | `blocked`, `off_topic` finding, no run id | as expected | pass (remote TODO) |
-| logs | 0 `Traceback`, 0 secret-like lines (counts only, never the lines) | 0 / 0 | pass (remote TODO) |
+| `/health` | HTTP 200; `live_llm=false` | 200 after 28.5 s; `live_llm: False` | pass, local and remote (run 39600740553) |
+| canonical Q001 | `not_generated`, `run_id`, 5 sources incl. `POL-001` | as expected | pass, local and remote (run 39600740553) |
+| canonical Q091 without decision | `pending_approval`, approval request, no run id, no sources | as expected | pass, local and remote (run 39600740553) |
+| off-topic input | `blocked`, `off_topic` finding, no run id | as expected | pass, local and remote (run 39600740553) |
+| logs | 0 `Traceback`, 0 secret-like lines (counts only, never the lines) | 0 / 0 | pass, local and remote (run 39600740553) |
 | cleanup | container removed even after failure | `docker ps -a --filter name=procurerag-smoke` empty after the passing run AND after the failing ones | pass |
 
 Failure paths, checked on purpose: a tag that was never built → `STARTUP FAILURE ... pull access denied`, exit 2. The live LLM switched on with no key (scratch copy) → the container exits during startup, the log tail shows `Application startup failed`, exit 2. A deliberately wrong expectation (6 sources, scratch copy) → `[FAIL] Q001 ... returned 5 sources, expected 6`, exit 1. All three still removed the container.
@@ -6987,14 +7004,15 @@ Ruff: src tests scripts, All checks passed!
 frozen regression: 7/7 as expected, exit 0
 current retrieval regression: 6 x [OK], exit 0 (fresh download 42 s; warm 7 s)
 deterministic graph regression: 6/6 passed, exit 0
-Docker build/smoke: local arm64 build (sha256:3b4c832e…) + smoke exit 0, /health after 28.5 s; remote linux/amd64 TODO
+Docker build/smoke: local arm64 (sha256:3b4c832e…) and remote linux/amd64 (sha256:8b6f94cc…), smoke exit 0 on both;
+                   /health after 28.5 s / 28.2 s
 live lane without a key: exit 2 before any model loads
-workflow remote run: TODO (not pushed)
+workflow remote runs: PR #1 39600740553 green; deliberate red 39601321038 (exit 1, slow jobs skipped);
+                     revert 39601542224 green; main push 39602096614 green; live eval 39602202292 red (Q091 quality, exit 1)
 actionlint: 0 errors in both workflows
 git diff --check: clean (tracked files; new files checked separately: no trailing whitespace)
-git status --short: M docs/docker-runbook.md, M docs/learning-log.md, M src/regression_suite.py,
-                    M tests/test_regression_suite.py, ?? .github/, ?? scripts/, ?? src/graph_regression.py,
-                    ?? tests/test_container_smoke.py, ?? tests/test_graph_regression.py
+git status --short: clean. The Day 24 implementation is on main via PR #1 (merge 02308a6); this
+                    remote evidence goes through PR #2, because main now requires the three checks
 ```
 
 No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implementation.
@@ -7021,6 +7039,8 @@ No file under `src/` or `tests/` may be credited to Hermes. Juan owns all implem
 - Writing a contract from a plan instead of a measurement creates a gate that is wrong on day one. Q092 had been `fixed_after_second_pass` since Day 16.
 - The trust boundary sits at the event and the environment, not in the YAML text: `pull_request` code never sees a secret; the paid lane is dispatch-only, `main`-only, and behind an environment.
 - Cache writes are a trust decision too: PRs read the Docker layer cache, and only `main` writes it.
+- A deliberate red is most useful when the CHEAPEST layer catches it. The wrong Q092 contract failed in 32 s at pytest, and the two slow jobs never started.
+- A live eval answers a different question than the route gate. Q091's route was perfect, and the answer still dropped a fact the evidence contained.
 
 ### What I can now explain in an interview
 
@@ -7041,9 +7061,9 @@ Practice the 12 questions in the Day 24 route without notes. Record concise answ
 
 ### What remains weak
 
-- **Remote evidence is missing.** No GitHub Actions run, no run URL, no remote timing, no amd64 build in CI yet. Until then, everything above is local evidence only.
-- **No branch protection.** Until the three checks are required on `main`, a red CI run does not block anything.
-- **Live answer quality is unmeasured through the graph.** The live lane exists but has not run. The stored Day 19 answers predict a Q091 failure on "usage data".
+- **Protection is one person deep.** `main` requires the three checks and binds the admin, but there is no required review: Juan still merges his own green PR. That is the honest ceiling of a one-person repo.
+- **Live graph-path answer quality fails on Q091.** The first live run kept the recovered Band 3 fact, but dropped the renewal usage-data step that `expected_answer` requires (exit 1). Retrieval and routing did their part, so the open question is generation over the 19-source merged context.
+- **One live run is one sample.** `openai/gpt-4o` at temperature 0 is not guaranteed to be deterministic, so one red or green run is evidence, not a rate.
 - **The quality check is literal.** Curated terms catch missing facts cheaply, but miss paraphrases and cannot judge correctness.
 - **`still_missing_after_max_passes` has no real-data case.** It is only exercised with fake retrieval.
 - **The model-backed lane depends on the Hugging Face Hub.** It is uncached on purpose, so a Hub outage or a 429 makes it red (exit 2, "could not check"), and while it is a required check, that blocks merges. The fix, if it happens: cache the models keyed on the recorded revision.
@@ -7053,11 +7073,9 @@ Practice the 12 questions in the Day 24 route without notes. Record concise answ
 
 ### Next step
 
-1. Read the 13 sources and write each takeaway (boxes above).
-2. Review every new and changed file, then commit on a branch (`git switch -c day24-eval-gated-ci`), push, and open a PR to `main`.
-3. On the PR's first run, record: run URL, the merge SHA tested and the PR head SHA, each job's result and duration, the Python patch from `Show the interpreter under test`, the model snapshots from `Record which model snapshots were tested`, and the image line from `Record the tested image identity`.
-4. Deliberate red check: push one commit that breaks a committed expectation (for example, Q092 approved → `expected_stop_reason: "still_missing_after_max_passes"`). Record the red `model-backed-deterministic` run, revert, and record the green run.
-5. Apply the Docker 15-minute rule with the measured duration.
-6. Merge, then protect `main`: Settings → Branches (or Rules → Rulesets) → require status checks `fast-deterministic`, `model-backed-deterministic`, `docker-build-smoke`. Decide whether the rule binds admins as well. If not, it is advisory for the only maintainer.
-7. Create environment `live-eval` BEFORE `live-eval.yml` reaches `main` (GitHub silently creates a missing environment with no protection the first time a job names it): Settings → Environments → New → `live-eval`; deployment branches = Selected branches → `main` only; required reviewer = Juan (leave "prevent self-review" off: on a one-person repo, nobody else could approve). Add `OPENROUTER_API_KEY` as an ENVIRONMENT secret, never a repository secret, then check: `gh secret list` must NOT show it, and `gh secret list --env live-eval` must. Then Actions → Live graph eval → Run workflow on `main`, approve, and record the URL, the result, and the answers' verdicts.
-8. Fill the interview drill, send the route's review prompt to Hermes, and close HER-292 only after that review and real remote CI evidence.
+Steps 1-7 of the original list were done on 2026-10-21 (evidence above): the sources were read and the takeaways written; PR #1 was opened; the first run was green; a deliberate red was pushed and reverted; the Docker 15-minute rule was applied; PR #1 was merged and `main` protected; the `live-eval` environment was created and the first live run made.
+
+1. Fill the interview drill (above) without notes.
+2. Decide the Q091 follow-up. The owner is generation: the usage-data evidence (`GUIDE-002::chunk-1`) is in the merged context, but the answer drops it. Measure before changing anything (for example, which sources the answer cites, out of 19).
+3. Send the route's review prompt to Hermes, including PR #1, the five run URLs, and the live result.
+4. Close HER-292 only after that review. The deployment lane stays deferred until Azure infrastructure and OIDC trust are deliberately recreated.
