@@ -1,0 +1,101 @@
+# Live graph eval: the protected, paid, manual lane (Day 24, lane 3).
+#
+# Runs `graph_regression.py --live`: Q001 and Q091 are answered by the real
+# model through the graph and scored (citations + curated expected_answer
+# terms), and Q092 with a rejected follow-up must report its gap with ZERO
+# LLM calls. At most 2 logical LLM calls per run, refused in code beyond that.
+# (Below each call, the OpenAI SDK may retry a failed request up to 2 times:
+# see `LIVE_LLM_CALL_BUDGET` in src/graph_regression.py.)
+#
+# Why a separate workflow instead of a job in ci.yml: the secret boundary is
+# then visible at a glance. Nothing in ci.yml can reach OPENROUTER_API_KEY,
+# whatever a pull request changes.
+#
+# What keeps the key away from unreviewed code:
+#   1. Trigger: `workflow_dispatch` only. No pull request, no push, no
+#      schedule: someone has to start it on purpose, from the Actions tab.
+#   2. THE BOUNDARY: environment `live-eval`, whose deployment-branch rule
+#      allows `main` only, plus a required reviewer. GitHub checks these
+#      rules BEFORE the job starts, and only then hands it the environment's
+#      secrets. These are repository settings, not this file, so they must
+#      exist BEFORE the first run: GitHub silently creates a missing
+#      environment, with NO protection, the first time a job names it. The
+#      key must be an ENVIRONMENT secret, never a repository secret (any
+#      workflow on any branch can read a repository secret). Setup steps:
+#      docs/learning-log.md, Day 24, "Next step".
+#   3. Defense in depth only: the first step below fails any ref other than
+#      main. A dispatch runs THIS FILE AS IT EXISTS ON THE CHOSEN REF, so
+#      anyone who can push a branch could delete this step there. That is
+#      why layer 2, not this step, is the real control.
+#
+# Exit codes come from graph_regression.py: 0 pass, 1 route/quality failure,
+# 2 infrastructure (missing key, provider error, model download). A missing
+# secret is therefore a red run, never a quiet "blocked" or a green one.
+#
+# Status today: this is an evidence lane, NOT a deployment gate. No deploy
+# workflow exists yet (Day 23's Azure resources were deleted).
+
+name: Live graph eval
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never two paid runs at once, and never cancel one halfway (that would pay
+# for calls whose result is thrown away). A second dispatch waits for the
+# running one. A third dispatch made while the second still waits replaces
+# it: at most one running and one waiting run.
+concurrency:
+  group: live-graph-eval
+  cancel-in-progress: false
+
+env:
+  # Tracing stays off: the live lane pays for answers, not for traces.
+  LANGSMITH_TRACING: "false"
+  LANGSMITH_TRACING_V2: "false"
+  DEEPEVAL_TELEMETRY_OPT_OUT: "1"
+  OMP_NUM_THREADS: "1"
+  PYTHONUNBUFFERED: "1"
+  # The model under evaluation, written here so a change shows up in review.
+  # (Same as `generation.DEFAULT_OPENROUTER_MODEL`.)
+  OPENROUTER_MODEL: openai/gpt-4o
+
+jobs:
+  live-graph-eval:
+    name: live-graph-eval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: live-eval
+    steps:
+      - name: Refuse any ref other than main
+        if: github.ref != 'refs/heads/main'
+        # $GITHUB_REF is read from the environment by the shell, never pasted
+        # into the script by `${{ }}`, so a branch name cannot inject commands.
+        run: |
+          echo "::error::The live lane only runs reviewed code from main. This run was started on $GITHUB_REF."
+          exit 1
+
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv 0.12.2
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.2"
+          enable-cache: true
+
+      - name: Install Python from .python-version
+        run: uv python install
+
+      - name: Install exactly the locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Bounded live graph eval (Q001, Q091, Q092 rejected; at most 2 logical LLM calls)
+        # The secret is mapped into THIS step only, not the whole job.
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: uv run python src/graph_regression.py --live

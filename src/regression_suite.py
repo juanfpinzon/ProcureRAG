@@ -99,6 +99,7 @@ them.
 
 import argparse
 import hashlib
+import sys
 from datetime import datetime, timezone
 
 from generation import INSUFFICIENT_EVIDENCE_ANSWER, generate_answer
@@ -1210,13 +1211,55 @@ def render_table(rows):
 
 
 # ---------------------------------------------------------------------------
+# Day 24: the exit code is the gate.
+#
+# Until Day 24, `main()` printed "N case(s) no longer match" and then ended
+# normally, so the process exited 0 even on drift. A human reading the table
+# saw the problem. CI cannot read tables: GitHub Actions marks a step green or
+# red ONLY from the process exit status. A drift that prints REGRESSION but
+# exits 0 is evidence, not a gate, and it would merge.
+# ---------------------------------------------------------------------------
+
+EXIT_ALL_MATCH = 0
+EXIT_DRIFT = 1
+EXIT_INFRASTRUCTURE = 2  # --verify-retrieval only: the models could not be loaded, so nothing was checked
+
+
+def gate_exit_code(rows, pipeline_results=()):
+    """Turn the suite's results into the process exit code CI reads.
+
+    `rows` are the fixture-lane results (`run_deterministic_suite`), and
+    `pipeline_results` the optional `--verify-retrieval` results (empty when
+    that lane did not run). One mismatch in either lane fails the whole
+    command, because both lanes check committed expectations.
+
+    A pure function over the two result lists, so the gate rule itself is
+    unit-tested without loading a model.
+
+    The live `--live` judge lane is deliberately NOT part of this rule. It
+    still degrades to `status="blocked"` without a key and stays an evidence
+    sample (see `_overall_verdict`), so it can never turn this command red or
+    green. Day 24's graph-aware live lane, `graph_regression.py --live`, is
+    the one that fails closed.
+
+    A model that cannot be loaded never reaches this function either: `main()`
+    returns `EXIT_INFRASTRUCTURE` (2) for that case. A process the OS kills
+    (exit 132 for "Illegal instruction") never returns at all, and its exit
+    code is the OS's.
+    """
+    fixture_drift = any(not row["deterministic_match"] for row in rows)
+    pipeline_drift = any(not result["matches_expectation"] for result in pipeline_results)
+    return EXIT_DRIFT if fixture_drift or pipeline_drift else EXIT_ALL_MATCH
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def main() -> int:
     """Run the fixture regression suite (and, optionally, the judge lane and/or
-    a live retrieval-pipeline check) and print it.
+    a live retrieval-pipeline check), print it, and return the exit code.
 
     No flags at all: deterministic-only, over FROZEN fixture captures, no
     network, no `OPENROUTER_API_KEY` required - this is the command a
@@ -1235,6 +1278,11 @@ def main() -> None:
     checks whether it still finds what each case expects - see
     `verify_retrieval_pipeline`'s own module comment for why this is a
     third, separate lane rather than folded into either of the other two.
+
+    Day 24: the return value is the process exit code (see `gate_exit_code`):
+    0 when every checked expectation still holds, 1 on any drift, and 2 when
+    `--verify-retrieval` cannot load its models (nothing was checked). The
+    `__main__` block below hands it to `sys.exit`, which is what CI reads.
     """
     parser = argparse.ArgumentParser(
         description="Day 14: CI-safe FIXTURE regression suite over Q001/Q004/Q091/Q093/Q016 plus a "
@@ -1278,12 +1326,27 @@ def main() -> None:
     if regressions:
         print(f"\n{len(regressions)} case(s) no longer match their expected state:")
         for row in regressions:
-            print(f"  - {row['case_id']}: expected {row['expected_missing_primary_doc_ids']!r}, "
-                  f"got {row['missing_primary_doc_ids']!r} "
-                  f"(citation expected={row['expected_citation_status']!r}, "
-                  f"got={row['citation_status']!r})")
+            # Day 24: name only the fields that actually moved. The old message
+            # always printed the document lists, so a chunk- or term-level
+            # drift read "expected [], got []" in a red CI log.
+            moved = [
+                field
+                for field in ("missing_primary_doc_ids", "citation_status", "missing_chunk_ids", "missing_terms")
+                if row[field] != row[f"expected_{field}"]
+            ]
+            for field in moved:
+                print(f"  - {row['case_id']}: {field} expected {row[f'expected_{field}']!r}, "
+                      f"got {row[field]!r}")
+            if not moved:
+                # E.g. the refusal case: its verdict also depends on the refusal
+                # text itself, which is not one of the four fields above.
+                print(f"  - {row['case_id']}: deterministic check failed; see its row and notes above")
     else:
         print("\nAll cases match their currently expected state (frozen fixtures).")
+
+    # Stays empty unless --verify-retrieval runs, so `gate_exit_code` then
+    # judges the fixture lane alone.
+    pipeline_results = []
 
     if args.verify_retrieval:
         print("\nVerifying against the CURRENT retrieval pipeline (loads the full corpus and two "
@@ -1294,12 +1357,21 @@ def main() -> None:
         from reranking import load_cross_encoder
         from semantic_search import load_embedding_model
 
-        data = load_data()
-        chunks = chunk_corpus(data)
-        embedding_model = load_embedding_model()
-        chunk_lexical_index = build_chunk_lexical_index(chunks)
-        chunk_semantic_index = build_chunk_semantic_index(chunks, embedding_model)
-        cross_encoder_model = load_cross_encoder()
+        try:
+            data = load_data()
+            chunks = chunk_corpus(data)
+            embedding_model = load_embedding_model()
+            chunk_lexical_index = build_chunk_lexical_index(chunks)
+            chunk_semantic_index = build_chunk_semantic_index(chunks, embedding_model)
+            cross_encoder_model = load_cross_encoder()
+        except Exception as error:
+            # Day 24: a model that cannot be downloaded or loaded is "could not
+            # check" (2), not drift (1). Same convention as graph_regression.py,
+            # so a red CI step's exit code already names the failure layer.
+            print(f"INFRASTRUCTURE: the retrieval pipeline could not be built: "
+                  f"{type(error).__name__}: {error}")
+            print(f"\nexit code: {EXIT_INFRASTRUCTURE} (could not check the current pipeline)")
+            return EXIT_INFRASTRUCTURE
 
         pipeline_results = verify_retrieval_pipeline(
             REGRESSION_CASES + [CITATION_NEGATIVE_CASE],
@@ -1327,6 +1399,10 @@ def main() -> None:
         else:
             print("\nThe current retrieval pipeline still matches every case's expectation.")
 
+    exit_code = gate_exit_code(rows, pipeline_results)
+    print(f"\nexit code: {exit_code} ({'drift found' if exit_code else 'all expectations hold'})")
+    return exit_code
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

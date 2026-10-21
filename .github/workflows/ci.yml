@@ -1,0 +1,189 @@
+# CI: the deterministic merge gate (Day 24).
+#
+# Three jobs, three different claims. Each one fails ONLY through a non-zero
+# exit code, because that is the only thing GitHub reads:
+#
+#   fast-deterministic          no models, no network calls in the code under test:
+#                               locked install, pytest, compileall, Ruff, frozen fixture regression
+#   model-backed-deterministic  the two real local models: current retrieval pipeline
+#                               + graph route contracts (Q001/Q005/Q091/Q092/Q012)
+#   docker-build-smoke          the real linux/amd64 image, built here, started, and smoked
+#
+# What this workflow never does: use a secret, call an LLM provider, send a
+# LangSmith trace, push an image, or deploy. Those live in separately
+# triggered, protected workflows (see live-eval.yml).
+#
+# The local commands in docs/learning-log.md (Day 24, "Exact local command
+# map") are the same commands as the `run:` lines below, so a red job can be
+# reproduced on a laptop.
+
+name: CI
+
+on:
+  # `pull_request` (NOT `pull_request_target`): the PR's code runs with a
+  # read-only token and no repository secrets. `pull_request_target` would run
+  # in the context of the base branch, WITH secrets and a write-capable token,
+  # which is exactly the wrong place to execute code from a PR.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege for the automatic GITHUB_TOKEN: every job can read the
+# repository and nothing else. No job here needs more.
+permissions:
+  contents: read
+
+# One concurrency group per PR (its number) and one per pushed commit (its
+# SHA). A new push to the same PR cancels the older, superseded run: nobody
+# needs its result any more. Pushes to main each get their own group, so a
+# commit on main is never cancelled by the next one and every main commit
+# keeps its own evidence.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+# The no-paid / no-trace contract, stated explicitly instead of trusting the
+# runner's defaults or the absence of a `.env` file. OMP_NUM_THREADS=1 bounds
+# the model runtime's threads (the Day 24 kickoff saw an exit 132 without it).
+# DEEPEVAL_TELEMETRY_OPT_OUT: deepeval is installed as a pytest plugin, and
+# its usage analytics (PostHog) are on unless switched off.
+env:
+  PROCURERAG_LIVE_LLM: "0"
+  LANGSMITH_TRACING: "false"
+  LANGSMITH_TRACING_V2: "false"
+  DEEPEVAL_TELEMETRY_OPT_OUT: "1"
+  OMP_NUM_THREADS: "1"
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  fast-deterministic:
+    name: fast-deterministic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # Every `uses:` is pinned to a full commit SHA (tags can be moved; a SHA
+      # cannot). The release tag stays in the comment for humans.
+      - name: Check out the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Do not leave the token in .git/config: no later step pushes.
+          persist-credentials: false
+
+      - name: Install uv 0.12.2 (the version that wrote uv.lock, same as the Dockerfile)
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.2"
+          # Caches uv's download cache, keyed on uv.lock. Speed only: the
+          # locked sync below still decides what gets installed.
+          enable-cache: true
+
+      - name: Install Python from .python-version (3.11, not the runner's default)
+        run: uv python install
+
+      - name: Install exactly the locked dependencies
+        # --locked fails if pyproject.toml and uv.lock disagree, instead of
+        # quietly re-resolving to whatever versions are newest today.
+        run: uv sync --locked --dev
+
+      - name: Show the interpreter under test
+        run: uv run python --version
+
+      - name: pytest
+        run: uv run pytest -q
+
+      - name: compileall
+        run: uv run python -m compileall -q src tests scripts
+
+      - name: Ruff
+        run: uv run python -m ruff check src tests scripts
+
+      - name: Frozen fixture regression
+        run: uv run python src/regression_suite.py
+
+  model-backed-deterministic:
+    name: model-backed-deterministic
+    # Only after the fast lane is green: a model-backed failure is then known
+    # NOT to be a plain unit-test or lint problem.
+    needs: fast-deterministic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv 0.12.2
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.2"
+          enable-cache: true
+
+      - name: Install Python from .python-version
+        run: uv python install
+
+      - name: Install exactly the locked dependencies
+        run: uv sync --locked --dev
+
+      # The two models (MiniLM, TinyBERT; ~106 MB) are downloaded from the
+      # Hugging Face Hub on first load. No HF token and no other secret:
+      # both are public. Not cached on purpose (see the learning log): every
+      # run re-checks whatever revision the Hub serves today.
+      - name: Current retrieval pipeline verification
+        run: uv run python src/regression_suite.py --verify-retrieval
+
+      - name: Graph route regression
+        run: uv run python src/graph_regression.py
+
+      - name: Record which model snapshots were tested
+        # `always()`: also useful when a step above failed (drift or download).
+        if: always()
+        run: grep -H . ~/.cache/huggingface/hub/models--*/refs/main || echo "no model snapshot was downloaded"
+
+  docker-build-smoke:
+    name: docker-build-smoke
+    needs: fast-deterministic
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # One per-commit tag for the image this job builds AND tests.
+      # (Interpolated here, in `env`, and read as "$IMAGE" in the shell.)
+      # On a pull request, `github.sha` is GitHub's test MERGE commit (the PR
+      # merged into main), not the PR branch's head commit. That is what CI
+      # tests on a PR, so evidence should record both SHAs.
+      IMAGE: procurerag-api:ci-${{ github.sha }}
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build the linux/amd64 image (load locally, never push)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          # Load the result into the runner's Docker engine, so the next step
+          # runs THIS image, not a rebuild of it.
+          load: true
+          tags: ${{ env.IMAGE }}
+          # Layer cache: every run may READ it. Only a push to main (trusted,
+          # reviewed code) WRITES it, so a PR can never plant layers that a
+          # later main build would reuse. A cache hit only saves time; the
+          # smoke below is still what proves the image works. For the same
+          # reason, `ignore-error=true`: a failed cache WRITE must not turn a
+          # good build red. The cache never gates, in either direction.
+          cache-from: type=gha
+          cache-to: ${{ github.event_name == 'push' && 'type=gha,mode=max,ignore-error=true' || '' }}
+
+      - name: Record the tested image identity
+        run: docker image inspect "$IMAGE" --format 'tag='"$IMAGE"' id={{.Id}} platform={{.Os}}/{{.Architecture}} size={{.Size}} bytes'
+
+      - name: Container smoke (health, Q001, Q091 pending approval, off-topic blocked, logs)
+        run: python3 scripts/container_smoke.py "$IMAGE"
