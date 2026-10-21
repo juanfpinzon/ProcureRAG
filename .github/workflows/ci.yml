@@ -11,7 +11,7 @@
 #
 # What this workflow never does: use a secret, call an LLM provider, send a
 # LangSmith trace, push an image, or deploy. Those live in separately
-# triggered, protected workflows (see live-eval.yml).
+# triggered, protected workflows (see live-eval.yml and deploy.yml).
 #
 # The local commands in docs/learning-log.md (Day 24, "Exact local command
 # map") are the same commands as the `run:` lines below, so a red job can be

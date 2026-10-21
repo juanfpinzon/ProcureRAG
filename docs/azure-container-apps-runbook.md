@@ -648,6 +648,131 @@ export IMAGE="$ACR_NAME.azurecr.io/procurerag-api@sha256:<the day23 digest recor
 
 With multiple revision mode, the alternative is to keep the old revision active and move traffic back to it (`az containerapp ingress traffic set --revision-weight <old-revision>=100`). That is instant, but it is more setup than a one-replica smoke needs.
 
+## 10b. Day 24: deploy from GitHub Actions with OIDC
+
+Steps 3 to 5 deploy from this laptop, signed in as you. [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml) does the same job from GitHub, and no Azure password or client secret is stored anywhere. Instead, Azure trusts one specific kind of GitHub job: a job of THIS repository running in its `production` environment. This section is the one-time setup for that trust, then how to run a deployment and roll it back.
+
+It assumes steps 1 to 6 already ran. On 2026-10-21 they ran with these names, which are also written in the workflow's `env:` block (change both together):
+
+```bash
+export LOCATION=northeurope
+export RESOURCE_GROUP=rg-procurerag-day24
+export CONTAINERAPP_ENV=cae-procurerag-day24
+export CONTAINERAPP_NAME=procurerag-api
+export ACR_NAME=procureragday24jp
+export DEPLOY_IDENTITY=id-procurerag-github-deploy   # the identity GitHub signs in as
+export GITHUB_REPO=juanfpinzon/ProcureRAG
+```
+
+### What trusts what
+
+| Piece | Where it lives | What it allows |
+|---|---|---|
+| User-assigned managed identity `id-procurerag-github-deploy` | the resource group | nothing on its own |
+| Federated credential `github-production` | on that identity | Microsoft Entra ID accepts a GitHub OIDC token in place of a password, but only a token whose subject is this repository's `production` environment |
+| `AcrPush` | the registry only | push (and pull) images in that one registry |
+| `Contributor` | the container app only | read and update that one app (and delete it). Nothing else in the subscription |
+| GitHub environment `production` | the repository's settings | only `main` may use it, and a reviewer must approve each run. Only then does the job receive the three Azure ids |
+
+- **Why a managed identity, not an app registration.** Both can hold a federated credential. The managed identity lives inside the resource group, so step 11's `az group delete` removes it too, and nothing is left behind in Entra ID. And it cannot have a client secret at all.
+- **Why `Contributor` on the app, not `Container Apps Contributor`.** The deploy needs exactly two calls on the app: `az containerapp update --yaml` sends a `GET` and a `PATCH` to `Microsoft.App/containerApps` (checked in the Azure CLI 2.91.0 source, core module). `Container Apps Contributor` lists `Microsoft.App/containerApps/*/write`, and that pattern probably matches only child resources. Microsoft's own roles list `managedEnvironments/read` next to `managedEnvironments/*/read`, and `jobs/write` next to their `jobs/*/...` patterns. They would not need both if `/*/` also matched the resource itself. This was not tested. `Contributor` certainly allows both calls, and its scope, this one app, is the real limit. A custom role with only `containerApps/read`, `containerApps/write`, and `containerApps/revisions/read` would be tighter. That would be the next step for a deployment meant to last.
+- **Why `AcrPush` is enough for `az acr login`.** The identity cannot read the registry's settings, so the CLI cannot look up its login server. It then falls back to `<name>.azurecr.io` (checked in the CLI source) and exchanges the sign-in for a registry token. That exchange is what `AcrPush` allows.
+
+### 1. The identity (creates an Azure resource)
+
+```bash
+az identity create --name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" --location "$LOCATION" \
+  --tags project=procurerag day=24 purpose=github-actions-deploy -o none
+```
+
+### 2. The federated credential (creates the trust)
+
+```bash
+# The subject GitHub will write into the deploy job's token. Read it from GitHub instead of typing it:
+# repositories created after 2026-07-15 use the immutable format, with the owner and repository ids.
+SUB_PREFIX=$(gh api "repos/$GITHUB_REPO/actions/oidc/customization/sub" --jq .sub_claim_prefix)
+echo "$SUB_PREFIX:environment:production"
+# expect: repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production
+
+az identity federated-credential create --name github-production \
+  --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" \
+  --issuer https://token.actions.githubusercontent.com \
+  --subject "$SUB_PREFIX:environment:production" \
+  --audiences api://AzureADTokenExchange -o none
+
+az identity federated-credential list --identity-name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" \
+  --query '[].{name:name, issuer:issuer, subject:subject, audiences:audiences}' -o json
+```
+
+- The issuer is GitHub's token service. The audience is the default that `azure/login` asks for.
+- Entra ID compares the subject character by character. The name-only form `repo:juanfpinzon/ProcureRAG:environment:production` is what GitHub documented for years, and what the Day 24 plan first wrote down. It would never match a token from this repository, and every sign-in would be refused.
+- With the ids in the subject, a repository created later under the same name (after a rename or a deletion) cannot reuse this trust: its ids would differ.
+
+### 3. The two role assignments (grants permissions)
+
+```bash
+PRINCIPAL_ID=$(az identity show --name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" --query principalId -o tsv)
+ACR_ID=$(az acr show --name "$ACR_NAME" --query id -o tsv)
+APP_ID=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --query id -o tsv)
+
+az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
+  --role AcrPush --scope "$ACR_ID" -o none
+az role assignment create --assignee-object-id "$PRINCIPAL_ID" --assignee-principal-type ServicePrincipal \
+  --role Contributor --scope "$APP_ID" -o none
+
+# Expect exactly two rows: AcrPush on the registry, Contributor on the app. (sed hides the subscription id.)
+az role assignment list --assignee-object-id "$PRINCIPAL_ID" --all \
+  --query '[].{role:roleDefinitionName, scope:scope}' -o table | sed -E 's#/subscriptions/[^/]+#/subscriptions/<sub>#'
+```
+
+- A managed identity is a service principal. Passing `--assignee-principal-type ServicePrincipal` skips a Microsoft Graph lookup, which can fail for a few minutes after the identity is created.
+- A new role assignment can take a few minutes to take effect.
+
+### 4. The GitHub environment `production` and its three ids
+
+```bash
+# The same protection as `live-eval`: you are the required reviewer, and only `main` may deploy.
+REVIEWER_ID=$(gh api user --jq .id)
+gh api --method PUT "repos/$GITHUB_REPO/environments/production" --input - <<EOF
+{"reviewers": [{"type": "User", "id": $REVIEWER_ID}], "prevent_self_review": false,
+ "deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+EOF
+gh api --method POST "repos/$GITHUB_REPO/environments/production/deployment-branch-policies" -f name=main -f type=branch
+
+# The three ids, read from Azure and handed straight to GitHub
+gh secret set AZURE_CLIENT_ID --env production --repo "$GITHUB_REPO" \
+  --body "$(az identity show --name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" --query clientId -o tsv)"
+gh secret set AZURE_TENANT_ID --env production --repo "$GITHUB_REPO" --body "$(az account show --query tenantId -o tsv)"
+gh secret set AZURE_SUBSCRIPTION_ID --env production --repo "$GITHUB_REPO" --body "$(az account show --query id -o tsv)"
+
+gh secret list --env production --repo "$GITHUB_REPO"        # names only: expect the three above
+```
+
+- `prevent_self_review: false`: in a one-person repository, the person who starts the run must also be allowed to approve it.
+- The three ids are not passwords. None of them lets anyone sign in without a token from this repository's `production` environment. They are stored as secrets for two reasons: GitHub masks secret values in the Actions logs, which are public for this repository, and an environment secret only reaches the job after the approval.
+
+### 5. Run a deployment
+
+1. Merge to `main`, and wait for CI's run on that push to finish green. The workflow's first job, `ci-passed-for-this-commit`, looks that run up and refuses to continue without it. Nobody is even asked to approve.
+2. Start it: `gh workflow run deploy.yml --ref main` (or Actions → Deploy → Run workflow).
+3. Approve the `production` deployment on the run's page ("Review deployments").
+4. Read the job summary: the pushed tag, the deployed digest, the previous revision, the rollback handle, and the new revision.
+
+The workflow's own comments explain each of its 8 steps.
+
+### 6. Roll back
+
+The job summary's rollback handle is the previous image, named by its digest. Rolling back means deploying that digest again with the same template: step 5 of this runbook, with `IMAGE` set by hand instead of read back from the app:
+
+```bash
+export IMAGE="<rollback handle from the job summary>"     # ...azurecr.io/procurerag-api@sha256:...
+# then step 5's render-and-update commands, then step 7's smoke:
+python3 scripts/container_smoke.py --url "https://$(az containerapp show --name "$CONTAINERAPP_NAME" \
+  --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
+```
+
+This creates a new revision running the old image, and traffic moves to it once it is ready. Nothing is rebuilt, so the rollback runs exactly the bytes that ran before.
+
 ## 11. Clean up
 
 **(deletes Azure resources: everything in the resource group)**
@@ -676,6 +801,15 @@ docker logout "$ACR_NAME.azurecr.io"     # forget the registry token
 ```
 
 Never point `az group delete` at a group you did not create for this deployment.
+
+After step 10b, two more things exist:
+
+- The deploy identity, its federated credential, and its two role assignments. The identity is inside the group, so the group deletion removes it, and the credential goes with it. The role assignments are stored on their scopes (the registry, the app), so they are expected to go with those resources. Check rather than assume, once the group is gone:
+
+  ```bash
+  az role assignment list --all --query "[?contains(scope, '$RESOURCE_GROUP')].roleDefinitionName" -o tsv   # expect: no output
+  ```
+- On GitHub: the `production` environment and its three secrets. They point at an identity that no longer exists, so they can no longer sign anyone in. Keep them for the next re-run of this runbook (then update `AZURE_CLIENT_ID`: a new identity has a new client id), or delete the environment: `gh api --method DELETE "repos/$GITHUB_REPO/environments/production"`.
 
 ## Troubleshooting
 

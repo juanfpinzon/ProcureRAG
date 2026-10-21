@@ -1,0 +1,244 @@
+# Deploy: promote ONE tested image to the Azure Container App (Day 24).
+#
+# The protected deployment lane. ci.yml never deploys and never holds a cloud
+# credential; this workflow is the only place that can change Azure, and it
+# can only do so:
+#
+#   - when a person starts it (`workflow_dispatch`), on `main`;
+#   - after CI has passed on that exact commit (job `ci-passed`);
+#   - after a reviewer approves the `production` environment (job `deploy`);
+#   - with a short-lived OIDC sign-in: no Azure password or client secret
+#     exists anywhere, in GitHub or in Azure.
+#
+# The `deploy` job, in order:
+#
+#   1. build the linux/amd64 image of this commit, once;
+#   2. smoke THAT image on the runner (scripts/container_smoke.py, image mode);
+#   3. sign in to Azure, and push the same image as :<commit sha>;
+#   4. read its digest back from the registry (the immutable handle);
+#   5. record what the app runs now (the rollback handle);
+#   6. update the app to the DIGEST, through the repo's revision template;
+#   7. wait until Azure reports the new revision ready, running that digest;
+#   8. smoke the new revision through its public URL (URL mode).
+#
+# The paid live eval (live-eval.yml) is NOT a gate here: its pass/fail rule
+# has no retry or false-positive policy yet (see docs/learning-log.md, Day 24).
+#
+# Prerequisites, made once by hand (docs/azure-container-apps-runbook.md,
+# "Day 24: deploy from GitHub Actions"): the Azure resources below; a
+# user-assigned managed identity that trusts this repository's `production`
+# environment (federated credential) and holds AcrPush on the registry and
+# Contributor on the one app; and the GitHub environment `production` (main
+# only, a required reviewer) holding the three Azure ids as secrets.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+
+# Least privilege by default. Each job below states exactly what it adds.
+permissions:
+  contents: read
+
+# Naming the shell makes GitHub run every `run:` step with `bash -eo pipefail`
+# (the unnamed default is `bash -e`, without pipefail). With pipefail, a
+# failure inside a pipeline, e.g. `docker buildx imagetools inspect ... | jq`,
+# fails the step instead of passing an empty value to the next command.
+defaults:
+  run:
+    shell: bash
+
+# One deployment at a time, and never cancel one halfway: an interrupted
+# deploy could leave the app between two revisions. A second run waits.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+# The Day 24 target (runbook step 1). Names, not credentials: they are visible
+# in Azure's URLs and resource ids anyway.
+env:
+  AZURE_RESOURCE_GROUP: rg-procurerag-day24
+  ACR_NAME: procureragday24jp
+  CONTAINERAPP_NAME: procurerag-api
+  # One tag per commit. A tag can be moved later; the digest read back in
+  # step 4 cannot, so the app is updated by digest, never by this tag.
+  IMAGE: procureragday24jp.azurecr.io/procurerag-api:${{ github.sha }}
+
+jobs:
+  ci-passed:
+    name: ci-passed-for-this-commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read # read the CI workflow's runs; nothing else (no checkout needed)
+    steps:
+      - name: Only main may be deployed
+        # The `production` environment's branch rule enforces the same thing
+        # for the deploy job. This step fails earlier, before anyone is asked
+        # to approve.
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Deploy runs only on main, not on $GITHUB_REF."
+          exit 1
+
+      - name: Refuse unless CI passed on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # The newest CI run triggered by the push of THIS commit to main.
+          # Its conclusion is "success" only if all three jobs passed. While
+          # it is still running, the conclusion is empty.
+          run=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 \
+            --json conclusion,url --jq '.[0] // {}')
+          conclusion=$(echo "$run" | jq -r '.conclusion // "no run found"')
+          echo "CI on $GITHUB_SHA: ${conclusion:-still running} $(echo "$run" | jq -r '.url // ""')"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI has not passed on this commit (${conclusion:-still running}). Deploy refused."
+            exit 1
+          fi
+
+  deploy:
+    name: deploy
+    needs: ci-passed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # A reviewer must approve before this job starts, and only then are the
+    # environment's secrets (the three Azure ids) available to it.
+    environment: production
+    permissions:
+      contents: read # check out the commit
+      id-token: write # let azure/login request this job's OIDC token. No other job has it.
+    steps:
+      - name: Check out the commit to deploy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: 1. Build the linux/amd64 image (load locally; pushed only after the smoke)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.IMAGE }}
+          # Read the layer cache that CI's pushes to main wrote; never write it.
+          cache-from: type=gha
+
+      - name: 2. Container smoke on the runner (the exact image about to be pushed)
+        run: python3 scripts/container_smoke.py "$IMAGE"
+
+      - name: 3a. Sign in to Azure with OIDC (no client secret exists)
+        # azure/login asks GitHub for this job's OIDC token and exchanges it
+        # with Microsoft Entra ID. The exchange succeeds only if the token's
+        # subject matches the identity's federated credential:
+        # repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production
+        # (this repository's immutable subject format: owner and repo ids).
+        # The three ids are secrets only so GitHub masks them in this public log.
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Record the Azure CLI version (preinstalled on the runner, not pinned)
+        run: az version --query '"azure-cli"' -o tsv
+
+      - name: 3b-4. Push the smoked image, then read its digest from the registry
+        run: |
+          # A registry token for Docker, from the OIDC sign-in above. The
+          # identity holds AcrPush on this one registry and nothing else there.
+          az acr login --name "$ACR_NAME"
+          docker push "$IMAGE"
+
+          # Ask the REGISTRY what the tag now points to: that digest is what
+          # Azure will pull. It must look like sha256:<64 hex characters>.
+          digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -r .digest)
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Could not read a digest for $IMAGE (got: $digest)."
+            exit 1
+          fi
+          echo "DEPLOY_IMAGE=$ACR_NAME.azurecr.io/procurerag-api@$digest" >> "$GITHUB_ENV"
+          {
+            echo "### Deploy $GITHUB_SHA"
+            echo "- pushed tag: \`$IMAGE\`"
+            echo "- deployed by digest: \`$ACR_NAME.azurecr.io/procurerag-api@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 5. Record the rollback handle (what the app runs right now)
+        run: |
+          previous_image=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query 'properties.template.containers[0].image' -o tsv)
+          previous_revision=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.latestReadyRevisionName -o tsv)
+          # The app may name its image by a tag (e.g. the hand-made first
+          # deployment). Resolve it to the digest the tag points to NOW, so
+          # the handle cannot move. `${previous_image%%[:@]*}` is the image
+          # name without its :tag or @digest.
+          previous_digest=$(docker buildx imagetools inspect "$previous_image" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "PREVIOUS_REVISION=$previous_revision" >> "$GITHUB_ENV"
+          {
+            echo "- previous revision: \`$previous_revision\`, image \`$previous_image\`"
+            echo "- rollback handle: \`${previous_image%%[:@]*}@$previous_digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 6. Update the app to the digest, through the revision template
+        run: |
+          # The same template and the same command as the runbook's step 5,
+          # so the deployed revision always matches the reviewed file: CPU,
+          # memory, env (no key, live LLM off), probes, and scale limits.
+          rendered="$RUNNER_TEMP/containerapp.yaml"
+          sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$DEPLOY_IMAGE|" \
+            deploy/azure/containerapp-template.yaml > "$rendered"
+          if grep -q '__' "$rendered"; then
+            echo "::error::A placeholder in the template was not filled."
+            exit 1
+          fi
+          # `--output none`: the full answer would print resource ids and the
+          # app's URL into this public log.
+          az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --yaml "$rendered" --output none
+
+      - name: 7. Wait until Azure reports the new revision ready, running that digest
+        run: |
+          new_revision=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.latestRevisionName -o tsv)
+          running_image=$(az containerapp revision show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision "$new_revision" --query 'properties.template.containers[0].image' -o tsv)
+          if [ "$running_image" != "$DEPLOY_IMAGE" ]; then
+            echo "::error::$new_revision runs $running_image, not $DEPLOY_IMAGE."
+            exit 1
+          fi
+
+          # Single revision mode: the previous revision keeps all traffic
+          # until the new one passes its probes. Wait up to 10 minutes (the
+          # startup probe alone allows about 160 s).
+          for _ in $(seq 60); do
+            ready=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query properties.latestReadyRevisionName -o tsv)
+            [ "$ready" = "$new_revision" ] && break
+            sleep 10
+          done
+          az containerapp revision show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision "$new_revision" \
+            --query '{revision:name, active:properties.active, traffic:properties.trafficWeight, health:properties.healthState, running:properties.runningState}' \
+            -o json
+          if [ "$ready" != "$new_revision" ]; then
+            echo "::error::$new_revision was not ready after 10 minutes. $PREVIOUS_REVISION keeps serving."
+            exit 1
+          fi
+          echo "- new revision: \`$new_revision\` (ready)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 8. Smoke the new revision through its public URL
+        run: |
+          fqdn=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          # Hide the URL in this public log: the endpoint has no authentication.
+          echo "::add-mask::$fqdn"
+          python3 scripts/container_smoke.py --url "https://$fqdn"
+          echo "- post-deploy smoke: passed" >> "$GITHUB_STEP_SUMMARY"

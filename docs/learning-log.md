@@ -6604,7 +6604,8 @@ Juan read every source below (confirmed 2026-10-21). Each takeaway was checked a
   - [x] Job-scoped `id-token: write`.
   - ProcureRAG takeaway:
     - **No cloud secret in GitHub:** the cloud provider "issues a short-lived access token that is only valid for a single job". A leaked workflow log or a forked PR has no reusable Azure password to steal.
-    - **Claims scope the trust:** the token carries `sub`, `environment`, `ref`, `sha`, `repository`, `job_workflow_ref`, and more. With an environment, the subject looks like `repo:octo-org/octo-repo:environment:prod`. ProcureRAG's planned subject is `repo:juanfpinzon/ProcureRAG:environment:production`: only a job in the `production` environment (which only `main` may use) can get Azure access.
+    - **Claims scope the trust:** the token carries `sub`, `environment`, `ref`, `sha`, `repository`, `job_workflow_ref`, and more. With an environment, the subject looks like `repo:octo-org/octo-repo:environment:prod`. Only a job in the `production` environment (which only `main` may use) should get Azure access.
+    - **Correction (2026-10-21, while building the deploy lane):** the subject first planned here, `repo:juanfpinzon/ProcureRAG:environment:production`, is WRONG for this repository. GitHub's API reports `use_immutable_subject: true` and the prefix `repo:juanfpinzon@32948087/ProcureRAG@1356961914`. Repositories created after 2026-07-15 get the immutable format by default: names plus the owner and repository ids. A rename, transfer, or new repository under the same name then cannot match an old trust. The real subject is therefore `repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production`. Entra ID compares it exactly, so the planned subject would have refused every sign-in. Lesson: read the subject from `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`, never from an example.
     - **`id-token: write` belongs on the deploy job only.** No Day 24 workflow requests it, because there is no deploy job.
 - [x] Microsoft Learn — `Use the Azure Login action with OpenID Connect`.
   - [x] Federated identity credential.
@@ -6614,6 +6615,7 @@ Juan read every source below (confirmed 2026-10-21). Each takeaway was checked a
     - **Where the identifiers live:** the page stores them as GitHub secrets, and for public repositories recommends "environment secrets instead of repository secrets" because "a job cannot access environment secrets until one of the required reviewers approves it". For ProcureRAG (public) that means the `production` environment, not repository secrets.
     - **Job-level permission, with the syntax rule:** the samples set `permissions: id-token: write` on the job. Combined with the workflow-syntax rule above, ProcureRAG's deploy job needs `id-token: write` AND `contents: read`.
     - **Role:** the page only says "assign an appropriate role". ProcureRAG's least-privilege plan: `AcrPush` on the one registry, plus a role that can update the one container app, scoped to that app, not to the resource group or the subscription. The samples use `azure/login@v2` by tag; ProcureRAG would pin it by SHA.
+    - **Built 2026-10-21:** `AcrPush` on the registry and `Contributor` on the app. `Container Apps Contributor` lists `Microsoft.App/containerApps/*/write`, which most likely covers only child resources, and the deploy needs `containerApps/write` itself (the reasoning is in the Azure runbook, step 10b; not tested). `azure/login` is pinned to v3.1.0 by SHA. The identity is a user-assigned managed identity, the page's second option, so it is deleted with the resource group.
 - [x] Microsoft Learn — `Deploy to Azure Container Apps with GitHub Actions`.
   - [x] Build versus existing-image deployment.
   - [x] SHA tag/digest, ACR push auth, and managed-identity pull.
@@ -6727,6 +6729,8 @@ The kickoff's exit 132 did not reproduce on the Mac (every model-backed run toda
 
 Final workflow split: **two files**. `.github/workflows/ci.yml` is the deterministic gate (pull requests and pushes to `main`, no secret). `.github/workflows/live-eval.yml` is the paid, manual, protected lane. There is **no `deploy.yml`**: Day 23's resources are deleted, and a deploy workflow that has never run would invite exactly the "implied passed" claim the route forbids. Two files make the secret boundary auditable at a glance: nothing in `ci.yml` can name `OPENROUTER_API_KEY`.
 
+Update 2026-10-21: Juan recreated the Azure target (`rg-procurerag-day24`, from the Day 23 runbook), so a third file now exists: `.github/workflows/deploy.yml`, the protected promotion lane (see "Azure deployment/promotion evidence"). It names no provider key either. Its only credential is a per-job OIDC token, and only its `deploy` job may request one.
+
 Pinned Python: `.python-version` = `3.11`, installed by `uv python install` (uv reads the file). The runner's default `python3` (3.12 on `ubuntu-24.04`) is never used for the project. Measured on the runner: uv 0.12.2 installed **CPython 3.11.15** (`cpython-3.11.15-linux-x86_64-gnu`, in 1.08 s), and `uv sync` reported `Using CPython 3.11.15`. Local `.venv`: 3.11.7. Docker image: 3.11.17.
 
 Pinned uv: `0.12.2` in CI (`setup-uv` `version:`), in the `Dockerfile` (`ghcr.io/astral-sh/uv:0.12.2`), and on this Mac. One uv version everywhere.
@@ -6739,6 +6743,9 @@ Action pins reviewed against their source repositories: done, 2026-10-20. Each S
 | `astral-sh/setup-uv` | v10.3.0 | `1c37ad07a6a961277cf70c0d37d6f313000f5884` | 2026-10-09 | yes |
 | `docker/setup-buildx-action` | v4.4.1 | `f87e5991a6d7451dcb8d9637bfbc97413f497069` | 2026-09-16 | yes |
 | `docker/build-push-action` | v7.4.0 | `c3c9e263c25d99ce0380d002d59b67737d91b0dc` | 2026-09-15 | yes |
+| `azure/login` (deploy.yml, added 2026-10-21) | v3.1.0 | `a641126d1b8aa4d1fa005f4f92df94a3a4c4c906` | 2026-09-10 | **no**: unsigned |
+
+`azure/login` is the one exception to "verified". Its tag and release commit were both made by `github-actions[bot]` and are unsigned. The commit is the head of Azure's `releases/v3.1.0` branch, and on top of a `master` commit it only adds the compiled `lib/` files: `lib/main/index.js`, `lib/cleanup/index.js`, and `lib/main/AzPSLogin.ps1`. That is how this action's release workflow publishes. The SHA pin still fixes the exact code that runs. What is missing is a signature saying who produced it.
 
 Branch protection required checks: `fast-deterministic`, `model-backed-deterministic`, `docker-build-smoke`, each pinned to the GitHub Actions app (`app_id` 15368), so a status with the same name from any other source cannot satisfy it. Status: **configured on 2026-10-21**, after PR #1's checks had run once (GitHub only offers check names it has already seen). The rule: `strict: true` (a PR must be up to date with `main`); `enforce_admins: true` (Juan's choice: the rule binds the admin too); force pushes and branch deletion off; no required review (one-person repo). Proof: a direct push of an empty commit to `main` was refused with `GH006: Protected branch update failed for refs/heads/main. - 3 of 3 required status checks are expected.` The local commit was then dropped.
 
@@ -6746,7 +6753,7 @@ Docker PR-versus-push policy and measured reason: **run on every PR and every pu
 
 Live case/call budget: 3 cases (Q001, Q091, Q092 rejected), **at most 2 logical LLM calls per run**, enforced in code (`LIVE_LLM_CALL_BUDGET`: a third call is refused before it is made, and counted as a contract failure). Below that, the OpenAI SDK retries a failed request up to 2 more times on its own (`max_retries=2` default, 60 s timeout per attempt), so the worst case is 6 HTTP requests. The model is written in the workflow file (`OPENROUTER_MODEL: openai/gpt-4o`).
 
-Deployment status today: **deferred because there is no target infrastructure**. Not implemented, not exercised.
+Deployment status on 2026-10-20: **deferred because there is no target infrastructure**. Not implemented, not exercised. On 2026-10-21: target recreated, `deploy.yml` written and checked locally, **not yet run** (see "Azure deployment/promotion evidence").
 
 The route doc's gate matrix, with "recommended", "selected policy", and "explicit policy" replaced by the final behavior:
 
@@ -6763,8 +6770,8 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 | container API smoke | yes, on the image just built | yes | no | n/a | none | yes | yes |
 | Q001/Q091 live graph answer eval | no | no | explicit dispatch on `main`, `live-eval` environment | not a deploy gate yet | `OPENROUTER_API_KEY` (environment secret, one step) | no | no today: becomes a gate only with an explicit retry and false-positive policy |
 | Q092 bounded-abstention live check | no | no | explicit, same run | same | the key is present, and must stay unused (0 calls) | no | no today |
-| image push | no | no | no | deferred | none exists | no | not built |
-| Azure revision update + smoke | no | no | no | deferred | none exists (OIDC planned) | no | not built |
+| image push | no | no | no | `deploy.yml` only: after CI passed on the commit, a reviewer approved, and the image passed its container smoke | Azure OIDC (`production` environment) | no | yes (built 2026-10-21, not yet run) |
+| Azure revision update + smoke | no | no | no | `deploy.yml` only, by digest through the template, then URL smoke | Azure OIDC (`production` environment) | no | yes (built 2026-10-21, not yet run) |
 
 | Check/job | Trigger | Secrets? | Expected exit/failure rule | Blocks merge? | Blocks deploy? | Final evidence |
 |---|---|---|---|---:|---:|---|
@@ -6778,7 +6785,7 @@ The route doc's gate matrix, with "recommended", "selected policy", and "explici
 | Docker build | PR + push (`docker-build-smoke`) | none | image build failure -> non-zero | yes | yes (design) | local arm64; remote `linux/amd64` 108 s (no cache), 158 s on the push to `main` (cache written) |
 | container API smoke | PR + push (`docker-build-smoke`) | none | contract/log failure -> exit 1; never healthy -> exit 2; cleanup always | yes | yes (design) | local exit 0; exit 1 and both exit-2 paths shown; remote exit 0, `/health` after 28.2 s |
 | live graph answer eval | manual, protected (`live-eval.yml`) | provider secret | route/quality failure -> 1; missing key/provider/model failure -> 2 | no | no today | missing key -> exit 2 (local); run 39602202292: exit 1, Q091 missing `usage data` |
-| Azure promotion | not built | Azure OIDC (planned) | push/revision/smoke failure -> non-zero | no | yes (design) | deferred: no infrastructure |
+| Azure promotion | manual (`deploy.yml`), `main` only, `production` approval | Azure OIDC, no stored credential | no green CI on the commit / container smoke / push / digest / revision not ready / URL smoke -> non-zero | no | yes | built 2026-10-21; gate, rollback-handle, and template steps run locally; URL smoke passed against the live app (71.5 s cold); **no workflow run yet** |
 
 ### Deterministic graph regression evidence
 
@@ -6951,17 +6958,48 @@ After the review: a probe that gets a non-JSON 500 or no HTTP answer at all (a s
 
 ### Azure deployment/promotion evidence
 
-Current status: **deferred, not run**. Day 23's `rg-procurerag-day23` was deleted, so there is nothing to update. No workflow requests `id-token: write`.
+Status on 2026-10-20: **deferred, not run**. Day 23's `rg-procurerag-day23` had been deleted, so there was nothing to update.
 
-Exact next prerequisites, in order, before a `deploy.yml` can be honest:
+Status on 2026-10-21: **target recreated, deploy lane built and checked locally, trust setup and first run pending.** The prerequisite list written on 2026-10-20 held, with three corrections: the OIDC subject (immutable format), the app role (`Contributor` on the app), and the three ids (environment secrets, not variables).
 
-1. Recreate the target from Day 23's runbook and `deploy/azure/containerapp-template.yaml`: resource group, ACR, Container Apps environment, app with its managed identity and `AcrPull`.
-2. A deployment identity for GitHub (Entra app registration or user-assigned managed identity) with a **federated credential**: issuer `https://token.actions.githubusercontent.com`, subject `repo:juanfpinzon/ProcureRAG:environment:production`, audience `api://AzureADTokenExchange`. No client secret.
-3. Narrow role assignments for that identity: `AcrPush` on the one registry, and a role that can update the one container app, scoped to that app resource, not to the subscription.
-4. GitHub environment `production`: `main` only, a required reviewer; variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` (identifiers, not secrets).
-5. Then `deploy.yml`: `workflow_dispatch` on `main`; `id-token: write` on the deploy job only; concurrency group `production` with `cancel-in-progress: false`; build ONE image, run `container_smoke.py` on it, push THAT image as `:<sha>`, record the pushed digest, update the app **by digest**, smoke the new revision through its FQDN, and record the previous revision as the rollback handle.
+**1. Target, recreated by Juan from the Day 23 runbook (steps 1-6):**
 
-Recorded fields, all pending until then: protected environment, OIDC subject, Azure identity, role/scope, SHA tag and digest, target app/revision, post-deploy smoke, rollback handle, cleanup decision.
+| Field | Value (read from Azure on 2026-10-21) |
+|---|---|
+| Resource group | `rg-procurerag-day24`, `northeurope`, tags `project=procurerag day=24 purpose=disposable-smoke` |
+| Registry | `procureragday24jp` (Basic), `roleAssignmentMode: LegacyRegistryPermissions` (plain `AcrPush`/`AcrPull` apply), admin user switched **off** on 2026-10-21. The re-run had left it on: runbook step 6's last command |
+| Environment / app | `cae-procurerag-day24` / `procurerag-api`, single revision mode, external ingress on 8000, HTTP off |
+| Running revision | `procurerag-api--0000002`, image `procureragday24jp.azurecr.io/procurerag-api:day24-azure`, digest `sha256:a03b392b545788f3391e60709d2a3e272e2e5c50525d4404d746f697f9bf59b8` (pushed 2026-10-21 14:06 UTC) |
+| Revision contract | the template's values: 1.0 vCPU / 2 GiB, the 5 env vars (live LLM off, tracing off, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`), 3 probes, replicas 0-1. No secrets |
+| Image pull | the app's system-assigned identity, `AcrPull` on the registry; registry `identity: system`, no password |
+
+**2. Deployment identity: created, trust and roles pending.**
+
+- `id-procurerag-github-deploy`, a user-assigned managed identity in `rg-procurerag-day24`: created 2026-10-21. Right now it has no federated credential and no role, so nothing can sign in as it, and it could do nothing if something did.
+- **Pending (Juan runs it, runbook step 10b, items 2-4):** the federated credential (subject `repo:juanfpinzon@32948087/ProcureRAG@1356961914:environment:production`, issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`); `AcrPush` on the registry and `Contributor` on the app; the GitHub environment `production` (reviewer Juan, branch `main` only) with secrets `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`. Creating trust and granting roles is left to the account owner, on purpose.
+
+**3. `deploy.yml` design** (the file's header comment lists the steps):
+
+- Manual (`workflow_dispatch`), `main` only (a guard step, plus the environment's branch rule), concurrency group `production` with `cancel-in-progress: false`.
+- Job `ci-passed-for-this-commit` (`actions: read` only) refuses unless the CI run triggered by the push of this exact commit concluded `success`. It runs before the approval, so nobody is asked to approve a red commit.
+- Job `deploy` (`environment: production`; `contents: read` and `id-token: write`, the only job with the latter). It builds the commit once (reading the cache that CI's pushes to `main` wrote), runs the container smoke on THAT image, signs in with OIDC, pushes it as `:<sha>`, reads the digest back from the registry, records the previous image as a digest (the rollback handle), updates the app through the repo's template with the image **by digest**, waits for Azure to report the new revision ready and running that digest, then smokes it through its URL. Every value goes into the job summary.
+- Live eval is not a deploy gate (unchanged policy: no retry or false-positive rule yet, and it is red on Q091).
+- Public-log hygiene: the three ids are secrets (masked); `az containerapp update` prints nothing (`--output none`); the app URL is masked (`::add-mask::`) and never printed by the smoke script.
+- `scripts/container_smoke.py` gained a `--url` mode: the same four HTTP probes against a running deployment, no docker, no log probe. The logs of the same image are checked in its container smoke before the push.
+
+**4. Checked locally, before any run (2026-10-21):**
+
+| Check | Result |
+|---|---|
+| `pytest tests/test_container_smoke.py` | 9 passed (5 earlier + 4 for URL mode). Mutation: making URL mode watch a local container turned 2 red |
+| actionlint 1.7.12 (Docker image), all three workflows | exit 0 (after renaming one unused loop variable, SC2034) |
+| `ci-passed` script, run locally with `gh` | `f3ab218` (green push run 39603551091) -> exit 0; `d694a36` (only ever tested as a PR) -> exit 1, "no run found"; all-zero SHA -> exit 1 |
+| Digest read-back (`docker buildx imagetools inspect ... \| jq -r .digest`) | the `:day24-azure` tag and its `@sha256` form both give `sha256:a03b392b…`, the digest `az acr` reports |
+| Rollback-handle expansion on the live app | `procureragday24jp.azurecr.io/procurerag-api@sha256:a03b392b…` |
+| Template render with a digest image | 0 placeholders left; `image:` is the `@sha256` form |
+| `container_smoke.py --url https://<app>` against the live revision `0000002` (0 replicas before) | exit 0: cold `/health` after **71.5 s** (Day 23: 59 s), then `/health`, Q001, Q091 pending, and off-topic all `[ok]` |
+
+**5. Recorded fields, still pending until the first run:** approval record, the token's actual subject (azure/login prints it), pushed tag and digest, previous revision and rollback handle, new revision, post-deploy smoke, one exercised rollback, cleanup decision.
 
 ### Exact local command map (Day 24, final)
 
@@ -6989,6 +7027,10 @@ python3 scripts/container_smoke.py procurerag-api:day24-local
 # live lane: paid, never in CI's PR path. The key must be in the process environment (.env is not read).
 read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
 uv run python src/graph_regression.py --live
+
+# deploy lane (added 2026-10-21): the post-deploy smoke, against the running Azure app
+python3 scripts/container_smoke.py --url "https://$(az containerapp show --name procurerag-api \
+  --resource-group rg-procurerag-day24 --query properties.configuration.ingress.fqdn -o tsv)"
 
 git diff --check
 ```
@@ -7068,8 +7110,13 @@ Practice the 12 questions in the Day 24 route without notes. Record concise answ
 - **`still_missing_after_max_passes` has no real-data case.** It is only exercised with fake retrieval.
 - **The model-backed lane depends on the Hugging Face Hub.** It is uncached on purpose, so a Hub outage or a 429 makes it red (exit 2, "could not check"), and while it is a required check, that blocks merges. The fix, if it happens: cache the models keyed on the recorded revision.
 - **Model revisions are not pinned.** CI downloads each model's default revision (today `b2073673…` MiniLM, `81d1926f…` TinyBERT, the same as Day 22/23) and prints it, but a new upstream revision would show up as drift, not as "model changed".
-- **No deploy lane.** Image push, digest promotion, OIDC, and revision smoke are designed, not built.
-- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval, no deployed resource.
+- **The deploy lane is built, not proven.** As of 2026-10-21, `deploy.yml` has never run. Its trust (federated credential), roles, and `production` environment are not created yet. Until a run is recorded, the gate matrix's deploy rows are a design.
+- **The deployed image is a second build of the commit, not CI's image.** CI never pushes, and a 2 GB image is too big to hand between workflows. So `deploy.yml` rebuilds the commit (from the same layer cache) and re-runs the container smoke on that rebuild before pushing it. The claim is "CI passed on this commit, AND the pushed image passed the container smoke", not "CI tested these exact bytes".
+- **One job holds both the build and the OIDC permission.** `id-token: write` is granted to the whole `deploy` job, so the build and smoke steps could also request a token. Splitting them into separate jobs would mean moving the image between jobs. The commit is reviewed code on `main`, and the sign-in step comes after the smoke.
+- **`Contributor` on the app can also delete the app.** Its scope is one disposable app. A custom role (read, write, and revision read on `Microsoft.App/containerApps`) would be the tighter choice for a deployment meant to last.
+- **No automatic rollback.** A revision that never becomes ready never receives traffic (single revision mode). But a revision that is ready and answers wrongly stays live until a person deploys the recorded rollback handle.
+- **The Azure CLI on the runner is not pinned.** The runner image's version is recorded in each run, not chosen.
+- Unchanged from Day 23: no authentication, caller-asserted role, process-local rate limiting, stateless approval, no trace persistence or version handle, no confidentiality-aware retrieval. A public, unauthenticated endpoint exists again while `rg-procurerag-day24` is up.
 
 ### Next step
 
@@ -7078,4 +7125,12 @@ Steps 1-7 of the original list were done on 2026-10-21 (evidence above): the sou
 1. Fill the interview drill (above) without notes.
 2. Decide the Q091 follow-up. The owner is generation: the usage-data evidence (`GUIDE-002::chunk-1`) is in the merged context, but the answer drops it. Measure before changing anything (for example, which sources the answer cites, out of 19).
 3. Send the route's review prompt to Hermes, including PR #1, the five run URLs, and the live result.
-4. Close HER-292 only after that review. The deployment lane stays deferred until Azure infrastructure and OIDC trust are deliberately recreated.
+4. Close HER-292 only after that review.
+
+Deploy lane (added 2026-10-21, after the Azure target was recreated):
+
+5. Run the trust setup yourself: Azure runbook step 10b, items 2-4 (federated credential, two role assignments, the `production` environment and its three secrets).
+6. Review `deploy.yml`, the `--url` mode, and these log and runbook changes. Then branch, commit, open a PR, and merge once CI is green.
+7. Dispatch `deploy.yml` once while CI's push run on the merge commit is still running: `ci-passed-for-this-commit` should refuse it (red-path evidence). Dispatch again once that run is green, approve, and record the fields in item 5 of "Azure deployment/promotion evidence".
+8. Exercise the rollback handle once (runbook 10b, item 6), smoke it, and record it.
+9. Decide on cleanup: delete `rg-procurerag-day24` (runbook step 11) and keep or delete the `production` environment.
