@@ -7397,3 +7397,287 @@ Hermes re-reviewed the post-feedback state at implementation/evidence head `d08a
 
 Closure decision: all Day 24 route-level blockers are resolved. The remaining items under “What remains weak” are explicitly accepted hardening/backlog work, not false-green paths or missing closure evidence. HER-292 may move to Done.
 
+## 2026-10-22 — Day 25: MCP Server/Tool and Week 5 Gate Review
+
+Route: [`docs/day-25-mcp-server-tool-week5-gate-review.md`](day-25-mcp-server-tool-week5-gate-review.md)
+
+Linear: HER-293 — Day 25 loop: MCP server/tool + Week 5 gate review.
+
+Related gate: HER-270 — Week 5 gate: serving, Azure, CI/CD, MCP.
+
+Project rule: Juan owns the MCP dependency choice, server/tool implementation, tests, Inspector/client evidence, and every change under `src/`, `tests/`, `scripts/`, `pyproject.toml`, or `uv.lock`. Hermes wrote only the route and this evidence skeleton, then reviews and quizzes.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Day 25 is the MCP integration and cumulative Week 5 gate-review bridge.
+
+For each source, record one ProcureRAG-specific takeaway. A checked box without an applied takeaway is not completion.
+
+- [ ] Hugging Face MCP Course — Unit 1 `Introduction to Model Context Protocol`.
+  - Exact targets: `What is Model Context Protocol?`, `Key Concepts`, `Integration Challenges`, `Benefits and Goals`, `Simple Example`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Hugging Face MCP Course — Unit 1 `Key Concepts and Terminology`.
+  - Exact targets: `Host`, `Client`, `Server`, and `Tools` / `Resources` / `Prompts` / `Sampling`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Hugging Face MCP Course — Unit 1 `Architectural Components`.
+  - Exact target: user interaction → host processing → client connection → discovery → invocation → server execution → rendered result.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Hugging Face MCP Course — Unit 1 `The Communication Protocol`.
+  - Exact targets: JSON-RPC messages, initialization, discovery, execution, stdio, HTTP/SSE, and Streamable HTTP.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Hugging Face MCP Course — Unit 1 `Understanding MCP Capabilities`.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Official MCP Python SDK — `Installation`, `First steps`, `Connect to a real host`, and `Testing`.
+  - Installed major/version and matching docs: _TODO: Fill in._
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Official MCP Python SDK — `Servers > Tools`, `Structured Output`, and transport/running guidance.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Hugging Face MCP Course — Unit 3 `Advanced MCP Development: Building Custom Workflow Servers for Claude Code`.
+  - Exact targets: `Module 1: Build MCP Server`; skim `Module 2: GitHub Actions Integration`; skim `Module 3: Slack Notification` for the multi-primitive pattern.
+  - ProcureRAG takeaway: _TODO: Fill in._
+- [ ] Optional: DeepLearning.AI / Anthropic — `MCP: Build Rich-Context AI Apps with Anthropic`.
+  - ProcureRAG takeaway or reason deferred: _TODO: Fill in._
+
+### Starting baseline
+
+Kickoff on 2026-10-22 at `a5842de`, branch `main`, clean tree. `pyproject.toml` and `uv.lock` have no MCP dependency. Existing workflows are `ci.yml`, `live-eval.yml`, and `deploy.yml`.
+
+All required live/provider/tracing switches were forced off:
+
+```text
+pytest: 387 passed in 10.05s
+compileall src tests scripts: clean
+Ruff src tests scripts: All checks passed!
+frozen fixture regression: 7/7 as expected, exit 0
+current retrieval verification: 6 x [OK], exit 0
+graph regression: 6/6 contracts passed, 4 counted stand-in LLM calls, exit 0
+git diff --check: clean
+git status --short: clean
+```
+
+Day 24 handoff to preserve:
+
+- the exact image promoted by `deploy.yml` passes container smoke plus offline retrieval and graph gates before push;
+- one real deployment and one real rollback were exercised, then both disposable Azure resource groups were deleted;
+- live graph-path Q091 answer quality remains red because generation drops the required `usage data` step despite recovered evidence;
+- the Day 21 `QueryRequest` / `QueryResponse` / `ProcureRAGService` / `run_query_events` boundary is the safest behavior contract for MCP to adapt.
+
+### Block 1 — MCP mental model
+
+In my own words:
+
+- Host: _TODO: Fill in._
+- Client: _TODO: Fill in._
+- Server: _TODO: Fill in._
+- Initialization and capability negotiation: _TODO: Fill in._
+- Discovery (`tools/list`) versus invocation (`tools/call`): _TODO: Fill in._
+- Tool: _TODO: Fill in._
+- Resource: _TODO: Fill in._
+- Prompt: _TODO: Fill in._
+- Sampling and why it is out of scope today: _TODO: Fill in._
+- stdio versus Streamable HTTP: _TODO: Fill in._
+- What MCP adds beyond FastAPI: _TODO: Fill in._
+- What MCP does **not** replace: _TODO: Fill in._
+
+### Block 2 — artifact contract before coding
+
+1. SDK package / exact resolved version / documentation line:
+   - _TODO: Fill in._
+2. Dependency placement and lockfile decision:
+   - _TODO: Fill in._
+3. Server object and transport:
+   - _TODO: Fill in._
+4. Required tool name, description, typed arguments, and structured output:
+   - _TODO: Fill in._
+5. Existing Day 21 service seam reused by the tool:
+   - _TODO: Fill in._
+6. One-time service/model initialization strategy:
+   - _TODO: Fill in._
+7. Input/role/confidentiality/guard/HITL/output safety mapping:
+   - _TODO: Fill in._
+8. Fake-service seam for deterministic tests:
+   - _TODO: Fill in._
+9. Evidence layers: direct function vs in-memory MCP client vs Inspector/stdio vs remote CI:
+   - _TODO: Fill in._
+10. Optional resource/prompt decision and sampling deferral:
+    - _TODO: Fill in._
+
+### Block 3 — Juan-owned implementation
+
+Artifacts changed:
+
+- MCP dependency / lockfile: _TODO: Fill in._
+- Server module: _TODO: Fill in._
+- Tool(s): _TODO: Fill in._
+- Tests: _TODO: Fill in._
+- Optional resource/prompt: _TODO: Fill in or state deferred._
+- Week 5 gate inventory: _TODO: Fill in._
+
+Required tool contract:
+
+- Name and purpose: _TODO: Fill in._
+- Input schema: _TODO: Fill in._
+- Structured output schema: _TODO: Fill in._
+- How Q001 maps through the existing service: _TODO: Fill in._
+- How Q091 with no decision remains `pending_approval`: _TODO: Fill in._
+- How blocked input remains a safe domain response: _TODO: Fill in._
+- How invalid input is sanitized: _TODO: Fill in._
+- How live LLM/tracing stay off for required evidence: _TODO: Fill in._
+- How stdout remains protocol-only in stdio mode: _TODO: Fill in._
+
+### Deterministic and protocol evidence
+
+#### Pure adapter and in-memory MCP client tests
+
+Exact command:
+
+```text
+_TODO: Fill in._
+```
+
+Results:
+
+- Tool discovery / schema: _TODO: Fill in._
+- Q001 control: _TODO: Fill in._
+- Q091 pending approval: _TODO: Fill in._
+- Blocked input: _TODO: Fill in._
+- Invalid schema/decision: _TODO: Fill in._
+- One-time service initialization: _TODO: Fill in._
+- Structured output / no unsafe fields: _TODO: Fill in._
+
+What this proves: _TODO: Fill in._
+
+What this does **not** prove: _TODO: Fill in._
+
+#### Inspector or real stdio client
+
+SDK and runtime versions:
+
+```text
+_TODO: Fill in._
+```
+
+Exact server/client command:
+
+```text
+_TODO: Fill in._
+```
+
+Evidence:
+
+- Server startup and one-time model/service load: _TODO: Fill in._
+- Discovered tool name/description/schema: _TODO: Fill in._
+- Q001 call summary and duration: _TODO: Fill in._
+- Q091 pending-approval call summary and duration: _TODO: Fill in._
+- Blocked-input call summary: _TODO: Fill in._
+- Invalid-input behavior: _TODO: Fill in._
+- stdout/log hygiene: _TODO: Fill in._
+- no provider key / no paid call / no LangSmith trace: _TODO: Fill in._
+- clean process shutdown: _TODO: Fill in._
+
+If Inspector/host evidence is blocked, record the exact command/error/prerequisite and keep the status honest:
+
+_TODO: Fill in or delete this blocker placeholder after successful evidence._
+
+### Week 5 HER-270 gate inventory
+
+| Gate area | Primary artifacts | Strongest real evidence | Status | Honest caveat / next weakness |
+|---|---|---|---|---|
+| Day 21 — FastAPI async/streaming surface | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Day 22 — Docker | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Day 23 — Azure deployment/fallback | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Day 24 — eval-gated CI/CD | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Day 25 — MCP | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+
+Week 5 gate verdict before Hermes review:
+
+_TODO: Fill in. Do not write “passed” merely because this scaffold exists._
+
+### Full verification
+
+```text
+uv sync --locked --dev: _TODO: Fill in._
+pytest: _TODO: Fill in._
+compileall src tests scripts: _TODO: Fill in._
+Ruff src tests scripts: _TODO: Fill in._
+frozen fixture regression: _TODO: Fill in._
+current retrieval verification: _TODO: Fill in._
+graph regression: _TODO: Fill in._
+MCP-specific tests/client: _TODO: Fill in._
+git diff --check: _TODO: Fill in._
+git status --short: _TODO: Fill in._
+remote CI run URL / commit / result: _TODO: Fill in or state not yet available._
+```
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+
+### What became clearer
+
+- _TODO: Fill in._
+
+### What I can now explain in an interview
+
+Answer without notes. Use these bullet shapes as prompts, not as finished answers.
+
+1. **Host vs client vs server in this demo**
+   - host = user-facing AI application;
+   - client = one MCP-speaking connection inside the host;
+   - server = ProcureRAG capability provider.
+   - My answer: _TODO: Fill in._
+2. **Why the procurement operation is a tool**
+   - computation/retrieval from typed arguments;
+   - contrast application-controlled resource and user-controlled prompt.
+   - My answer: _TODO: Fill in._
+3. **Why reuse the Day 21 service boundary**
+   - one guard/role/HITL/output policy;
+   - avoid raw-retrieval and adapter drift.
+   - My answer: _TODO: Fill in._
+4. **Why stdio first**
+   - local host-managed subprocess;
+   - no new listening/auth/TLS/ingress surface.
+   - My answer: _TODO: Fill in._
+5. **What discovery proves and does not prove**
+   - list/name/description/schema;
+   - not behavior, safety, latency, or correctness.
+   - My answer: _TODO: Fill in._
+6. **Direct function vs in-memory MCP client vs Inspector/stdio**
+   - adapter logic vs protocol path vs real process/transport boundary.
+   - My answer: _TODO: Fill in._
+7. **How HITL stays fail-closed**
+   - pending response; explicit approve/edit/reject; no silent approval;
+   - current reviewer identity remains caller-asserted/stateless.
+   - My answer: _TODO: Fill in._
+8. **Tools/resources/prompts/sampling control boundaries**
+   - model/application/user/server-to-client control and risk.
+   - My answer: _TODO: Fill in._
+9. **Why stdout must stay clean under stdio**
+   - stdout is the protocol channel; logs belong on stderr/SDK logging.
+   - My answer: _TODO: Fill in._
+10. **Why MCP does not replace FastAPI**
+    - AI-host capability protocol vs general HTTP service;
+    - shared application service underneath.
+    - My answer: _TODO: Fill in._
+11. **What Week 5 proves and what remains weak**
+    - exercised API/container/Azure/CI-CD/MCP evidence;
+    - Q091 quality, identity/HITL durability, local-only MCP, mutable dependencies.
+    - My answer: _TODO: Fill in._
+12. **Productionizing remote MCP safely**
+    - authenticated identity → role; authorization before retrieval; TLS/ingress;
+    - durable audit/HITL; rate/cost bounds; sanitized output; pinned/monitored artifact.
+    - My answer: _TODO: Fill in._
+
+### Review prompt
+
+> “Day 25 MCP + Week 5 gate work is ready for review. Please inspect the MCP SDK/version and lock change, tool schema and structured output, reuse of the Day 21 guarded service boundary, one-time service/model initialization, stdio/log safety, in-memory client and Inspector/stdio evidence for Q001/Q091/blocked/invalid cases, full test/regression gates, Week 5 inventory, and my interview answers. Juan owns all implementation.”
+
+### Next step
+
+1. Complete the exact MCP readings and the artifact contract before coding.
+2. Build and test the required tool; capture in-memory client plus Inspector/stdio evidence.
+3. Fill every Day 25 evidence field and the Week 5 gate inventory.
+4. Send the review prompt to Hermes; do not move HER-293 or HER-270 to Done before review.
+5. After Day 25 passes, close HER-293 and run a **separate HER-270 parent-gate review** across all five children and cumulative evidence.
+6. If HER-270 closes cleanly, begin Week 6 / HER-271 portfolio polish and interview readiness, carrying forward the explicit Q091 live-answer-quality weakness rather than hiding it.
+
