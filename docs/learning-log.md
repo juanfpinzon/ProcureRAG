@@ -7413,30 +7413,32 @@ No new Boot.dev chapter today. Day 25 is the MCP integration and cumulative Week
 
 For each source, record one ProcureRAG-specific takeaway. A checked box without an applied takeaway is not completion.
 
-- [ ] Hugging Face MCP Course — Unit 1 `Introduction to Model Context Protocol`.
+Juan marked every required source READ in the route doc (2026-10-22). Each takeaway was checked against the page as published on 2026-10-22, and is tied to a Day 25 file. One mismatch with the route: the Unit 1 introduction page only LISTS its five targets (under "What You Will Learn"). The M×N explanation itself is on the next page, `Key Concepts and Terminology` ("The Integration Problem").
+
+- [x] Hugging Face MCP Course — Unit 1 `Introduction to Model Context Protocol`.
   - Exact targets: `What is Model Context Protocol?`, `Key Concepts`, `Integration Challenges`, `Benefits and Goals`, `Simple Example`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Hugging Face MCP Course — Unit 1 `Key Concepts and Terminology`.
+  - ProcureRAG takeaway: the page says MCP "enables AI models to connect with external data sources, tools, and environments". The integration argument (on the next page): without a standard, M applications times N tools is M×N custom integrations; with MCP, "each AI application implements the client side of MCP once, and each tool/data source implements the server side once". For ProcureRAG, `src/mcp_server.py` is that server side, written once. Claude Code, Claude Desktop, Cursor, VS Code, and the Inspector all reach it with one launch command (`python src/mcp_server.py` over stdio). The work that disappears is a hand-written HTTP client for `POST /query` in each host, each with its own idea of the request and response shapes.
+- [x] Hugging Face MCP Course — Unit 1 `Key Concepts and Terminology`.
   - Exact targets: `Host`, `Client`, `Server`, and `Tools` / `Resources` / `Prompts` / `Sampling`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Hugging Face MCP Course — Unit 1 `Architectural Components`.
+  - ProcureRAG takeaway: the host is the "user-facing AI application"; the client is the component inside it with "a 1:1 connection with a single Server"; the server "exposes capabilities (Tools, Resources, Prompts)". So LLM reasoning belongs to the HOST. The ProcureRAG server exposes one typed capability and has no model that decides anything: with the live LLM off it calls no model at all (`live LLM: False` in its startup line). Of the four capabilities, only the first fits today: tools are "executable functions that the AI model can invoke to perform actions or retrieve computed data", which is exactly what `answer_procurement_question` is.
+- [x] Hugging Face MCP Course — Unit 1 `Architectural Components`.
   - Exact target: user interaction → host processing → client connection → discovery → invocation → server execution → rendered result.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Hugging Face MCP Course — Unit 1 `The Communication Protocol`.
+  - ProcureRAG takeaway: the seven steps, mapped to what was measured. (1) The user asks a procurement question in the host. (2) The host, "potentially using an LLM", decides it needs a capability. (3) The client starts `src/mcp_server.py`; its lifespan loads the two models once (3.8–6.0 s across runs). (4) `tools/list` returns one tool. (5) The model sends `tools/call` with typed arguments. (6) The server runs the Day 21 pipeline (Q001: 0.07–0.11 s). (7) The host gets a `QueryResponse` and decides how to show it. `scripts/mcp_stdio_smoke.py` plays steps 3–7 without a model, and the Inspector CLI did the same once per call.
+- [x] Hugging Face MCP Course — Unit 1 `The Communication Protocol`.
   - Exact targets: JSON-RPC messages, initialization, discovery, execution, stdio, HTTP/SSE, and Streamable HTTP.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Hugging Face MCP Course — Unit 1 `Understanding MCP Capabilities`.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Official MCP Python SDK — `Installation`, `First steps`, `Connect to a real host`, and `Testing`.
-  - Installed major/version and matching docs: _TODO: Fill in._
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Official MCP Python SDK — `Servers > Tools`, `Structured Output`, and transport/running guidance.
-  - ProcureRAG takeaway: _TODO: Fill in._
-- [ ] Hugging Face MCP Course — Unit 3 `Advanced MCP Development: Building Custom Workflow Servers for Claude Code`.
+  - ProcureRAG takeaway: everything is JSON-RPC 2.0: a request has an `id` and a method, a response carries the same `id` with a `result` or an `error`, and a notification needs no response. stdio fits "local tools": the host "launches the Server as a subprocess" and talks over its stdin and stdout. HTTP (Streamable HTTP) is for "remote APIs, cloud services". So stdio is the smallest safe first transport for ProcureRAG: no listening port, the host owns the process, and still the full lifecycle (the smoke negotiated protocol `2026-07-28`, listed the tool, made four calls). Remote Streamable HTTP would put an MCP endpoint on a network: then the server must know WHO is calling (to pick the role), needs TLS and origin checks, and needs a deployment. Day 23's public FastAPI had no authentication; that is not repeated for MCP. One difference from the page: it ends with "shutdown, then exit". The installed SDK's stdio client ends by closing the server's stdin, waiting 2 s, then SIGTERM and SIGKILL (`mcp/client/stdio.py`). The server's own "stopped" log line proves it left on its own (0.61–0.64 s).
+- [x] Hugging Face MCP Course — Unit 1 `Understanding MCP Capabilities`.
+  - ProcureRAG takeaway: the split is about control. Tools are model-controlled and, having side effects, "typically require explicit user approval". Resources are application-controlled, read-only, and "typically present lower security risks". Prompts are user-controlled. Sampling is server-initiated. So: retrieval and query is a **tool** (it computes from arguments, and with the live LLM on it spends money); a sanitized, static Week 5 gate summary could be a **resource** (read-only context the application chooses); a "review this procurement answer against its cited sources" workflow would be a **prompt** (a user picks it). Sampling stays out: ProcureRAG already has an explicit, opt-in provider boundary, and the v2 SDK docs say the 2026-07-28 spec deprecates sampling (SEP-2577) and recommends calling the provider directly. Measured detail: `MCPServer` declares the tools, resources, AND prompts capabilities even though only one tool is registered. A declared capability is not a promise that anything is behind it.
+- [x] Official MCP Python SDK — `Installation`, `First steps`, `Connect to a real host`, and `Testing`.
+  - Installed major/version and matching docs: `mcp==2.3.0` (and `mcp-types==2.3.0`), resolved by `uv add "mcp>=2.3.0,<3"` on 2026-10-22. The docs read are the v2 line ("These docs describe v2, the current stable release line"; Python 3.11+). v2 imports, not v1: `from mcp.server import MCPServer` and `from mcp import Client` (v1's `FastMCP` import path is gone in v2). `uv run mcp version` → `MCP version 2.3.0`.
+  - ProcureRAG takeaway: "connecting to a host is one act: you tell it the command that starts your server", and the host starts it from its own folder "with a near-empty environment". That sentence produced Day 25's most important finding: the SDK's stdio client passes only an allow-list of variables, so Day 21's `.env` fallback would decide the live-LLM switch alone, and this repo's `.env` says `"1"` (see "What failed or was confusing"). The Testing page's `Client(mcp)` ("No subprocess. No port.") is the harness of `tests/test_mcp_server.py`, with `raise_exceptions=True` as the page advises.
+- [x] Official MCP Python SDK — `Servers > Tools`, `Structured Output`, and transport/running guidance.
+  - ProcureRAG takeaway: the SDK reads the tool's whole contract from one function: the name from the function, the description from the docstring, the argument schema from the type hints ("Type hints aren't documentation here. They are the contract."), and the output schema from the return annotation, against which the returned value is validated. So `QueryRequest`'s fields became the tool's arguments (`query` 1–500 characters, `role` as an enum, optional `query_id`, optional `ApprovalDecision`), and `QueryResponse` became the output schema unchanged. What stays private was never in `QueryResponse`: chunk text, the trace row, raw model text, environment values. Errors follow "could a smarter model have avoided this?": a wrong `query_id` or the rate limit is a `ToolError` the model reads; anything else is a crash, sent as "Error executing tool …" only, with the traceback on the server's stderr. Annotations: only `read_only_hint=True` (accurate: nothing is written); `open_world_hint` is left unset, because with the live LLM on a call reaches a provider. Running: `run()` with no argument is stdio; stdout is the wire; `mcp dev` needs `npx`.
+- [x] Hugging Face MCP Course — Unit 3 `Advanced MCP Development: Building Custom Workflow Servers for Claude Code`.
   - Exact targets: `Module 1: Build MCP Server`; skim `Module 2: GitHub Actions Integration`; skim `Module 3: Slack Notification` for the multi-primitive pattern.
-  - ProcureRAG takeaway: _TODO: Fill in._
+  - ProcureRAG takeaway: Module 1's principle: "Instead of hard-coding rigid rules about what makes a good PR, you'll provide Claude with raw git data and let it intelligently suggest". The ProcureRAG server does the same with its domain: it returns structured data (status, source ids, findings, the approval request) and leaves to the host's model what to say about it. It embeds no second orchestration policy: no auto-approval, no retry loop, no rewriting of the answer. The policy that IS inside the server is Day 21's safety policy, which must hold whoever calls. Module 1 also warns that "MCP tools have a token limit of 25,000 tokens per response" in Claude Code: ProcureRAG's results are bounded by design (ids, never chunk text; the Q001 result's text is 891 characters). Modules 2–3 add prompts and all primitives together; Day 25 stops at one tool on purpose.
 - [ ] Optional: DeepLearning.AI / Anthropic — `MCP: Build Rich-Context AI Apps with Anthropic`.
-  - ProcureRAG takeaway or reason deferred: _TODO: Fill in._
+  - ProcureRAG takeaway or reason deferred: deferred. It is optional, it was not read today, and the official v2 SDK docs were the implementation source of truth.
 
 ### Starting baseline
 
@@ -7462,211 +7464,374 @@ Day 24 handoff to preserve:
 - live graph-path Q091 answer quality remains red because generation drops the required `usage data` step despite recovered evidence;
 - the Day 21 `QueryRequest` / `QueryResponse` / `ProcureRAGService` / `run_query_events` boundary is the safest behavior contract for MCP to adapt.
 
+Block 0 re-run (2026-10-22, Mac, at `7ca313f`: `a5842de` plus the docs-only PR #9, this entry's skeleton). The same switches were exported (`PROCURERAG_LIVE_LLM=0`, both LangSmith flags `false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1`, `OMP_NUM_THREADS=1`):
+
+```text
+uv sync --locked --dev: Resolved 141 packages, Checked 133 packages
+pytest: 387 passed in 3.75s
+compileall src tests scripts: clean
+Ruff src tests scripts: All checks passed!
+frozen fixture regression: all cases as expected, exit 0
+current retrieval verification (HF_HUB_OFFLINE=1): 6 x [OK], exit 0
+graph regression (HF_HUB_OFFLINE=1): 6/6 contracts passed, 4 counted stand-in LLM calls, exit 0
+git diff --check: clean
+git status --short: clean
+MCP dependency: none in pyproject.toml or uv.lock; no src/mcp_server.py
+```
+
+- What MCP adds beyond FastAPI: a standard way for any AI host to DISCOVER ProcureRAG's capability (name, description, typed argument and result schemas) and let its model call it, with no ProcureRAG-specific client code in the host.
+- What it does not add: no new retrieval, guard, role, or approval logic, and no authentication. The same Day 21 service runs underneath, and its limits (caller-asserted role, stateless approval) come along unchanged.
+
 ### Block 1 — MCP mental model
 
 In my own words:
 
-- Host: _TODO: Fill in._
-- Client: _TODO: Fill in._
-- Server: _TODO: Fill in._
-- Initialization and capability negotiation: _TODO: Fill in._
-- Discovery (`tools/list`) versus invocation (`tools/call`): _TODO: Fill in._
-- Tool: _TODO: Fill in._
-- Resource: _TODO: Fill in._
-- Prompt: _TODO: Fill in._
-- Sampling and why it is out of scope today: _TODO: Fill in._
-- stdio versus Streamable HTTP: _TODO: Fill in._
-- What MCP adds beyond FastAPI: _TODO: Fill in._
-- What MCP does **not** replace: _TODO: Fill in._
+- Host: the AI application the user talks to (Claude Code, Claude Desktop, an IDE). It owns the model, the conversation, and the decision to call a tool.
+- Client: the MCP-speaking part inside the host, one per connected server. Here it starts `src/mcp_server.py` as a child process and owns its stdin and stdout.
+- Server: `src/mcp_server.py`. It advertises one tool, checks the arguments against its schema, runs ProcureRAG, and returns a typed result. It is not an agent and has no model of its own.
+- Initialization and capability negotiation: the first exchange on a connection. The two sides agree on a protocol version (measured: `2026-07-28`) and the server declares what kinds of requests it answers (`tools`, plus `resources` and `prompts`, which `MCPServer` always declares). The client only asks for what was declared.
+- Discovery (`tools/list`) versus invocation (`tools/call`): discovery returns each tool's name, title, description, input schema, output schema, and annotations, so the host knows what exists and how to call it. Invocation runs one tool with arguments and returns a result: `content` (text, for the model), `structured_content` (data, for the application), and `is_error`.
+- Tool: an action the MODEL chooses to call, with typed arguments (`answer_procurement_question`).
+- Resource: read-only context the APPLICATION chooses to load, addressed by a URI (for example a sanitized Week 5 gate summary). None today.
+- Prompt: a reusable message template the USER picks by name, like a slash command (for example "review this answer against its cited sources"). None today.
+- Sampling and why it is out of scope today: the server asking the client's model for a completion. Out of scope because it would blur the cost, trust, and recursion boundaries ProcureRAG keeps explicit, and because the 2026-07-28 spec deprecates it (the v2 SDK docs recommend calling the provider directly).
+- stdio versus Streamable HTTP: stdio is a local child process speaking over stdin and stdout: no port, no network, one host per process. Streamable HTTP is a server on a URL, for many remote clients: it needs authentication, TLS, origin checks, and a deployment.
+- What MCP adds beyond FastAPI: discovery and invocation that every AI host already speaks. FastAPI gives a general HTTP contract that a developer must still write a client for.
+- What MCP does **not** replace: the FastAPI API (the deployed, container-smoked, CI-gated surface for HTTP clients), and the Day 21 service with its guards. MCP is a second adapter over the same service, not a new pipeline.
 
 ### Block 2 — artifact contract before coding
 
+> **Superseded in part on 2026-10-24.** The `decision` tool argument below was replaced by MCP elicitation: the user answers a form, and the model cannot send a decision. What follows is the 2026-10-22 version, as measured. The current contract and its evidence are in "Follow-up (2026-10-24)" below.
+
 1. SDK package / exact resolved version / documentation line:
-   - _TODO: Fill in._
+   - `mcp==2.3.0` (with `mcp-types==2.3.0`), the v2 line, read in the v2 docs at <https://py.sdk.modelcontextprotocol.io/>. v2 imports only (`mcp.server.MCPServer`, `mcp.Client`, `mcp.server.mcpserver.exceptions.ToolError`); no v1 `FastMCP` tutorial code.
 2. Dependency placement and lockfile decision:
-   - _TODO: Fill in._
+   - `mcp>=2.3.0,<3` is a RUNTIME dependency, because `src/mcp_server.py` imports it, like `fastapi` for `src/api.py`. The `<3` bound keeps an unpinned resolve on the major version these docs describe.
+   - `mcp[cli]>=2.3.0,<3` is in the `dev` group: the `mcp dev` / `mcp run` / `mcp install` commands are development tools. Measured: the extra adds nothing on disk today, because its `typer` (and `rich`) already arrive at runtime through `deepeval` and `huggingface-hub` (`uv tree --no-dev --invert`).
+   - `uv.lock`: 141 → 154 packages. Added: `mcp`, `mcp-types`, `cffi`, `cryptography`, `jsonschema`, `jsonschema-specifications`, `pycparser`, `pyjwt`, `python-multipart`, `pywin32` (Windows only), `referencing`, `rpds-py`, `sse-starlette`. No existing version changed. About 17.9 MB on disk in the macOS environment. The Docker image (`uv sync --no-dev`) gets them too, although the container runs only the HTTP API.
 3. Server object and transport:
-   - _TODO: Fill in._
+   - `server = MCPServer("ProcureRAG", version=api.APP_VERSION, lifespan=lifespan)`; `server.run()` under `if __name__ == "__main__"`: stdio. No remote transport today: Streamable HTTP is deferred until there is an authenticated identity to map to a role.
 4. Required tool name, description, typed arguments, and structured output:
-   - _TODO: Fill in._
+   - `answer_procurement_question`, title "Answer a procurement question", `read_only_hint=True`.
+   - Arguments: `query` (string, 1–500), `role` (`"requester"` | `"buyer"`, required, documented as caller-asserted), `query_id` (optional, evaluation replay only, with its exact text), `decision` (optional `ApprovalDecision`: approve / edit + `followup_query` / reject + `message`).
+   - Result: Day 21's `QueryResponse`, unchanged: `status`, `query_id`, `text`, `sources` (ids and `cited` only), `findings`, `approval_request`, `run_id`, `caveats`.
+   - The description tells the model how to read `status`, and that it must never choose a decision itself.
 5. Existing Day 21 service seam reused by the tool:
-   - _TODO: Fill in._
+   - `api.QueryRequest` (the same request model), `service.rate_limiter` (Day 21's limiter, one key for the one stdio host), `api.check_query_request` (the same `query_id` rule, its 422 turned into a `ToolError`), and `api.run_query_events` (the one guarded pipeline behind `/query` and `/query/stream`). No direct call to `agent_graph.py` or the retriever.
 6. One-time service/model initialization strategy:
-   - _TODO: Fill in._
+   - The SDK's lifespan: `lifespan` calls `build_mcp_service()` once and yields the service; the tool reads it from `ctx.request_context.lifespan_context`. `build_mcp_service` is `api.build_live_service`, plus one line: the live-LLM switch defaults to `"0"` when the launch environment does not set it, so `.env` alone can never turn the paid LLM on under MCP.
 7. Input/role/confidentiality/guard/HITL/output safety mapping:
-   - _TODO: Fill in._
+   - Input limits: the tool's argument schema (SDK), then `QueryRequest` again.
+   - Labeled-query consistency: `check_query_request` → `ToolError`.
+   - Role/confidentiality: `role` goes into `QueryRequest`, and `run_query_events` filters retrieval with `ROLE_CLEARANCE` (fail closed on unknown labels).
+   - Injection / PII / scope: Day 20/21's entry guards inside `run_query_events`, on the question and on both decision texts.
+   - HITL: no decision on a question that may pause → `pending_approval`, nothing runs; the decision is never invented.
+   - Output withholding: Day 20's output guard (an uncited answer comes back `blocked`).
+   - Exception sanitization: the SDK sends a crash as "Error executing tool answer_procurement_question" only.
 8. Fake-service seam for deterministic tests:
-   - _TODO: Fill in._
+   - Tests replace `mcp_server.build_mcp_service` with a function that returns a `ProcureRAGService` built on fake retrieval and a fake LLM (both record what they receive), and real labeled rows, follow-up table, and confidentiality labels. Then `Client(module.server)` runs the real lifespan and the real protocol, in memory.
 9. Evidence layers: direct function vs in-memory MCP client vs Inspector/stdio vs remote CI:
-   - _TODO: Fill in._
+   - Direct `answer_question(...)`: the adapter's logic only. In-memory `Client(server)`: the SDK protocol path (discovery, schema, validation, calls, structured and error results), no process. Real stdio (the smoke script and the Inspector CLI): the process boundary, real models, stdout hygiene, one build per process, clean exit. Remote CI: the same tests on GitHub's runner, once Juan pushes (pending).
 10. Optional resource/prompt decision and sampling deferral:
-    - _TODO: Fill in._
+    - Deferred. The one tool is clean, but the route's rule is one tool first, and a resource or prompt would add surface without new evidence. Sampling: deferred (cost/trust/recursion, and deprecated by the 2026-07-28 spec).
+
+The boundary, in my own words:
+
+```text
+MCP host (Claude Code, the Inspector)          its model decides: call answer_procurement_question?
+  -> MCP client                                one per server; starts the process; JSON-RPC over stdin/stdout
+    -> stdio MCP server (src/mcp_server.py)    SDK checks the arguments against the schema from the type hints
+      -> answer_question (the adapter)         QueryRequest -> rate limit -> check_query_request
+        -> api.run_query_events                entry guards -> approval boundary -> role-filtered, guarded graph
+          -> retrieval / graph / LLM (off)     built once in the lifespan, shared by every call
+        <- QueryResponse                       status, safe text, source ids, findings, approval request, run id, caveats
+    <- CallToolResult                          structured_content (for the app) + the same JSON as text (for the model)
+  <- the host decides what to do with it       e.g. show approval_request to the user and ask for a decision
+```
+
+Traced before coding (and later measured, see the evidence below):
+
+- **Q001** (`buyer`, `query_id="Q001"`, exact text): schema OK → `QueryRequest` OK → rate limit OK → the id and its text match → entry guards find nothing → Q001 has no follow-up, so it cannot pause → role-filtered retrieval → evidence complete → no LLM client → `not_generated`, five source ids, a `run_id`.
+- **Q091 without a decision**: the same until the approval boundary. Q091 has a follow-up in Day 16's table, so it MAY pause, and no decision came → `pending_approval` with the approval request, before any retrieval: no `run_id`, no sources.
+- **Injection-shaped request** (free text, "Ignore all previous instructions…"): schema OK → no `query_id` to check → Day 20's input guard blocks → `blocked` with one `prompt_injection` finding, before the approval boundary and before retrieval.
+
+None of the three paths bypasses Day 21's guards or HITL behavior, because all three go through `run_query_events`.
 
 ### Block 3 — Juan-owned implementation
 
+> **Superseded in part on 2026-10-24.** The `decision` tool argument below was replaced by MCP elicitation: the user answers a form, and the model cannot send a decision. What follows is the 2026-10-22 version, as measured. The current contract and its evidence are in "Follow-up (2026-10-24)" below.
+
 Artifacts changed:
 
-- MCP dependency / lockfile: _TODO: Fill in._
-- Server module: _TODO: Fill in._
-- Tool(s): _TODO: Fill in._
-- Tests: _TODO: Fill in._
-- Optional resource/prompt: _TODO: Fill in or state deferred._
-- Week 5 gate inventory: _TODO: Fill in._
+- MCP dependency / lockfile: `pyproject.toml` (`mcp>=2.3.0,<3` runtime; `mcp[cli]>=2.3.0,<3` dev) and `uv.lock` (`uv add`, 141 → 154 packages, no existing version changed; `uv lock --check` clean).
+- Server module: `src/mcp_server.py` (the server object, `build_mcp_service`, `lifespan`, the `answer_question` adapter, the tool, and `server.run()` for stdio).
+- Tool(s): exactly one, `answer_procurement_question`.
+- Tests: `tests/test_mcp_server.py`, 28 cases (13 test functions) in three groups: the direct adapter, the in-memory MCP client, and the live-switch policy. Plus `scripts/mcp_stdio_smoke.py`, the real stdio client (evidence, not part of pytest).
+- Optional resource/prompt: deferred (see Block 2, item 10).
+- Week 5 gate inventory: `docs/eval-report.md`, "Day 25: MCP server/tool and Week 5 gate review", and below.
 
 Required tool contract:
 
-- Name and purpose: _TODO: Fill in._
-- Input schema: _TODO: Fill in._
-- Structured output schema: _TODO: Fill in._
-- How Q001 maps through the existing service: _TODO: Fill in._
-- How Q091 with no decision remains `pending_approval`: _TODO: Fill in._
-- How blocked input remains a safe domain response: _TODO: Fill in._
-- How invalid input is sanitized: _TODO: Fill in._
-- How live LLM/tracing stay off for required evidence: _TODO: Fill in._
-- How stdout remains protocol-only in stdio mode: _TODO: Fill in._
+- Name and purpose: `answer_procurement_question`: answer a question about Vantera's procurement policies, procedures, and supplier contracts through ProcureRAG's guarded pipeline, with source ids.
+- Input schema: `required: ["query", "role"]`; `query` `{minLength: 1, maxLength: 500}`; `role` `{enum: ["requester", "buyer"]}`; `query_id` string or null; `decision` `$ref ApprovalDecision` (`type` enum approve/edit/reject, `followup_query` ≤ 500, `message` ≤ 200, `additionalProperties: false`) or null. `ctx` is injected and never appears.
+- Structured output schema: `QueryResponse`, all eight fields required, as published in `tools/list` (`outputSchema`).
+- How Q001 maps through the existing service: `QueryRequest(query, role="buyer", query_id="Q001")` → `run_query_events` → `not_generated` with sources `FAQ-001::chunk-12`, `FAQ-001::chunk-13`, `POL-001::chunk-4`, `FAQ-001::chunk-5`, `FAQ-001::chunk-6` (real retrieval; Day 22/23's exact list).
+- How Q091 with no decision remains `pending_approval`: `run_query_events`' approval boundary (`may_pause_for_approval` on the real Day 16 table) returns `pending_approval` before retrieval. A misspelled `decison` is dropped by the SDK, and the call is still `pending_approval` (tested).
+- How blocked input remains a safe domain response: `blocked` is a normal result (`is_error=False`) with the user-safe message and the finding; `run_id` is null, and nothing was retrieved or generated.
+- How invalid input is sanitized: schema violations are rejected by the SDK before the tool runs, as an `is_error` result naming the field (Pydantic's message, which repeats the start of the caller's own input). A wrong `query_id` or the rate limit is a `ToolError` with Day 21's message. Any other exception is reduced to "Error executing tool answer_procurement_question" (tested with a fake key inside the exception text: absent from the result).
+- How live LLM/tracing stay off for required evidence: `build_mcp_service` makes "no switch in the launch environment" mean off, whatever `.env` says. The smoke script and the Inspector commands pass `PROCURERAG_LIVE_LLM=0` and both LangSmith flags `false` explicitly. No module loads `.env` into the environment (only the scripts' `main()` functions call `load_dotenv`), so the LangSmith settings never reach the process. No key was passed to any run.
+- How stdout remains protocol-only in stdio mode: the module never prints; its two log lines go through `logging` to stderr; model-loading progress bars and warnings go to stderr too. The smoke counts the client's JSON-RPC parse failures on stdout: zero. Mutation-checked: a print flushed at import time (before serving starts) did reach stdout, and the smoke failed with exit 1.
 
 ### Deterministic and protocol evidence
+
+> **Superseded in part on 2026-10-24.** The `decision` tool argument below was replaced by MCP elicitation: the user answers a form, and the model cannot send a decision. What follows is the 2026-10-22 version, as measured. The current contract and its evidence are in "Follow-up (2026-10-24)" below.
 
 #### Pure adapter and in-memory MCP client tests
 
 Exact command:
 
 ```text
-_TODO: Fill in._
+PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
+  DEEPEVAL_TELEMETRY_OPT_OUT=1 OMP_NUM_THREADS=1 uv run pytest -q tests/test_mcp_server.py
+28 passed in 0.73s
 ```
 
 Results:
 
-- Tool discovery / schema: _TODO: Fill in._
-- Q001 control: _TODO: Fill in._
-- Q091 pending approval: _TODO: Fill in._
-- Blocked input: _TODO: Fill in._
-- Invalid schema/decision: _TODO: Fill in._
-- One-time service initialization: _TODO: Fill in._
-- Structured output / no unsafe fields: _TODO: Fill in._
+- Tool discovery / schema: one tool, `answer_procurement_question`, title "Answer a procurement question", `read_only_hint=True`, the HITL sentence in its description; `required == ["query", "role"]`; properties exactly `query`, `role`, `query_id`, `decision` (no `ctx`); `query` 1–500; `role` enum; `ApprovalDecision` with `additionalProperties: false`; the output schema's properties and `required` are `QueryResponse`'s eight fields, in order.
+- Q001 control: `is_error=False`, `not_generated`, sources `[{"source_id": 1, "doc_id": "POL-001", "chunk_id": "POL-001::chunk-6", "cited": false}]` (fake retrieval), `content[0].text` parses to the same object as `structured_content`, and the chunk text is absent from the result.
+- Q091 pending approval: `pending_approval`, Day 21's message, `proposed_followup_query` from the real Day 16 table, allowed decisions approve/edit/reject, no `run_id`, no sources, zero retrieval calls, zero LLM prompts. Also with the misspelled `decison` argument.
+- Blocked input: an injection (`prompt_injection`, block) and an off-topic question (`off_topic`, block), each `is_error=False`, `blocked`, no `run_id`, zero retrieval calls, zero LLM prompts.
+- Invalid schema/decision: eight cases, each an `is_error` result with no structured content, naming the problem, and zero retrieval calls: a missing role, `"admin"`, an empty query, a 540-character query, `"aprove"`, an `edit` with no `followup_query`, an unknown key inside `decision`, and an unknown `query_id` (that one through `check_query_request` → `ToolError`).
+- One-time service initialization: one build for one connection, before the first call, still one after three calls; a second connection builds again (the in-memory client opens a new connection each time).
+- Structured output / no unsafe fields: results carry source ids only; an LLM timeout whose message contains a fake key comes back as exactly "Error executing tool answer_procurement_question", the key absent from the whole result, while the server log has "Tool 'answer_procurement_question' raised an unexpected exception".
+- Same service, same answer: five requests (Q001, Q091, injection, free text with an email, Q091 with a reject decision) give the same response through MCP and through `POST /query` on the same service, except `run_id`.
+- Role: a requester gets only the Internal POL-001 chunk (not even the CONTRACT-005 id); a buyer gets both.
+- Live switch: with `.env` saying `"1"` and no switch in the launch environment, `build_mcp_service` builds NO LLM client (the real `build_live_service` ran, with only the model loading and the client factory faked). With `"1"` in the launch environment, it builds the client with the key from `.env`.
+- Mutation check: 9 of 9 deliberate faults in `src/mcp_server.py` were caught, and the file was restored and verified identical. The faults: `.env` decides the switch (1 test failed); the `query_id` refusal leaks as a crash (3); the `query_id` check skipped (3); the rate limit removed (1); the role escalated to buyer (1); a direct graph call that skips the API's entry guards and approval boundary (7); the service built per call (1); `read_only_hint` dropped (1); the decision dropped by the tool (1).
 
-What this proves: _TODO: Fill in._
+What this proves: the adapter maps every argument into Day 21's service and returns Day 21's response; the SDK protocol path (initialization, discovery, the generated schemas, argument validation, structured and error results) behaves as specified for Q001, Q091, blocked, and invalid calls; the tests can fail.
 
-What this does **not** prove: _TODO: Fill in._
+What this does **not** prove: anything about a real process (startup, stdout, shutdown), the real models, or real retrieval; nothing about a real host's UI, its approval prompts, or what its model will choose to send; nothing about answer quality.
 
 #### Inspector or real stdio client
 
 SDK and runtime versions:
 
 ```text
-_TODO: Fill in._
+mcp 2.3.0 (mcp-types 2.3.0); protocol negotiated: 2026-07-28
+Python 3.11.7 (.venv), uv 0.12.2, macOS (Darwin 25.3.0, arm64)
+MCP Inspector 2.12.0 (npx @modelcontextprotocol/inspector@2.12.0, from github.com/modelcontextprotocol/inspector)
+Node v22.22.3, npx 10.9.8
 ```
 
 Exact server/client command:
 
 ```text
-_TODO: Fill in._
+# 1. the real stdio client (the SDK's own Client, starting the server as a child process)
+PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVAL_TELEMETRY_OPT_OUT=1 \
+  OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 uv run python scripts/mcp_stdio_smoke.py
+# it starts: <.venv python> src/mcp_server.py, with only PROCURERAG_LIVE_LLM=0, LANGSMITH_TRACING=false,
+# LANGSMITH_TRACING_V2=false, HF_HUB_OFFLINE=1, OMP_NUM_THREADS=1 on top of the SDK's allow-list
+
+# 2. the MCP Inspector, CLI mode (one server process per invocation)
+INSPECT="npx -y @modelcontextprotocol/inspector@2.12.0 --cli -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false \
+  -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -e OMP_NUM_THREADS=1"
+SERVER="uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py"
+$INSPECT --method tools/list --strict -- $SERVER
+$INSPECT --method tools/call --tool-name answer_procurement_question \
+  --tool-arg "query=What approval is required for a EUR 60,000 purchase order?" role=buyer query_id=Q001 -- $SERVER
+# ... the same for Q091 (its exact text, query_id=Q091), the injection, and Q001's text with no role
 ```
 
 Evidence:
 
-- Server startup and one-time model/service load: _TODO: Fill in._
-- Discovered tool name/description/schema: _TODO: Fill in._
-- Q001 call summary and duration: _TODO: Fill in._
-- Q091 pending-approval call summary and duration: _TODO: Fill in._
-- Blocked-input call summary: _TODO: Fill in._
-- Invalid-input behavior: _TODO: Fill in._
-- stdout/log hygiene: _TODO: Fill in._
-- no provider key / no paid call / no LangSmith trace: _TODO: Fill in._
-- clean process shutdown: _TODO: Fill in._
+- Server startup and one-time model/service load: the smoke's three runs: "service built once in 5.9 s / 3.8 s" (and 5.6 s on the first run), one ready line for all four calls, `live LLM: False`; connect (initialize included) 4.48–6.75 s. Each Inspector invocation started its own process and logged exactly one ready line (6.0 s in the `tools/list` run).
+- Discovered tool name/description/schema: smoke: `['answer_procurement_question']`, `required=['query', 'role']`. Inspector `tools/list` (exit 0): the same name, title "Answer a procurement question", annotations `{"readOnlyHint": true}`, properties `query`, `role`, `query_id`, `decision`, output schema `status`, `query_id`, `text`, `sources`, `findings`, `approval_request`, `run_id`, `caveats`. `--strict` reported no schema-portability problem (it exits 6 on an error-severity one).
+- Q001 call summary and duration: `not_generated`, sources `FAQ-001::chunk-12`, `FAQ-001::chunk-13`, `POL-001::chunk-4`, `FAQ-001::chunk-5`, `FAQ-001::chunk-6`, no findings, `run_id` set; 0.07–0.11 s per call in the smoke. Inspector: the same status and sources, `isError: false`, exit 0.
+- Q091 pending-approval call summary and duration: `pending_approval`, `approval_request` present (`proposed_followup_query`: "approval bands EUR 50,000 250,000 Band 3 VP Procurement"; allowed approve/edit/reject), no sources, `run_id` null; under 0.01 s in the smoke. Inspector: the same, exit 0.
+- Blocked-input call summary: `blocked`, findings `prompt_injection:block`, no sources, `run_id` null, under 0.01 s. Inspector: the same, exit 0.
+- Invalid-input behavior: no `role` → `is_error=True`, "Error executing tool answer_procurement_question: 1 validation error for answer_procurement_questionArguments … role … Field required". Inspector: `isError: true`, exit 5 (the Inspector CLI's exit code for an error result).
+- stdout/log hygiene: zero "Failed to parse JSONRPC message from server" errors in the client. The server's stderr has the model-loading lines, the progress bars, and the two ProcureRAG lines, and no traceback and no secret-like text (smoke check; and no `Traceback` in any of the five Inspector stderr captures). Checking the checker: prints in the lifespan or in the tool body, and an unflushed import-time print, were all diverted to stderr by the SDK, and stdout stayed clean. A print FLUSHED at import time, before serving starts, did reach stdout: the client logged the parse failure, and the smoke exited 1. The source file was restored after each check.
+- no provider key / no paid call / no LangSmith trace: no key was passed (the child gets the SDK's allow-list plus the five variables above); `live LLM: False` in every startup line; both LangSmith flags `false`, and no `LANGSMITH_*` value reaches the child at all.
+- clean process shutdown: the "ProcureRAG MCP server stopped" line in every run (the lifespan was left normally, not killed); shutdown 0.61–0.64 s, under the SDK's 2 s grace before SIGTERM; the logged pid was gone afterwards (`os.kill(pid, 0)` → `ProcessLookupError`).
 
-If Inspector/host evidence is blocked, record the exact command/error/prerequisite and keep the status honest:
+The browser Inspector (`uv run mcp dev src/mcp_server.py`) was not opened: it needs a person at the browser. Its CLI mode is the same Inspector package (2.12.0), and it listed and called the tool. No blocker: `npx` is present.
 
-_TODO: Fill in or delete this blocker placeholder after successful evidence._
+### Follow-up (2026-10-24): the reviewer's decision comes from the user, by elicitation
+
+**Why.** In the 2026-10-22 version, `decision` was a tool argument, so the host's MODEL wrote it: it could approve Q091's second retrieval pass on its own, and the tool description ("never choose the decision yourself") was an instruction, not enforcement. Juan chose to move the decision to MCP elicitation: the server asks the USER, and the answer goes back to the server without passing through the model. Claude Code supports it: it "displays an interactive dialog" for form-mode elicitation, and on protocol 2026-07-28 it declares `elicitation: {form: {}, url: {}}` (checked on <https://code.claude.com/docs/en/mcp>, 2026-10-23).
+
+This is a deliberate deviation from the route's recommended input contract ("optional decision fields that preserve approve / edit / reject semantics"). The semantics are kept, in a form the user answers instead of in the arguments.
+
+**The contract now.**
+
+- Arguments: `query` and `role` (required), `query_id` (optional). No `decision`, and no `ApprovalDecision` in the schema (`tools/list`: `['query', 'role', 'query_id']`, no `$defs`).
+- A resolved parameter, `review: Annotated[ElicitationResult[ReviewerAnswer], Resolve(ask_the_reviewer)]`. The SDK fills it before the tool body. It is not in the schema, and a value the model sends anyway is ignored.
+- The form, `ReviewerAnswer`: `decision` (`approve` | `edit` | `reject`), `followup_query` (≤ 500, only used for `edit`), `message` (≤ 200). `as_decision` turns it into Day 21's `ApprovalDecision`, so Day 18's rules still apply.
+
+| What happens | Result |
+|---|---|
+| The question cannot wait for approval (Q001), or is blocked (injection, off-topic), or its `query_id` is refused | No question is asked; Day 21 runs as before |
+| Q091/Q092, and the user answers approve / edit / reject | That decision runs, exactly as the same decision in an HTTP body |
+| The user declines or dismisses the question | `pending_approval`, nothing runs, `NOT_DECIDED_MESSAGE` |
+| The host declared no elicitation support | `pending_approval`, nothing runs, `CANNOT_ASK_MESSAGE` |
+| The answer is not a usable decision (`edit` with no follow-up query) | An `is_error` result (`ToolError`), nothing runs |
+| The model sends its own `decision` | Ignored (the SDK drops unknown arguments) |
+
+**How it works.**
+
+- `ask_the_reviewer` asks only when Day 21 would stop at `pending_approval`. `pending_approval_preview` reads `api.run_query_events` up to its `retrieval_started` event, so it runs exactly the entry guards and the approval boundary, in Day 21's own order, and never retrieves. An attack is reported as an attack, never shown to a person as a question.
+- `host_can_ask` reads the client's declared capabilities first. Asking a client that never declared elicitation is a protocol error in the SDK (`MISSING_REQUIRED_CLIENT_CAPABILITY`), not a question, so without this check the fallback would be a crash.
+- On 2026-07-28 the question takes two rounds of the same `tools/call`: the server returns an `InputRequiredResult`, the host asks the user, and its retry carries the answer. Measured in a prototype: the resolver ran twice, and the user was asked once.
+- Day 21's `PENDING_APPROVAL_MESSAGE` ("send the same request again with a 'decision'") is replaced on the MCP path: this tool has no `decision` argument, so that text would send the model into a loop of ignored retries.
+
+**Evidence (2026-10-24, Mac, live LLM and tracing off).**
+
+```text
+uv run pytest -q tests/test_mcp_server.py
+38 passed in 0.85s          (19 test functions; 28 cases before)
+```
+
+- New tests: the form-to-decision rules (direct); a host that cannot ask (3 cases, including a model-sent `decision` and a model-sent `review`); the user's approve / edit / reject decides, asked once and before any retrieval, with the model's own `approve` sent alongside and ignored (3); decline and cancel (2); an unusable answer (1); an injection in the user's edited follow-up is blocked before anything runs (1); no question for Q001, an injection, an off-topic question, or a refused `query_id` (4). The parity test now compares the user's elicited approve / reject with the same decision in a `POST /query` body (5 cases).
+- Removed: the three schema cases for a `decision` argument (`"aprove"`, an `edit` with no follow-up, an unknown key in `decision`). The argument no longer exists; the same rules now apply to the form.
+- Mutation check: 16 of 16 caught, and the file was restored and verified identical. The 8 new faults: the preview reads past `retrieval_started` (1 test failed); a host that cannot ask is asked anyway (4); the user's answer is ignored (7); auto-approve when no answer came (5); a decline reads as "cannot ask" (2); leftover follow-up text kept on approve (1); the preview skips the `query_id` check (1); Day 21's "send a decision" text kept (5). The 8 original faults (M1–M8), re-run on the new tool, are all still caught (M6, the direct graph call, now fails 9 tests).
+- Real stdio client (`HF_HUB_OFFLINE=1 uv run python scripts/mcp_stdio_smoke.py`, exit 0). Its client declares elicitation, and `_ScriptedReviewer` answers in place of a person:
+
+  ```text
+  connected: server=ProcureRAG 0.1.0, protocol=2026-07-28
+  tools/list: ['answer_procurement_question'], required=['query', 'role']
+  tools/call Q001 control: status=not_generated sources=['FAQ-001::chunk-12', 'FAQ-001::chunk-13', 'POL-001::chunk-4', 'FAQ-001::chunk-5', 'FAQ-001::chunk-6'] findings=[] run_id=set (0.11 s)
+  tools/call Q091, the reviewer declines: status=pending_approval sources=[] findings=[] run_id=None (0.00 s)
+  tools/call Q091, the reviewer rejects: status=gap_report sources=['SOP-001::chunk-12', 'SOP-006::chunk-3', 'FAQ-001::chunk-12', 'FAQ-001::chunk-6', 'POL-003::chunk-13', 'POL-001::chunk-3', 'CONTRACT-004::chunk-9', 'SOP-001::chunk-14', 'POL-008::chunk-7', 'GUIDE-002::chunk-1'] findings=['excessive_agency:route_to_hitl'] run_id=set (0.07 s)
+  tools/call blocked injection: status=blocked sources=[] findings=['prompt_injection:block'] run_id=None (0.00 s)
+  tools/call invalid: no role: is_error=True text='Error executing tool answer_procurement_question: 1 validation error for answer_procurement_questionArguments\n' (0.00 s)
+  server log: service built once in 6.8 s (pid 94539, live LLM: False); pid 94539 gone after shutdown: True
+  PASSED: 1 tool discovered, 5 calls as expected, the reviewer asked 2 times (Q091 only), stdout clean, 1 service build, clean shutdown
+  ```
+
+  The reject case is real pass 1 on the real models: 10 chunks, `POL-001::chunk-3` but not the Band 3 chunk, so the graph wanted the follow-up; the reviewer's reject stopped it, and the run ended in `gap_report` with the recorded reason.
+- MCP Inspector 2.12.0, CLI mode: it declares no elicitation support, so it exercises the fallback in a real process. `tools/list` (exit 0): properties `query`, `role`, `query_id`, no `$defs`. Q091 (exit 0): `pending_approval`, `run_id` null, text equal to `CANNOT_ASK_MESSAGE`. Q091 plus `decision={"type":"approve"}` (exit 0): the same; the model's decision was ignored.
+- Full gates: 425 passed (387 + 38); compileall clean; Ruff clean; frozen regression, current retrieval (6 x [OK]), and graph regression all exit 0; `git diff --check` clean.
+
+**What this fixes, and what it does not.**
+
+- Fixed: the host's model can no longer approve, edit, or reject the follow-up pass. Only an answer to the form can.
+- Not fixed: the answer comes from the HOST, and this server cannot prove a person gave it. Claude Code has an `Elicitation` hook that can respond without showing the dialog, and the SDK's own docstring warns that a client "might decide how to handle the elicitation -- either by asking the user or automatically generating a response". Nothing records WHO answered: the approval is still unattributed and stateless.
+- Not fixed: the question is still asked before pass 1, so it cannot show the measured gap. Asking after pass 1 needs the run to pause and resume across the host's retry (Day 18's checkpointer).
+- New limit: a host without elicitation support cannot approve through MCP at all (fail closed). Over HTTP the decision is still a request field.
+- The role is still an argument the model writes.
 
 ### Week 5 HER-270 gate inventory
 
+The same table is in [`docs/eval-report.md`](eval-report.md), "Day 25: MCP server/tool and Week 5 gate review". "Exercised" means a real run was observed and recorded; "deleted" means it was exercised and the resources no longer exist.
+
 | Gate area | Primary artifacts | Strongest real evidence | Status | Honest caveat / next weakness |
 |---|---|---|---|---|
-| Day 21 — FastAPI async/streaming surface | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Day 22 — Docker | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Day 23 — Azure deployment/fallback | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Day 24 — eval-gated CI/CD | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Day 25 — MCP | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Day 21 — FastAPI async/streaming surface | `src/api.py`, `tests/test_api.py` | Real local Uvicorn with the real models (12 s startup; a 93-query sweep per role, about 38 ms a request); the same API in the container (Day 22), on Azure (Day 23), and smoked in CI (Day 24) | Exercised | Caller-asserted role, stateless approval, process-local rate limit, unpersisted trace rows, keyword scope guard |
+| Day 22 — Docker | `Dockerfile`, `.dockerignore`, `docs/docker-runbook.md` | Real `linux/arm64` build and verbatim runbook (Mac, 1.87 GB CPU-only image) and `linux/amd64` build and run (Hermes VM, 51 s offline startup) | Exercised | Base images tagged, not digest-pinned; model revisions unpinned; the image now also carries the unused `mcp` packages (about 18 MB, measured in the macOS environment) |
+| Day 23 — Azure deployment | `deploy/azure/containerapp-template.yaml`, `docs/azure-container-apps-runbook.md` | A real Container Apps deployment (2026-10-19): public `/health` and four contract smokes, system/console logs, a 59 s fresh-replica cold start; group deleted the same day | Exercised, then deleted | No persistent deployment and no authentication; nothing is live today |
+| Day 24 — eval-gated CI/CD | `.github/workflows/ci.yml`, `live-eval.yml`, `deploy.yml`, `src/graph_regression.py`, `scripts/container_smoke.py` | Remote green, a deliberate red, three required checks on `main`, a CI-refused deploy, two green deployments by digest, one real rollback (revision `0000004`), both groups deleted | Exercised (remote) | Q091 live answer quality is RED (drops the usage-data step); rebuild, not CI-artifact promotion; one-person review; the rollback was applied by hand |
+| Day 25 — MCP | `src/mcp_server.py`, `tests/test_mcp_server.py`, `scripts/mcp_stdio_smoke.py` | 38 in-memory protocol tests (16/16 mutations caught); real stdio client: discovery plus Q001, Q091 declined and rejected by a scripted reviewer (elicitation), blocked, invalid; Inspector 2.12.0 CLI: the cannot-ask fallback; real models, live LLM off | Exercised locally; remote CI pending | Local stdio only; the role is asserted by the host's model; the reviewer's answer comes from the host, unattributed; no remote MCP auth; browser Inspector and a real host session not exercised |
 
 Week 5 gate verdict before Hermes review:
 
-_TODO: Fill in. Do not write “passed” merely because this scaffold exists._
+**Ready for the HER-270 review, not passed.** Every Week 5 area has an artifact and real evidence. Days 21–24 were exercised (Day 23's and Day 24's Azure resources are deleted, so nothing is live). Day 25 is exercised locally through a real stdio client and the Inspector CLI. Still open before closing: the remote CI run on the Day 25 changes (Juan's push), Juan's review of the new code, the interview drill without notes, and Hermes' independent re-run. The Q091 live answer-quality failure from Day 24 is still red and is carried forward, not hidden.
 
 ### Full verification
 
+Re-run on 2026-10-24, after the elicitation change, Mac, with `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVAL_TELEMETRY_OPT_OUT=1 OMP_NUM_THREADS=1` (the 2026-10-22 run, before it: 415 passed, the MCP file 28):
+
 ```text
-uv sync --locked --dev: _TODO: Fill in._
-pytest: _TODO: Fill in._
-compileall src tests scripts: _TODO: Fill in._
-Ruff src tests scripts: _TODO: Fill in._
-frozen fixture regression: _TODO: Fill in._
-current retrieval verification: _TODO: Fill in._
-graph regression: _TODO: Fill in._
-MCP-specific tests/client: _TODO: Fill in._
-git diff --check: _TODO: Fill in._
-git status --short: _TODO: Fill in._
-remote CI run URL / commit / result: _TODO: Fill in or state not yet available._
+uv sync --locked --dev: Resolved 154 packages, Checked 145 packages
+uv lock --check: Resolved 154 packages (agrees with pyproject.toml)
+mcp version: 2.3.0
+pytest: 425 passed in 2.60s (387 before + 38 new)
+compileall src tests scripts: clean
+Ruff src tests scripts: All checks passed!
+frozen fixture regression: all cases as expected, exit 0
+current retrieval verification (HF_HUB_OFFLINE=1): 6 x [OK], exit 0
+graph regression (HF_HUB_OFFLINE=1): 6/6 contracts passed, 4 counted stand-in LLM calls, exit 0
+MCP-specific tests/client: tests/test_mcp_server.py 38 passed in 0.85s; scripts/mcp_stdio_smoke.py PASSED (5 calls,
+  the reviewer asked 2 times), exit 0; Inspector 2.12.0 CLI: tools/list exit 0, Q091 and Q091 + a model decision exit 0
+  (pending_approval, the cannot-ask fallback)
+git diff --check: clean
+git status --short: the Day 25 files (staged by Juan), plus the 2026-10-24 elicitation changes on top: src/mcp_server.py,
+  tests/test_mcp_server.py, scripts/mcp_stdio_smoke.py, docs/test-queries.md, this entry, docs/eval-report.md
+remote CI run URL / commit / result: not yet available: nothing is committed or pushed. Juan's steps: review, branch,
+  commit, open a PR; then record the run URL, the head SHA, and the three required jobs' results here.
 ```
 
 ### What failed or was confusing
 
-- _TODO: Fill in._
+- **Day 21's `.env` fallback would have switched the paid LLM on under a host.** The SDK's stdio client starts the server with only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, and `USER` (plus what the host adds). Claude Code instead passes the whole shell environment by default (its `CLAUDE_CODE_MCP_ALLOWLIST_ENV=1` gives the allow-list behavior), and the shell normally has no `PROCURERAG_LIVE_LLM` either. Either way the switch is usually absent, and `read_setting` falls back to `.env`. This repo's `.env` says `"1"`. Over HTTP, a person starts Uvicorn and can see that; under MCP the host starts the server, and its MODEL decides how often to call. Fixed in `build_mcp_service`: no switch in the launch environment means off. Tested both ways, and its mutation is caught.
+- **An unknown argument is dropped, not refused.** The SDK's argument model ignores keys it does not know, so `"decison"` simply vanished, where Day 21's HTTP contract gives a 422. It fails closed (Q091 stays `pending_approval`), so it is documented and tested rather than worked around through SDK internals.
+- **"The lifespan runs once" needed a qualifier.** I first assumed once per server. Measured: once per CONNECTION (two `async with Client(server)` blocks ran it twice). For stdio that is once per process, because one process serves one host, and the SDK's `run()` enters it once around the serve loop.
+- **The first stdout check could not fail.** Three stray prints (in the lifespan, in the tool body, and an unflushed one at import time) did not corrupt the wire, because the SDK diverts flushed output to stderr while serving, and the unflushed one was only flushed after the diversion began. Only a print flushed at import time, before serving, reached stdout, and that one made the smoke fail. Without that last mutation, "stdout clean" would have been an untested claim.
+- **The log handler wraps lines.** `MCPServer` configures Rich logging, which wraps a long line at 80 columns, so the first line-based check on the startup line read half of it. The smoke now matches a pattern on the stderr text with its whitespace collapsed.
+- **Developer docs leak into the model's schema.** Pydantic puts `ApprovalDecision`'s docstring (865 characters about Day 18 and HTTP 422/500) into the tool's `$defs`, so the model reads it in `tools/list`. FastAPI's OpenAPI page shows the same text. Not changed: it is noise, not a secret, and a separate MCP-only decision model would be a second contract to keep in sync. (Gone since 2026-10-24: the tool no longer takes an `ApprovalDecision`. The elicitation form has its own short descriptions.)
+- **Asking a host that cannot ask is a crash, not a question (2026-10-24).** In the SDK, a resolver that returns `Elicit(...)` to a client that declared no elicitation support raises a protocol error (`MISSING_REQUIRED_CLIENT_CAPABILITY`). So the fail-closed fallback needed its own check of the declared capabilities (`host_can_ask`) before asking.
+- **Day 21's pending text would have looped the model (2026-10-24).** `PENDING_APPROVAL_MESSAGE` tells the caller to send the same request again with a `decision`. The MCP tool has no `decision` argument any more, so a model following that text would retry with an argument the SDK drops, and get the same answer. The MCP path replaces the text with one of two messages that say why no decision came.
+- **Elicitation moves the decision to the host, not provably to a person (2026-10-24).** Claude Code can answer elicitations through an `Elicitation` hook, and the SDK's docstring says a client may answer by itself. The model can no longer approve, but WHO approved is still unrecorded.
+- **The `[cli]` extra placement is mostly a statement of intent.** `mcp[cli]` is in the dev group, but `typer` and `rich` already arrive at runtime through `deepeval` and `huggingface-hub`.
 
 ### What became clearer
 
-- _TODO: Fill in._
+- **The adapter is small because Day 21 already did the work.** The tool is one call to `answer_question`, and `answer_question` is four steps: build the request, count the call, check the id, run the pipeline. The parity test (same arguments through MCP and through `POST /query`, same response) is the proof that this is one service with two doors, not two policies.
+- **Discovery is self-description, generated.** The input schema came from the type hints and `Field` limits, and the output schema IS `QueryResponse`. Nothing was written twice.
+- **Each evidence layer has its own claim.** Direct: adapter logic. In memory: the protocol path (28 tests on 2026-10-22, 38 since the elicitation change). Real stdio: the process boundary (one build, clean stdout, clean exit, real models). Remote CI: not yet. A green test of one layer says nothing about the next.
+- **Under MCP the "caller" is a model.** The role and the decision were caller-asserted on Day 21. Here the caller writes them in tool arguments, which makes the gap concrete: identity has to come from the connection, and approval from a person (host confirmation, or MCP elicitation), not from an argument. On 2026-10-24 the decision moved to elicitation; the role is still an argument.
 
 ### What I can now explain in an interview
 
-Answer without notes. Use these bullet shapes as prompts, not as finished answers.
+Draft answers, built from the Day 25 evidence above. Practised by Juan without notes: _pending (Juan confirms before the review)._
 
 1. **Host vs client vs server in this demo**
    - host = user-facing AI application;
    - client = one MCP-speaking connection inside the host;
    - server = ProcureRAG capability provider.
-   - My answer: _TODO: Fill in._
+   - My answer: the host is Claude Code (or the Inspector): it owns the user, the conversation, and the model that decides to call a tool. Its MCP client is one connection to ProcureRAG: it starts `src/mcp_server.py`, negotiates the protocol (`2026-07-28`), lists the tools, and sends calls. The server exposes one typed tool and runs Day 21's guarded service. It never decides anything on the model's behalf, and with the live LLM off it calls no model at all.
 2. **Why the procurement operation is a tool**
    - computation/retrieval from typed arguments;
    - contrast application-controlled resource and user-controlled prompt.
-   - My answer: _TODO: Fill in._
+   - My answer: it computes something from arguments the model chooses (a question and a role): retrieval, guards, maybe a paid LLM call. That is model-controlled, so it is a tool. A resource would be read-only context the application chooses to attach (for example a sanitized Week 5 summary). A prompt would be a template the user picks (for example "review this answer against its sources"). The control boundary decides the primitive, not the data type.
 3. **Why reuse the Day 21 service boundary**
    - one guard/role/HITL/output policy;
    - avoid raw-retrieval and adapter drift.
-   - My answer: _TODO: Fill in._
+   - My answer: the tool calls `api.run_query_events`, the same function behind `/query` and `/query/stream`. Calling the retriever or the graph directly would skip input limits, the injection/PII/scope guards, the role filter, the approval gate, the output guard, and the response contract. The mutation that did exactly that (a direct graph call) failed 7 tests. And the parity test shows the same request gives the same response through MCP and HTTP.
 4. **Why stdio first**
    - local host-managed subprocess;
    - no new listening/auth/TLS/ingress surface.
-   - My answer: _TODO: Fill in._
+   - My answer: stdio is a child process of the host, spoken to over stdin and stdout. Nothing listens on a port, so there is nothing to reach from the network, and still the full protocol runs (initialize, discovery, calls). Remote Streamable HTTP is a deployment problem: who is calling (so which role), TLS, origin checks, rate limits at the ingress. Transport does not remove the need for authorization; stdio only keeps it local.
 5. **What discovery proves and does not prove**
    - list/name/description/schema;
    - not behavior, safety, latency, or correctness.
-   - My answer: _TODO: Fill in._
+   - My answer: `tools/list` proves the server started, negotiated, and advertises `answer_procurement_question` with that description, those required arguments, and the `QueryResponse` output schema. It says nothing about what the tool does: that took the representative calls (Q001, Q091, blocked, invalid), the parity test, and the mutation check. `MCPServer` even declares resources and prompts with none registered.
 6. **Direct function vs in-memory MCP client vs Inspector/stdio**
    - adapter logic vs protocol path vs real process/transport boundary.
-   - My answer: _TODO: Fill in._
+   - My answer: calling `answer_question` directly proves the adapter's mapping. `Client(server)` in memory proves the SDK's protocol path (schema generation, argument validation, structured and error results), with no process, models, or key. The smoke script and the Inspector CLI prove the real process: it starts, loads the models once, keeps stdout clean, answers real retrieval, and exits on its own. Remote CI is a fourth claim, still pending.
 7. **How HITL stays fail-closed**
    - pending response; explicit approve/edit/reject; no silent approval;
    - current reviewer identity remains caller-asserted/stateless.
-   - My answer: _TODO: Fill in._
+   - My answer: since 2026-10-24 the model cannot decide at all: the tool has no `decision` argument. When Q091 or Q092 would wait for approval, the server asks the USER through MCP elicitation (an approve / edit / reject form), before anything is retrieved, and only that answer counts (a decision the model sends is dropped). Every way of not getting an answer fails closed: a host that cannot ask, or a user who declines or dismisses the form, gives `pending_approval` with nothing run, and an unusable answer is an error result. The user's edited follow-up still passes the entry guards. What remains: the host could answer the form itself (Claude Code's `Elicitation` hook), nothing records who approved, and the question comes before pass 1, so it cannot show the measured gap.
 8. **Tools/resources/prompts/sampling control boundaries**
    - model/application/user/server-to-client control and risk.
-   - My answer: _TODO: Fill in._
+   - My answer: tools are model-controlled actions (the riskiest: side effects, cost); resources are application-controlled read-only context; prompts are user-controlled templates; sampling is the server asking the client's model for work. Sampling adds cost and recursion the server does not control, and the 2026-07-28 spec deprecates it. ProcureRAG exposes one read-only tool and no write tools.
 9. **Why stdout must stay clean under stdio**
    - stdout is the protocol channel; logs belong on stderr/SDK logging.
-   - My answer: _TODO: Fill in._
+   - My answer: the client reads every stdout line as a JSON-RPC message, so one stray line is a corrupt message. The server logs through `logging` (stderr). The SDK diverts flushed stray output to stderr while serving, but not before: a print flushed at import time reached stdout in the mutation check, and the client logged a parse failure.
 10. **Why MCP does not replace FastAPI**
     - AI-host capability protocol vs general HTTP service;
     - shared application service underneath.
-    - My answer: _TODO: Fill in._
+    - My answer: MCP is for AI hosts discovering and calling capabilities; FastAPI is a general HTTP contract for any client, and it is the surface that was containerized, deployed, and gated in CI this week. Both are thin adapters over the same `ProcureRAGService` and `run_query_events`, and the parity test checks they agree.
 11. **What Week 5 proves and what remains weak**
     - exercised API/container/Azure/CI-CD/MCP evidence;
     - Q091 quality, identity/HITL durability, local-only MCP, mutable dependencies.
-    - My answer: _TODO: Fill in._
+    - My answer: exercised: the API with real models, arm64 and amd64 images, a real Azure deployment (deleted), eval-gated CI with a deliberate red, deploy by digest and a real rollback (deleted), and a local MCP tool through a real stdio client and the Inspector. Weak: Q091's live answer quality is red; the role is caller-asserted (under MCP, model-asserted), and the approval comes from the host's user by elicitation but is unattributed and stateless; trace rows are not persisted; MCP is local only; base images and model revisions are not pinned; nothing is deployed today.
 12. **Productionizing remote MCP safely**
     - authenticated identity → role; authorization before retrieval; TLS/ingress;
     - durable audit/HITL; rate/cost bounds; sanitized output; pinned/monitored artifact.
-    - My answer: _TODO: Fill in._
+    - My answer: serve Streamable HTTP only behind authentication (the SDK supports OAuth), and take the role from the verified identity, never from an argument; authorize before retrieval (a pre-filter in the index); TLS, origin checks, and a rate and cost limit at the ingress per identity; approvals from a person (elicitation or a review queue) with a durable audit record; sanitized results and logs; a pinned image and models; monitoring and the same eval gates before every deploy.
 
 ### Review prompt
 
@@ -7674,10 +7839,11 @@ Answer without notes. Use these bullet shapes as prompts, not as finished answer
 
 ### Next step
 
-1. Complete the exact MCP readings and the artifact contract before coding.
-2. Build and test the required tool; capture in-memory client plus Inspector/stdio evidence.
-3. Fill every Day 25 evidence field and the Week 5 gate inventory.
-4. Send the review prompt to Hermes; do not move HER-293 or HER-270 to Done before review.
-5. After Day 25 passes, close HER-293 and run a **separate HER-270 parent-gate review** across all five children and cumulative evidence.
-6. If HER-270 closes cleanly, begin Week 6 / HER-271 portfolio polish and interview readiness, carrying forward the explicit Q091 live-answer-quality weakness rather than hiding it.
-
+1. ~~Complete the exact MCP readings and the artifact contract before coding.~~ Done 2026-10-22 (above).
+2. ~~Build and test the required tool; capture in-memory client plus Inspector/stdio evidence.~~ Done locally: 28 tests, the stdio smoke, and the Inspector 2.12.0 CLI. Since 2026-10-24: 38 tests, with the reviewer's decision asked by elicitation (see the follow-up).
+3. ~~Fill every Day 25 evidence field and the Week 5 gate inventory.~~ Done, except the remote CI run.
+4. **Juan:** read and run every line of `src/mcp_server.py`, `tests/test_mcp_server.py`, and `scripts/mcp_stdio_smoke.py`. Optional, by hand: `uv run mcp dev src/mcp_server.py` (the browser Inspector), and a real host session, e.g. `claude mcp add procurerag -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -- uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py`, then `/mcp` and a Q091 question, to see Claude Code's elicitation dialog (the approve / edit / reject form) and what each answer does. The LangSmith flags matter here: Claude Code passes the shell environment to the server, so a `LANGSMITH_*` export in the shell would otherwise reach it. For a paid run, register a second server (e.g. `procurerag-live`) with `PROCURERAG_LIVE_LLM=1`; the key comes from `.env`, so never pass it with `-e` (that writes it into Claude Code's config file).
+5. **Juan:** branch, commit, and open a PR; record the remote CI run (URL, head SHA, the three required jobs) in "Full verification".
+6. Practise the twelve answers without notes, then send the review prompt to Hermes. Do not move HER-293 or HER-270 to Done before review.
+7. After Day 25 passes, close HER-293 and run a **separate HER-270 parent-gate review** across all five children and cumulative evidence.
+8. If HER-270 closes cleanly, begin Week 6 / HER-271 portfolio polish and interview readiness, carrying forward the explicit Q091 live-answer-quality weakness rather than hiding it.

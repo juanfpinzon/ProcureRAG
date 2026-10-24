@@ -222,8 +222,8 @@ Traced to two specific queries rather than left as a slice-level observation:
   renewal?") retrieves `POL-001`, but not the *chunk* carrying the actual Band 3
   threshold sentence. The answer therefore cannot state the threshold — and correctly
   says so instead of guessing.
-- **Q092** ("What do we need before a new cleaning contractor starts?") misses
-  `CONTRACT-005` and `POL-002` entirely, at document level. Two different causes: a
+- **Q092** ("What do we need to complete before a new cleaning contractor starts on
+  site?") misses `CONTRACT-005` and `POL-002` entirely, at document level. Two different causes: a
   reranker-judgment miss a bigger pool cannot fix, and a fusion+reranker miss that a
   diagnostic `pool_size=200` still left outside the cutoff.
 

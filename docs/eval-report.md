@@ -4742,6 +4742,106 @@ git diff --check
 # clean, no output
 ```
 
+## Day 25: MCP server/tool and Week 5 gate review
+
+What was measured: `src/mcp_server.py`, an MCP server (Python SDK `mcp==2.3.0`, protocol `2026-07-28`) with one tool, `answer_procurement_question`, over stdio. The tool is an adapter over the Day 21 service: it builds `QueryRequest`, applies Day 21's rate limiter and `check_query_request`, and runs `api.run_query_events`, the function behind `POST /query`. Its output schema is Day 21's `QueryResponse`, unchanged. Since 2026-10-24, the reviewer's decision is no longer a tool argument: when a question would wait for approval, the server asks the USER through MCP elicitation (details in the learning log, "Follow-up (2026-10-24)"). The numbers are from 2026-10-22, updated on 2026-10-24 where the change touched them, on the Mac (Apple Silicon, Python 3.11.7), with `PROCURERAG_LIVE_LLM=0` and both LangSmith flags `false`. No key was passed and no LLM was called.
+
+### Tool contract (as discovered)
+
+| Part | Value (from `tools/list`) |
+|---|---|
+| Name / title | `answer_procurement_question` / "Answer a procurement question" |
+| Annotations | `readOnlyHint: true` only (`openWorldHint` unset: with the live LLM on, a call reaches a provider) |
+| Required arguments | `query` (string, 1–500), `role` (`requester` \| `buyer`) |
+| Optional arguments | `query_id` (evaluation replay, with its exact text). No `decision`: a decision the model sends is dropped by the SDK |
+| Reviewer decision | asked from the user by elicitation, only when Day 21 would stop at `pending_approval`, before any retrieval: a `ReviewerAnswer` form (`decision`: approve / edit / reject; `followup_query` ≤ 500, for edit; `message` ≤ 200). Filled into a resolved parameter (`review`) that is not in the schema |
+| Output schema | `QueryResponse`: `status`, `query_id`, `text`, `sources` (ids and `cited` only), `findings`, `approval_request`, `run_id`, `caveats` |
+| Errors | schema violation → `is_error` result before the tool runs; wrong `query_id`, rate limit, or an unusable reviewer answer → `ToolError`; no answer (host cannot ask, user declined or dismissed) → `pending_approval`, nothing run; any other exception → "Error executing tool answer_procurement_question" only |
+
+### Evidence by layer
+
+| Layer | Command | What it proves | Result |
+|---|---|---|---|
+| Direct adapter | `pytest tests/test_mcp_server.py` (4 functions, 5 cases) | the mapping into Day 21's service, the `query_id` refusal, the one-process rate limit, the reviewer form → Day 21 decision | pass |
+| In-memory MCP client | `pytest tests/test_mcp_server.py` (`Client(server)`, 14 functions, 31 cases) | discovery and generated schemas; Q001; the reviewer: a host that cannot ask, approve / edit / reject asked before any retrieval, decline / cancel, an unusable answer, an injection in the edited follow-up, no question when none is needed; blocked; 5 invalid calls; role filter; sanitized crash; one build per connection; same response as `POST /query` for 5 requests | 38 passed in 0.85 s (with the 2 live-switch cases) |
+| Mutation check | 16 deliberate faults in `src/mcp_server.py` | the tests can fail: `.env` deciding the switch, the `query_id` refusal leaking or skipped, the rate limit removed, role escalation, a direct graph call around the API guards (9 tests fail), a per-call build, the annotation dropped; and for the reviewer: the preview retrieving, asking a host that cannot ask, ignoring the user's answer, auto-approving when no answer came, a decline read as "cannot ask", leftover follow-up text kept on approve, the preview skipping the `query_id` check, Day 21's "send a decision" text kept | 16 of 16 caught |
+| Real stdio client | `HF_HUB_OFFLINE=1 uv run python scripts/mcp_stdio_smoke.py` | the real process: startup, one model load, real retrieval, the elicitation round trip (a scripted reviewer answers), clean stdout, clean exit | PASSED, exit 0 (3 runs on 2026-10-22, 1 run on 2026-10-24 with the reviewer) |
+| MCP Inspector 2.12.0, CLI mode | `npx @modelcontextprotocol/inspector@2.12.0 --cli ... -- uv run --directory <repo> python src/mcp_server.py` | an independent client (the official Inspector) lists and calls the tool; it declares no elicitation, so it shows the cannot-ask fallback | `tools/list` exit 0 (`--strict`: no portability problem); Q001 / injection exit 0; invalid exit 5 (`isError`); since 2026-10-24, Q091 and Q091 + a model `decision` exit 0: `pending_approval`, text `CANNOT_ASK_MESSAGE` |
+
+### Representative calls (real models, live LLM off)
+
+| Call | Result through the real stdio process | Time per call |
+|---|---|---|
+| Q001, buyer, `query_id="Q001"` | `not_generated`; sources `FAQ-001::chunk-12`, `FAQ-001::chunk-13`, `POL-001::chunk-4`, `FAQ-001::chunk-5`, `FAQ-001::chunk-6` (Day 22/23's exact list); `run_id` set | 0.07–0.11 s |
+| Q091, buyer; the reviewer declines (elicitation) | `pending_approval`; `approval_request` with the Day 16 follow-up; no sources; `run_id` null | under 0.01 s |
+| Q091, buyer; the reviewer rejects (elicitation) | `gap_report` after real pass 1: 10 chunks, `POL-001::chunk-3` but not the Band 3 chunk; one `excessive_agency` finding; the reviewer's reason in `text`; no second pass | 0.07 s |
+| Injection, buyer, free text | `blocked`; one `prompt_injection` finding; no sources; `run_id` null | under 0.01 s |
+| No `role` | `is_error`; the schema message names `role`; nothing ran | under 0.01 s |
+
+Process facts, from the server's stderr and the client: the service was built once per process (3.8–6.8 s; connect, initialize included, 4.48–7.66 s); zero JSON-RPC parse failures on stdout; the clean-stop line in every run, shutdown 0.61–0.70 s (under the SDK's 2 s grace before SIGTERM), and the pid gone afterwards; no traceback and no secret-like text in stderr; the scripted reviewer was asked exactly twice, both for Q091. The largest result's text is 2,058 characters (Q091 rejected, with its 10 source ids).
+
+### Findings
+
+- **The `.env` fallback would make every MCP call a paid call.** The SDK's stdio client starts the server with an allow-listed environment (`HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`), so Day 21's `read_setting` would take the live-LLM switch from `.env`, and this repo's `.env` says `"1"`. `build_mcp_service` makes "no switch in the launch environment" mean off. Tested both ways.
+- **Unknown arguments are dropped, not refused** (mcp 2.3.0's argument model). Where HTTP answers 422, the key just disappears. Since 2026-10-24 that includes any `decision` the model sends: it fails closed (tested).
+- **A model-written decision was an open door; elicitation closes it, to the model only (2026-10-24).** The decision now comes from a form the host shows its user. A host that declared no elicitation support is never asked (asking it would be a protocol error in the SDK), and gets `pending_approval`. But the host could answer the form itself (Claude Code has an `Elicitation` hook), and nothing records who answered.
+- **The lifespan is per connection.** Once per process for stdio, but once per `async with Client(server)` in memory.
+- **The SDK protects stdout while serving, not before.** Prints flushed in the lifespan or in the tool body, and an unflushed import-time print, were diverted to stderr. A print flushed at import time reached stdout, and the smoke failed (exit 1). That mutation is the evidence that the smoke's stdout check can fail.
+- **Developer docstrings reach the model.** On 2026-10-22, `ApprovalDecision`'s 865-character docstring was in the tool's input schema (`$defs`), as it is in FastAPI's OpenAPI page. Gone since 2026-10-24: the tool no longer takes an `ApprovalDecision`.
+
+### Week 5 gate inventory (HER-270)
+
+The study plan says HER-270 passes only when:
+- there is an async/streaming FastAPI surface or a deliberately scoped equivalent;
+- the Docker build works;
+- an Azure deployment or a documented fallback exists;
+- CI can run tests/evals as a merge/deploy gate;
+- one MCP server/tool exists or is demonstrably scaffolded.
+
+"Exercised" means a real run was observed and recorded; "deleted" means it was exercised and its cloud resources no longer exist.
+
+| Gate area | Primary artifacts | Strongest real evidence | Status | Honest caveat / next weakness |
+|---|---|---|---|---|
+| Day 21 — FastAPI async/streaming surface | `src/api.py`, `tests/test_api.py` | Real local Uvicorn with the real models (12 s startup; a 93-query sweep per role, about 38 ms a request); the same API in the container (Day 22), on Azure (Day 23), and smoked in CI (Day 24) | Exercised | Caller-asserted role, stateless approval, process-local rate limit, unpersisted trace rows, keyword scope guard |
+| Day 22 — Docker | `Dockerfile`, `.dockerignore`, `docs/docker-runbook.md` | Real `linux/arm64` build and verbatim runbook (Mac, 1.87 GB CPU-only image) and `linux/amd64` build and run (Hermes VM, 51 s offline startup) | Exercised | Base images tagged, not digest-pinned; model revisions unpinned; the image now also carries the unused `mcp` packages (about 18 MB, measured in the macOS environment) |
+| Day 23 — Azure deployment | `deploy/azure/containerapp-template.yaml`, `docs/azure-container-apps-runbook.md` | A real Container Apps deployment (2026-10-19): public `/health` and four contract smokes, system/console logs, a 59 s fresh-replica cold start; group deleted the same day | Exercised, then deleted | No persistent deployment and no authentication; nothing is live today |
+| Day 24 — eval-gated CI/CD | `.github/workflows/ci.yml`, `live-eval.yml`, `deploy.yml`, `src/graph_regression.py`, `scripts/container_smoke.py` | Remote green, a deliberate red, three required checks on `main`, a CI-refused deploy, two green deployments by digest, one real rollback (revision `0000004`), both groups deleted | Exercised (remote) | Q091 live answer quality is RED (drops the usage-data step); rebuild, not CI-artifact promotion; one-person review; the rollback was applied by hand |
+| Day 25 — MCP | `src/mcp_server.py`, `tests/test_mcp_server.py`, `scripts/mcp_stdio_smoke.py` | 38 in-memory protocol tests (16/16 mutations caught); real stdio client: discovery plus Q001, Q091 declined and rejected by a scripted reviewer (elicitation), blocked, invalid; Inspector 2.12.0 CLI: the cannot-ask fallback; real models, live LLM off | Exercised locally; remote CI pending | Local stdio only; the role is asserted by the host's model; the reviewer's answer comes from the host, unattributed; no remote MCP auth; browser Inspector and a real host session not exercised |
+
+### Gate verdict
+
+**Ready for the HER-270 review, not passed.** Every Week 5 area has an artifact and real evidence, with its caveat in plain view. MCP is a second adapter over the same service as FastAPI, not a replacement: the deployed, container-smoked, CI-gated surface is still the HTTP API. Open before closing:
+
+- the remote CI run on the Day 25 changes (nothing is committed yet);
+- Juan's review of the new code, and the interview drill without notes;
+- Hermes' independent re-run of the gates.
+
+Day 24's Q091 live answer-quality failure is still red and is carried into Week 6. No Azure resource is live.
+
+### Limits
+
+- **The role is still asserted, now by a model.** `role` is a tool argument, so the host's model writes it. The description tells it to use the user's real role: an instruction, not enforcement. A remote server would take the role from an authenticated connection.
+- **The approval comes from the host, not provably from a person.** Since 2026-10-24 the model cannot decide (elicitation), but the host may answer the form itself, and the decision is unattributed and stateless. It is also asked before pass 1, so it cannot show the measured gap. A host without elicitation support cannot approve through MCP at all.
+- **Local stdio only.** There is no remote transport, so no authentication, TLS, or ingress was needed, and none was built.
+- **One rate-limit budget per process** (Day 21's limiter, 30 calls a minute, reset on restart).
+- **No real host session is in the evidence.** The stdio client and the Inspector CLI prove the protocol and the process. They do not show what a model does with `pending_approval`, how a host presents the reviewer's form, or who answers it.
+- **No answer quality.** The live LLM was off throughout. A complete-evidence call ends `not_generated`.
+
+### Verification (2026-10-24, after the elicitation change)
+
+```bash
+uv sync --locked --dev       # Resolved 154 packages, Checked 145 packages
+uv lock --check              # Resolved 154 packages (agrees with pyproject.toml)
+uv run pytest -q             # 425 passed in 2.60s (387 + 38; it was 415 on 2026-10-22)
+uv run python -m compileall -q src tests scripts      # clean
+uv run python -m ruff check src tests scripts         # All checks passed!
+uv run python src/regression_suite.py                 # all cases as expected, exit 0
+HF_HUB_OFFLINE=1 uv run python src/regression_suite.py --verify-retrieval   # 6 x [OK], exit 0
+HF_HUB_OFFLINE=1 uv run python src/graph_regression.py                      # 6/6 contracts, exit 0
+HF_HUB_OFFLINE=1 uv run python scripts/mcp_stdio_smoke.py                   # PASSED (5 calls, reviewer asked 2x), exit 0
+git diff --check             # clean
+```
+
 ## Known limitations / next steps
 
 - **Done, no longer a gap (Day 9)**: the nine-row table above is still
