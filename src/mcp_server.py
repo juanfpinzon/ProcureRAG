@@ -45,7 +45,10 @@ What this module adds is only what MCP itself needs:
   question, and a 429 for the rate limit;
 - the service, built once per process (`lifespan`), not once per call;
 - the reviewer's decision, asked from the USER through MCP elicitation, never
-  taken from the model (see "Approval comes from the user").
+  taken from the model (see "Approval comes from the user");
+- a crash reported with no text from the exception, in the result AND in
+  the server's log, and no LangSmith tracing (see "Crashes, logs, and
+  traces").
 
 **One call, in order.** Each step can end the call, before the more expensive
 steps after it:
@@ -96,6 +99,27 @@ runs, and the result is `pending_approval`, with a text that says why:
 An answer that is not a usable decision (an `edit` with no follow-up query)
 is an error result, so the host can ask again.
 
+**Crashes, logs, and traces.** An exception's text can quote whatever it
+was handed: a provider's error may repeat a URL, a header, or a key. The
+SDK keeps a crash's text out of the RESULT (the model reads only "Error
+executing tool ..."), but it LOGS the whole traceback, message included, to
+stderr. Measured with mcp 2.3.0: a test's fake key, put in a provider
+timeout, appeared verbatim in the server log. So `crash_details_withheld`
+catches a crash before the SDK sees it, logs only the exception's TYPE
+(`TimeoutError`), and raises a `ToolError` with a fixed message instead.
+The SDK logs a `ToolError` as one INFO line, its message, with no traceback.
+
+A LangSmith trace would send the same text out of the machine, with the
+question and the retrieved evidence. Day 21 leaves tracing to the shell:
+it is on only if the shell exports the `LANGSMITH_*` variables. Under MCP
+that shell is the HOST's. Claude Code passes its whole environment to this
+server, so an export made for other work would trace every call, and
+nobody decided that here. So this server traces nothing, whatever the
+environment says: `answer_question` runs the pipeline inside LangSmith's
+own switch, `tracing_context(enabled=False)`, which wins over the
+environment variables. To trace a run, use the HTTP API or the Day 19
+scripts.
+
 **The live LLM needs an explicit opt-in in the launch command.** Over HTTP,
 the switch `PROCURERAG_LIVE_LLM` comes from the environment, or else from
 `.env` (Day 21's `read_setting`). Under MCP that fallback is the wrong
@@ -117,8 +141,8 @@ responses from its stdout. Nothing listens on a port, so there is no network
 surface, and no authentication, TLS, or ingress to get right yet. It also
 makes stdout the protocol channel. One stray `print()` there corrupts a
 message, and the host drops the connection. So this module never prints. Its
-two diagnostic lines (the service build, and the clean stop) go through
-`logging`, which `MCPServer` points at stderr when it is constructed. The
+diagnostic lines (the service build, the clean stop, and a crash's type) go
+through `logging`, which `MCPServer` points at stderr when it is constructed. The
 model-loading libraries write their warnings and progress to stderr too.
 While serving, the SDK also diverts any flushed stray output to stderr, but
 not before serving starts: a print flushed at import time still lands on
@@ -138,12 +162,16 @@ else.
     # the MCP Inspector, in a browser (needs `npx`: the Inspector is a Node app)
     uv run mcp dev src/mcp_server.py
 
+    # The commands below start the server from ANOTHER folder (the Inspector's, or the host's),
+    # so they name this repository by its absolute path. Run them from the repository root:
+    REPO_ROOT="$(pwd)"
+
     # the same Inspector, CLI mode: it starts its own server process, sends ONE request, prints
     # the JSON result, and exits (exit 5: an is_error result). It passes the server only the SDK's
     # allow-listed variables plus each -e, so the switch is stated in the command.
     npx -y @modelcontextprotocol/inspector@2.12.0 --cli -e PROCURERAG_LIVE_LLM=0 \
         -e LANGSMITH_TRACING=false -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 \
-        --method tools/list -- uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py
+        --method tools/list -- uv run --directory "$REPO_ROOT" python src/mcp_server.py
 
     # one PAID call through the Inspector CLI: -e PROCURERAG_LIVE_LLM=1. The key comes from `.env`:
     # never pass it with -e, which would put it in your shell history. query_id=Q001 checks the
@@ -152,15 +180,16 @@ else.
         -e LANGSMITH_TRACING=false -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 \
         --method tools/call --tool-name answer_procurement_question \
         --tool-arg "query=What approval is required for a EUR 60,000 purchase order?" role=buyer query_id=Q001 -- \
-        uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py
+        uv run --directory "$REPO_ROOT" python src/mcp_server.py
 
-    # register it with Claude Code. Absolute paths: the host starts it from its own folder.
-    # Claude Code passes your whole shell environment to the server by default, so the
-    # safe values are stated here: a LANGSMITH_* export in your shell would otherwise reach it.
+    # register it with Claude Code. "$REPO_ROOT" expands NOW, so Claude Code stores the absolute
+    # path: it starts the server from its own folder. It also passes your whole shell environment
+    # to the server by default, so the safe values are stated here. (The LangSmith flags are a
+    # second safety: this server switches tracing off itself, see "Crashes, logs, and traces".)
     # PROCURERAG_LIVE_LLM=1 instead of 0 makes it a PAID server (the key comes from `.env`).
     claude mcp add procurerag -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false \
         -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -- \
-        uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py
+        uv run --directory "$REPO_ROOT" python src/mcp_server.py
 
 `src/` must be on `sys.path` so that `import api` (and the modules `api`
 imports) resolve. `python src/mcp_server.py` puts the script's own folder
@@ -202,6 +231,12 @@ there, and `mcp run` / `mcp dev` add the file's folder too.
   connection, so a new lifespan, for every `async with Client(server)`.
 - Local stdio only. Remote Streamable HTTP needs authentication, TLS, origin
   checks, and a deployment: a separate problem, deliberately not solved here.
+- A crash in a tool call is logged by its exception type only: no message, and
+  no traceback, for the operator either. Debugging one means reproducing it
+  outside the server (in a test, or over the HTTP API). A failure at startup
+  (in `lifespan`) is not covered: the SDK logs it in full, before any call.
+- No LangSmith traces from this server, even when you want one: it cannot be
+  switched on (see "Crashes, logs, and traces").
 - Every Day 21 limit still holds: free-text evidence is unchecked, trace rows
   are not persisted, the scope guard is a keyword list, and an LLM failure is a
   failure (here a sanitized `is_error` result, not a 500).
@@ -211,10 +246,11 @@ import logging
 import math
 import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Literal
 
 from fastapi import HTTPException
+from langsmith import tracing_context
 from mcp.server import MCPServer
 from mcp.server.mcpserver import (
     AcceptedElicitation,
@@ -260,6 +296,10 @@ NOT_DECIDED_MESSAGE = (
     "(the question was declined or dismissed). Nothing has run. Call the tool again only if the user wants to be "
     "asked again."
 )
+
+# What the model reads when a call crashed (see `crash_details_withheld`).
+# Fixed text: nothing from the exception itself.
+CRASH_MESSAGE = "internal error: ProcureRAG could not finish this call (the details are withheld)."
 
 
 class ReviewerAnswer(BaseModel):
@@ -378,6 +418,44 @@ server = MCPServer(SERVER_NAME, version=api.APP_VERSION, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------
+# Crashes: reported and logged without the exception's text.
+# (See "Crashes, logs, and traces" in the module docstring.)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def crash_details_withheld(where):
+    """Turn a crash inside the `with` block into a `ToolError` that carries nothing from it.
+
+    Used around the two pieces of code the SDK runs for one tool call: the
+    resolver (`ask_the_reviewer`) and the tool body. `where` names which one,
+    for the log line.
+
+    - A `ToolError` passes through unchanged. It is a refusal this module
+      wrote for the caller (the rate limit, a refused `query_id`, an unusable
+      answer), and the model needs its text to correct the call.
+    - Anything else is a crash. It is logged as its exception TYPE only, at
+      ERROR, with no message and no traceback, and replaced by a `ToolError`
+      with the fixed `CRASH_MESSAGE`.
+    - `from None` drops the crash from the new error's traceback. Without it,
+      Python would attach the crash as the new error's context, and any
+      printed traceback of the new error would end with the crash's message:
+      "During handling of the above exception, another exception occurred".
+    """
+    try:
+        yield
+    except ToolError:
+        raise
+    except Exception as crash:
+        logger.error(
+            "%s crashed with %s (its message and traceback are withheld: they may quote a key or a URL)",
+            where,
+            type(crash).__name__,
+        )
+        raise ToolError(CRASH_MESSAGE) from None
+
+
+# ---------------------------------------------------------------------------
 # The adapter: one tool call against the Day 21 service.
 # ---------------------------------------------------------------------------
 
@@ -422,7 +500,14 @@ def answer_question(service, query, role, query_id=None, decision=None):
     # The one guarded pipeline, exactly as `POST /query` runs it. Its last
     # event is always ("result", QueryResponse): blocked and pending_approval
     # included.
-    events = list(api.run_query_events(service, body))
+    #
+    # With LangSmith tracing OFF, whatever the environment says (see
+    # "Crashes, logs, and traces"). `tracing_context` sets a context variable
+    # that LangSmith checks before its environment variables, and LangGraph
+    # carries it into every node it runs. `list(...)` runs the whole generator
+    # inside the `with` block: a generator only runs while it is iterated.
+    with tracing_context(enabled=False):
+        events = list(api.run_query_events(service, body))
     _, response = events[-1]
     return response
 
@@ -507,7 +592,10 @@ async def ask_the_reviewer(
     request.
     """
     service = ctx.request_context.lifespan_context
-    pending = pending_approval_preview(service, api.QueryRequest(query=query, role=role, query_id=query_id))
+    # The entry guards run here, before the tool body: a crash in them would
+    # reach the SDK from this function.
+    with crash_details_withheld("ask_the_reviewer"):
+        pending = pending_approval_preview(service, api.QueryRequest(query=query, role=role, query_id=query_id))
     if pending is None or not host_can_ask(ctx):
         return None
 
@@ -602,27 +690,32 @@ def answer_procurement_question(
     # What `lifespan` yielded: the one service this process built at startup.
     service = ctx.request_context.lifespan_context
 
-    # The user's answer, if there is one. `AcceptedElicitation` with no data
-    # is the resolver's None: nothing was asked, so no decision is passed.
-    decision = None
-    if isinstance(review, AcceptedElicitation) and review.data is not None:
-        try:
-            decision = review.data.as_decision()
-        except ValidationError as error:
-            # Day 18's rule refused the answer (an edit with no follow-up
-            # query). An error result, so the host can ask again.
-            reason = error.errors()[0]["msg"]
-            raise ToolError(f"the reviewer's answer is not a decision ProcureRAG can run: {reason}") from error
+    # The whole body: a crash anywhere in it (the LLM provider included)
+    # reaches the SDK as `CRASH_MESSAGE`, never as its own text.
+    with crash_details_withheld("answer_procurement_question"):
+        # The user's answer, if there is one. `AcceptedElicitation` with no
+        # data is the resolver's None: nothing was asked, so no decision is
+        # passed.
+        decision = None
+        if isinstance(review, AcceptedElicitation) and review.data is not None:
+            try:
+                decision = review.data.as_decision()
+            except ValidationError as error:
+                # Day 18's rule refused the answer (an edit with no follow-up
+                # query). An error result, so the host can ask again.
+                reason = error.errors()[0]["msg"]
+                raise ToolError(f"the reviewer's answer is not a decision ProcureRAG can run: {reason}") from error
 
-    response = answer_question(service, query, role, query_id=query_id, decision=decision)
+        response = answer_question(service, query, role, query_id=query_id, decision=decision)
 
-    # With no decision, a question that may pause ends at `pending_approval`,
-    # before anything runs (Day 21's fail-closed rule). Its text is replaced,
-    # to say why no decision came.
-    if response.status == "pending_approval":
-        user_said_no = isinstance(review, DeclinedElicitation | CancelledElicitation)
-        response = response.model_copy(update={"text": NOT_DECIDED_MESSAGE if user_said_no else CANNOT_ASK_MESSAGE})
-    return response
+        # With no decision, a question that may pause ends at
+        # `pending_approval`, before anything runs (Day 21's fail-closed
+        # rule). Its text is replaced, to say why no decision came.
+        if response.status == "pending_approval":
+            user_said_no = isinstance(review, DeclinedElicitation | CancelledElicitation)
+            text = NOT_DECIDED_MESSAGE if user_said_no else CANNOT_ASK_MESSAGE
+            response = response.model_copy(update={"text": text})
+        return response
 
 
 if __name__ == "__main__":

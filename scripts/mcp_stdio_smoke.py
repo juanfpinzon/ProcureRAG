@@ -240,11 +240,31 @@ def summarize(result):
     return f"status={body['status']} sources={sources} findings={findings} run_id={'set' if body['run_id'] else None}"
 
 
-# The server's startup line (`mcp_server.lifespan`). The SDK's log handler
-# may wrap a long line across two (Rich formatting, at 80 columns), so the
-# pattern is matched on the stderr text with its whitespace collapsed, and it
-# skips whatever sits between the parts (Rich adds `mcp_server.py:<line>`).
-READY_PATTERN = re.compile(r"ProcureRAG service ready in ([\d.]+) s.*?\(pid (\d+), live LLM: (\w+)\)")
+# The server's two log lines (`mcp_server.lifespan`), matched on the text that
+# `flatten_log` returns.
+READY_PATTERN = re.compile(r"ProcureRAG service ready in ([\d.]+) s \(pid (\d+), live LLM: (\w+)\)")
+STOPPED_TEXT = "ProcureRAG MCP server stopped"
+
+# The source location Rich prints at the right edge of each record:
+# `mcp_server.py:361`.
+RICH_SOURCE_LOCATION = re.compile(r"\S+\.py:\d+")
+
+
+def flatten_log(stderr_text):
+    """The server's stderr as one line, with each ProcureRAG message back in one piece.
+
+    The SDK logs through Rich, which prints at most 80 columns when stderr is
+    not a terminal. A longer message wraps onto the next line, and the
+    record's source location (`mcp_server.py:361`) stays at the right edge of
+    its FIRST line. Joined back up, the location sits between two words of
+    the message, wherever the wrap happened, and that depends on the numbers
+    in it. Seen: after "6.0 s" on the Mac, but between "96.4" and "s" in a
+    Linux run whose load took 96.4 s (one digit more).
+
+    So every source location is removed first, and then every run of
+    whitespace (the line breaks, and Rich's padding) becomes one space.
+    """
+    return " ".join(RICH_SOURCE_LOCATION.sub(" ", stderr_text).split())
 
 
 def process_is_gone(pid):
@@ -259,7 +279,7 @@ def process_is_gone(pid):
 def check_server_stderr(stderr_text):
     """The process checks, read from the server's own stderr. Returns `(problems, ready_match)`."""
     problems = []
-    flat_text = " ".join(stderr_text.split())
+    flat_text = flatten_log(stderr_text)
     ready = READY_PATTERN.findall(flat_text)
     if len(ready) != 1:
         problems.append(f"expected the service to be built exactly once, saw {len(ready)} build line(s)")
@@ -267,7 +287,7 @@ def check_server_stderr(stderr_text):
         problems.append(f"the server reported 'live LLM: {ready[0][2]}', expected False")
     elif not process_is_gone(int(ready[0][1])):
         problems.append(f"the server process {ready[0][1]} is still running after shutdown")
-    if "ProcureRAG MCP server stopped" not in flat_text:
+    if STOPPED_TEXT not in flat_text:
         problems.append("no clean-shutdown line: the server did not leave its lifespan normally")
     if "Traceback" in stderr_text:
         problems.append("the server's stderr contains a traceback")

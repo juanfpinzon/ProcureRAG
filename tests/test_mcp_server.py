@@ -1,11 +1,14 @@
 import importlib.util
 import json
+import logging
 import os
 import sys
+import traceback
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from langsmith import utils as langsmith_utils
 from mcp import Client
 from mcp.types import ElicitResult
 
@@ -41,6 +44,24 @@ def anyio_backend():
     `Client` is async. anyio's pytest plugin runs each one on this event-loop
     backend. This is the fixture the SDK's own Testing page uses."""
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def no_tracing_from_the_developers_shell(monkeypatch):
+    """No test in this file sends a LangSmith trace, whatever your shell exports.
+
+    The MCP server never traces (see `answer_question`). But the parity test
+    also runs Day 21's HTTP app, which traces whenever the shell exports the
+    `LANGSMITH_*` variables. So both switches are set to "false" here, as in
+    CI. LangSmith caches what it reads from the environment (`get_env_var`
+    is an `lru_cache`), so the cache is cleared before each test, and again
+    after the variables are put back."""
+    monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setenv("LANGSMITH_TRACING_V2", "false")
+    langsmith_utils.get_env_var.cache_clear()
+    yield
+    monkeypatch.undo()
+    langsmith_utils.get_env_var.cache_clear()
 
 
 # ---------------------------------------------------------------------------
@@ -573,25 +594,109 @@ async def test_an_invalid_call_is_an_error_result_that_names_the_problem_and_run
     assert retrieve_fn.queries_received == []
 
 
+# Shaped like an OpenRouter key, so that a leak would look like the real
+# thing. Not a real key. Every assertion below checks for this exact string.
+FAKE_KEY = "sk-or-v1-not-a-real-key"
+
+
+def _crash(*args, **kwargs):
+    """A provider timeout whose message quotes a key: what a careless error message could look like."""
+    raise TimeoutError(f"provider timed out for key {FAKE_KEY}")
+
+
 @pytest.mark.anyio
-async def test_an_unexpected_failure_reaches_the_model_without_its_details(monkeypatch, caplog):
+@pytest.mark.parametrize(
+    ("crash_site", "logged_as"),
+    [
+        ("the LLM call", "answer_procurement_question crashed with TimeoutError"),  # in the tool body
+        ("the approval preview", "ask_the_reviewer crashed with TimeoutError"),  # in the resolver, before the body
+    ],
+    ids=["crash-in-the-tool-body", "crash-in-the-resolver"],
+)
+async def test_a_crash_reaches_neither_the_model_nor_the_log_with_its_details(
+    monkeypatch, caplog, crash_site, logged_as
+):
     """A provider timeout is a crash, not a domain state. The model learns
-    only that the call failed. The exception's text (which could name a key,
-    a URL, or internal state) stays on the server, in its log on stderr."""
+    only that the call failed, and the server's log only what KIND of failure
+    it was. The exception's text (which could quote a key or a URL) is in
+    neither.
+
+    `caplog` receives every record the server logs, with its traceback
+    attached, so its text is what the SDK's stderr handler would print. The
+    real process's stderr is checked by `scripts/mcp_stdio_smoke.py`."""
+    caplog.set_level(logging.DEBUG)  # every level: the SDK logs a `ToolError` at INFO
     module = _load_mcp_server()
-
-    def timed_out_llm(prompt):
-        raise TimeoutError("provider timed out for key sk-or-v1-not-a-real-key")
-
-    _serve(monkeypatch, module, _service(module, _RecordingRetrieveFn(), timed_out_llm))
+    if crash_site == "the LLM call":
+        service = _service(module, _RecordingRetrieveFn(), _crash)  # Q001: complete evidence, so the LLM is called
+    else:
+        service = _service(module, _RecordingRetrieveFn())
+        monkeypatch.setattr(module, "pending_approval_preview", _crash)
+    _serve(monkeypatch, module, service)
 
     async with _connect(module) as client:
-        result = await client.call_tool(TOOL, Q001)  # complete evidence, so the LLM is called
+        result = await client.call_tool(TOOL, Q001)
 
     assert result.is_error is True
-    assert [block.text for block in result.content] == [f"Error executing tool {TOOL}"]
-    assert "sk-or-v1" not in result.model_dump_json()
-    assert f"Tool '{TOOL}' raised an unexpected exception" in caplog.text  # the operator still gets it
+    assert [block.text for block in result.content] == [f"Error executing tool {TOOL}: {module.CRASH_MESSAGE}"]
+    assert FAKE_KEY not in result.model_dump_json()
+    assert FAKE_KEY not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert logged_as in caplog.text  # the operator still learns where, and what kind of failure
+
+
+def test_a_withheld_crash_is_not_in_the_traceback_of_the_error_that_replaces_it():
+    """`from None` at work. The SDK wraps the `ToolError` in one of its own,
+    and logs it with no traceback today. But if any code ever printed that
+    error's full traceback, the crash's message must not be in it."""
+    module = _load_mcp_server()
+
+    with pytest.raises(module.ToolError) as caught:
+        with module.crash_details_withheld("a test"):
+            _crash()
+
+    assert str(caught.value) == module.CRASH_MESSAGE
+    assert FAKE_KEY not in "".join(traceback.format_exception(caught.value))
+
+
+@pytest.fixture
+def tracing_switched_on_by_the_environment(monkeypatch):
+    """The environment of a shell that exports LangSmith's variables, as a
+    host like Claude Code would pass it on to this server.
+
+    It overrides `no_tracing_from_the_developers_shell` (an autouse fixture
+    runs first), and clears LangSmith's cache the same way; that fixture
+    puts everything back afterwards. The endpoint is a local port nothing
+    listens on: even if tracing did happen, no trace could leave this
+    machine."""
+    monkeypatch.setenv("LANGSMITH_TRACING_V2", "true")
+    monkeypatch.setenv("LANGSMITH_TRACING", "true")
+    monkeypatch.setenv("LANGSMITH_API_KEY", "not-a-real-key")
+    monkeypatch.setenv("LANGSMITH_ENDPOINT", "http://127.0.0.1:9")
+    langsmith_utils.get_env_var.cache_clear()
+
+
+@pytest.mark.anyio
+async def test_no_call_is_traced_even_when_the_environment_switches_tracing_on(
+    monkeypatch, tracing_switched_on_by_the_environment
+):
+    """The fake LLM runs INSIDE the graph, where LangSmith would record the
+    prompt and any exception's text. It asks LangSmith, at that moment,
+    whether this run is being traced."""
+    module = _load_mcp_server()
+    traced_during_the_call = []
+
+    def llm(prompt):
+        traced_during_the_call.append(langsmith_utils.tracing_is_enabled())
+        return _RecordingLLM()(prompt)
+
+    _serve(monkeypatch, module, _service(module, _RecordingRetrieveFn(), llm))
+
+    assert langsmith_utils.tracing_is_enabled() is True  # outside the tool, the environment does say "trace"
+    async with _connect(module) as client:
+        result = await client.call_tool(TOOL, Q001)
+
+    assert result.structured_content["status"] == "answered"  # the graph ran, through to the LLM
+    assert traced_during_the_call == [False]
 
 
 @pytest.mark.anyio

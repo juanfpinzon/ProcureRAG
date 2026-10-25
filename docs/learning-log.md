@@ -5839,7 +5839,7 @@ Draft answers should cover these shapes, then be practiced without notes:
 1. **Why not copy `.venv`?**
    - A virtual environment is built for one machine. Mine was built for macOS on arm64:
      - `.venv/bin/python` is a link to `/opt/anaconda3/bin/python3`, which does not exist in the image;
-     - its scripts start with `#!/Users/juanfpinzon/.../.venv/bin/python3`, a host path;
+     - its scripts start with `#!/Users/<user>/.../.venv/bin/python3`, a host path;
      - its compiled libraries are macOS binaries (`libtorch_cpu.dylib` is "Mach-O 64-bit ... arm64"), which a Linux container cannot load.
    - It also carries whatever was installed by hand, plus the dev tools and caches. It is 1.2 GB, and nothing guarantees it matches `uv.lock`.
    - So the image rebuilds the environment from the lockfile: `uv sync --locked --no-dev` inside the Linux build. The lockfile fixes the versions, and the build fetches the wheels for the image's own OS and CPU. Proof: `.venv` never enters the build context, and a fresh `git clone` builds the same image id.
@@ -7584,7 +7584,7 @@ Required tool contract:
 
 ### Deterministic and protocol evidence
 
-> **Superseded in part on 2026-10-24.** The `decision` tool argument below was replaced by MCP elicitation: the user answers a form, and the model cannot send a decision. What follows is the 2026-10-22 version, as measured. The current contract and its evidence are in "Follow-up (2026-10-24)" below.
+> **Superseded in part on 2026-10-24.** The `decision` tool argument below was replaced by MCP elicitation: the user answers a form, and the model cannot send a decision. What follows is the 2026-10-22 version, as measured. The current contract and its evidence are in "Follow-up (2026-10-24)" below. **And on 2026-10-25:** the crash handling below ("the server log has ... raised an unexpected exception") logged the crash's full traceback, its message included. See "Follow-up (2026-10-25)".
 
 #### Pure adapter and in-memory MCP client tests
 
@@ -7637,7 +7637,8 @@ PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVA
 # 2. the MCP Inspector, CLI mode (one server process per invocation)
 INSPECT="npx -y @modelcontextprotocol/inspector@2.12.0 --cli -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false \
   -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -e OMP_NUM_THREADS=1"
-SERVER="uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py"
+REPO_ROOT="$(pwd)"   # run from the repository root: the Inspector starts the server from its own folder
+SERVER="uv run --directory $REPO_ROOT python src/mcp_server.py"
 $INSPECT --method tools/list --strict -- $SERVER
 $INSPECT --method tools/call --tool-name answer_procurement_question \
   --tool-arg "query=What approval is required for a EUR 60,000 purchase order?" role=buyer query_id=Q001 -- $SERVER
@@ -7722,6 +7723,89 @@ uv run pytest -q tests/test_mcp_server.py
 - New limit: a host without elicitation support cannot approve through MCP at all (fail closed). Over HTTP the decision is still a request field.
 - The role is still an argument the model writes.
 
+### Follow-up (2026-10-25): review fixes after the first push
+
+PR #10 (head `14e7c1c`) went green in CI on 2026-10-24. A review of it found four problems. All four are fixed here, and measured on the Mac and in a Linux container, with the live LLM off.
+
+**1. A crash's text reached the server log.** The client's result was sanitized, but the SDK logs an unexpected exception with `logger.exception`: the full traceback, message included, on stderr. Reproduced with the existing test, before the fix (`pytest ... -o log_cli=true --log-cli-level=INFO`):
+
+```text
+ERROR    mcp.server.mcpserver.server:server.py:455 Tool 'answer_procurement_question' raised an unexpected exception
+Traceback (most recent call last):
+  ...
+TimeoutError: provider timed out for key sk-or-v1-not-a-real-key
+```
+
+The test checked only the result, and accepted that log line. Fix: `crash_details_withheld`, around the resolver (`ask_the_reviewer`) and the tool body. A `ToolError` passes through. Any other exception is logged as its type only, and replaced by a `ToolError` with the fixed `CRASH_MESSAGE`, raised `from None`. The same test, after:
+
+```text
+ERROR    mcp_server:mcp_server.py:450 answer_procurement_question crashed with TimeoutError (its message and traceback are withheld: they may quote a key or a URL)
+INFO     mcp.server.mcpserver.server:server.py:453 Tool 'answer_procurement_question' failed: 'Error executing tool answer_procurement_question: internal error: ProcureRAG could not finish this call (the details are withheld).'
+```
+
+The reviewer also saw trace uploads when LangSmith was not switched off. Under Claude Code the server inherits the whole shell, so a `LANGSMITH_*` export made for other work would trace every call, and a trace carries the question, the evidence, and an exception's text. Fix: `answer_question` runs the pipeline inside `langsmith.tracing_context(enabled=False)`, LangSmith's own switch, which wins over the environment. The server cannot trace. In the test file, the MCP/HTTP parity test still uploaded: its HTTP half is Day 21's app, which traces when the shell says so (3 connection errors to a dead local endpoint, with both switches exported as "true"). An autouse fixture now sets both switches to "false" for this file, as CI does. With the same exports: 0 upload attempts, 51 passed.
+
+Tests (`tests/test_mcp_server.py`, 41 cases, 38 before):
+
+- the crash test runs twice: a crash in the tool body (the LLM) and in the resolver (the approval preview). It checks one constant, `FAKE_KEY`, in the result AND in every log record at every level (`caplog`, tracebacks included), checks that no "Traceback" is logged, and that the log names the crash's type;
+- a direct test: the replacing error's full printed traceback has no key (this is what `from None` is for);
+- a tracing test: the environment says "trace", and the fake LLM, running inside the graph, sees `tracing_is_enabled() == False`.
+
+On the sentinel: the old test raised `sk-or-v1-not-a-real-key` and checked for `"sk-or-v1"`, a prefix of it, so the result check did hold. (The review's excerpt showed the key as `sk-or-...-key`, probably redacted on the way.) Both now use the one constant.
+
+**2. The stdio smoke's log parser failed on Linux.** On the reviewer's Linux run the server behaved correctly, but the smoke exited 1: "expected the service to be built exactly once, saw 0 build line(s)". Rich prints the source location (`mcp_server.py:361`) at the right edge of a record's first line, so where it lands in the joined text depends on where the message wrapped. On the Mac it follows "6.0 s". On Linux, with a 96.4 s load, it landed between "96.4" and "s", and the old pattern only allowed text between "s" and "(pid". Reproduced in a Linux container: the committed script exited 1 with the same message. Fix: `flatten_log` removes every `<file>.py:<line>` annotation before collapsing whitespace, and the patterns match contiguous text. New `tests/test_mcp_stdio_smoke.py` (10 cases):
+
+- the macOS format (measured on 2026-10-25) and the Linux format (the review's excerpt) both parse. The old regex finds the macOS line, and not the Linux one;
+- a clean real log passes every check;
+- each check fails on a broken log: no build, two builds, live LLM on, no clean stop, a traceback, secret-like text, a pid still running.
+
+The real smoke after the fix:
+
+```text
+# Linux: the Day 22 Dockerfile built from this working tree (linux/arm64, Docker Desktop on the Mac), scripts/ mounted read-only:
+#   docker build --tag procurerag-mcp-smoke:day25 .
+#   docker run --rm -v "$PWD/scripts:/app/scripts:ro" procurerag-mcp-smoke:day25 sh -c \
+#     'uname -srm; python --version; python -c "import importlib.metadata as m; print(\"mcp\", m.version(\"mcp\"))"; \
+#      python scripts/mcp_stdio_smoke.py; echo "smoke exit $?"'
+# Two runs, both PASSED (the first: built once in 22.9 s, connect 23.78 s, shutdown 0.64 s). The second, verbatim:
+Linux 7.0.12-linuxkit aarch64
+Python 3.11.17
+mcp 2.3.0
+connected: server=ProcureRAG 0.1.0, protocol=2026-07-28
+tools/list: ['answer_procurement_question'], required=['query', 'role']
+tools/call Q001 control: status=not_generated sources=['FAQ-001::chunk-12', 'FAQ-001::chunk-13', 'POL-001::chunk-4', 'FAQ-001::chunk-5', 'FAQ-001::chunk-6'] findings=[] run_id=set (0.11 s)
+tools/call Q091, the reviewer declines: status=pending_approval sources=[] findings=[] run_id=None (0.00 s)
+tools/call Q091, the reviewer rejects: status=gap_report sources=['SOP-001::chunk-12', 'SOP-006::chunk-3', 'FAQ-001::chunk-12', 'FAQ-001::chunk-6', 'POL-003::chunk-13', 'POL-001::chunk-3', 'CONTRACT-004::chunk-9', 'SOP-001::chunk-14', 'POL-008::chunk-7', 'GUIDE-002::chunk-1'] findings=['excessive_agency:route_to_hitl'] run_id=set (0.08 s)
+tools/call blocked injection: status=blocked sources=[] findings=['prompt_injection:block'] run_id=None (0.00 s)
+tools/call invalid: no role: is_error=True text='Error executing tool answer_procurement_question: 1 validation error for answer_procurement_questionArguments\n' (0.00 s)
+server log: service built once in 24.0 s (pid 11, live LLM: False); pid 11 gone after shutdown: True
+timings: {"connect (includes the one-time model load)": 25.04, "Q001 control": 0.11, "Q091, the reviewer declines": 0.0, "Q091, the reviewer rejects": 0.08, "blocked injection": 0.0, "invalid: no role": 0.0, "shutdown": 0.69}
+PASSED: 1 tool discovered, 5 calls as expected, the reviewer asked 2 times (Q091 only), stdout clean, 1 service build, clean shutdown
+smoke exit 0
+# The same container with the committed script (HEAD's scripts/mcp_stdio_smoke.py mounted instead):
+FAILED:
+  expected the service to be built exactly once, saw 0 build line(s)
+smoke exit 1
+
+# Mac: HF_HUB_OFFLINE=1 uv run python scripts/mcp_stdio_smoke.py
+PASSED, exit 0 (two runs: service built once in 5.3 s and 3.8 s; connect 6.05 s, shutdown 0.62 s in the first)
+```
+
+This is `linux/arm64` in a local VM, not `linux/amd64`, and not the reviewer's machine. CI does not run the stdio smoke, only the in-memory tests and the new parser tests.
+
+**3. The CI evidence was stale.** It said "remote CI pending" and "nothing is committed". Now recorded in "Full verification", the inventory, the verdict, and the next steps: PR #10, run 40116671344, head `14e7c1c`, three jobs green. These 2026-10-25 fixes are not in a remote run yet.
+
+**4. A local home path in committed commands.** `src/mcp_server.py` and this log named the repository by its absolute path on Juan's Mac. The commands now set `REPO_ROOT="$(pwd)"` from the repository root. The same username in an older Day 22 answer (a shebang path) is now `<user>`.
+
+**Mutation check of the fixes:** 7 of 7 caught, and the file was restored and verified identical. The faults: the crash re-raised as it is (3 tests failed); `from None` turned into `from crash` (1); the crash's message logged instead of its type (2); the resolver not wrapped (1); the tool body not wrapped (1); a `ToolError` treated as a crash, so refusals lose their text (2); tracing left to the environment (1). In the smoke script, `flatten_log` without the location removal failed 6 of the 10 parser tests (restored identical). The 16 earlier faults (M1–M8, E1–E8) were not re-run.
+
+**What this does not fix.**
+
+- A crash's message and traceback are lost to the operator too. Debugging one means reproducing it outside the server.
+- A failure at startup (in `lifespan`) is still logged in full by the SDK, before any call.
+- The MCP server cannot trace at all, even when someone wants it to.
+- The HTTP API was not changed. Its crash and tracing behavior is Day 21's: not checked against this review.
+
 ### Week 5 HER-270 gate inventory
 
 The same table is in [`docs/eval-report.md`](eval-report.md), "Day 25: MCP server/tool and Week 5 gate review". "Exercised" means a real run was observed and recorded; "deleted" means it was exercised and the resources no longer exist.
@@ -7732,15 +7816,44 @@ The same table is in [`docs/eval-report.md`](eval-report.md), "Day 25: MCP serve
 | Day 22 — Docker | `Dockerfile`, `.dockerignore`, `docs/docker-runbook.md` | Real `linux/arm64` build and verbatim runbook (Mac, 1.87 GB CPU-only image) and `linux/amd64` build and run (Hermes VM, 51 s offline startup) | Exercised | Base images tagged, not digest-pinned; model revisions unpinned; the image now also carries the unused `mcp` packages (about 18 MB, measured in the macOS environment) |
 | Day 23 — Azure deployment | `deploy/azure/containerapp-template.yaml`, `docs/azure-container-apps-runbook.md` | A real Container Apps deployment (2026-10-19): public `/health` and four contract smokes, system/console logs, a 59 s fresh-replica cold start; group deleted the same day | Exercised, then deleted | No persistent deployment and no authentication; nothing is live today |
 | Day 24 — eval-gated CI/CD | `.github/workflows/ci.yml`, `live-eval.yml`, `deploy.yml`, `src/graph_regression.py`, `scripts/container_smoke.py` | Remote green, a deliberate red, three required checks on `main`, a CI-refused deploy, two green deployments by digest, one real rollback (revision `0000004`), both groups deleted | Exercised (remote) | Q091 live answer quality is RED (drops the usage-data step); rebuild, not CI-artifact promotion; one-person review; the rollback was applied by hand |
-| Day 25 — MCP | `src/mcp_server.py`, `tests/test_mcp_server.py`, `scripts/mcp_stdio_smoke.py` | 38 in-memory protocol tests (16/16 mutations caught); real stdio client: discovery plus Q001, Q091 declined and rejected by a scripted reviewer (elicitation), blocked, invalid; Inspector 2.12.0 CLI: the cannot-ask fallback; real models, live LLM off | Exercised locally; remote CI pending | Local stdio only; the role is asserted by the host's model; the reviewer's answer comes from the host, unattributed; no remote MCP auth; browser Inspector and a real host session not exercised |
+| Day 25 — MCP | `src/mcp_server.py`, `tests/test_mcp_server.py`, `tests/test_mcp_stdio_smoke.py`, `scripts/mcp_stdio_smoke.py` | 41 in-memory protocol tests (16/16 + 7/7 mutations caught); real stdio client on the Mac and in a Linux container: discovery plus Q001, Q091 declined and rejected by a scripted reviewer (elicitation), blocked, invalid; Inspector 2.12.0 CLI: the cannot-ask fallback; real models, live LLM off; remote CI green on PR #10 (run 40116671344, head `14e7c1c`) | Exercised locally and in remote CI (the in-memory layer) | Local stdio only; the role is asserted by the host's model; the reviewer's answer comes from the host, unattributed; no remote MCP auth; the stdio smoke is not in CI; the 2026-10-25 review fixes are not in a remote run yet; browser Inspector and a real host session not exercised |
 
 Week 5 gate verdict before Hermes review:
 
-**Ready for the HER-270 review, not passed.** Every Week 5 area has an artifact and real evidence. Days 21–24 were exercised (Day 23's and Day 24's Azure resources are deleted, so nothing is live). Day 25 is exercised locally through a real stdio client and the Inspector CLI. Still open before closing: the remote CI run on the Day 25 changes (Juan's push), Juan's review of the new code, the interview drill without notes, and Hermes' independent re-run. The Q091 live answer-quality failure from Day 24 is still red and is carried forward, not hidden.
+**Ready for the HER-270 review, not passed.** Every Week 5 area has an artifact and real evidence. Days 21–24 were exercised (Day 23's and Day 24's Azure resources are deleted, so nothing is live). Day 25 is exercised locally through a real stdio client (on the Mac and in a Linux container) and the Inspector CLI, and its in-memory tests ran green in remote CI on PR #10 (head `14e7c1c`). Still open before closing: a CI run on the 2026-10-25 review fixes (Juan's push), Juan's review of the new code, the interview drill without notes, and Hermes' independent re-run. The Q091 live answer-quality failure from Day 24 is still red and is carried forward, not hidden.
 
 ### Full verification
 
-Re-run on 2026-10-24, after the elicitation change, Mac, with `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVAL_TELEMETRY_OPT_OUT=1 OMP_NUM_THREADS=1` (the 2026-10-22 run, before it: 415 passed, the MCP file 28):
+Remote CI, for the pushed Day 25 work (read with `gh pr view 10` and `gh run view 40116671344` on 2026-10-25):
+
+```text
+PR: #10 <https://github.com/juanfpinzon/ProcureRAG/pull/10> (day-25 -> main, open)
+head: 14e7c1c3989e9d43e9d08250351ddb884b241149
+run: 40116671344 <https://github.com/juanfpinzon/ProcureRAG/actions/runs/40116671344> (CI, pull_request, 2026-10-24 17:33 UTC): success
+fast-deterministic: success, 40 s (pytest: 425 passed in 9.02s; frozen regression exit 0)
+model-backed-deterministic: success, 1m24s (current retrieval exit 0; graph regression: every graph contract holds)
+docker-build-smoke: success, 2m58s
+```
+
+That run covers the in-memory MCP tests (inside the 425), not the stdio smoke, which CI does not run. It is for `14e7c1c`: the 2026-10-25 review fixes below are not in a remote run yet.
+
+Local re-run on 2026-10-25, after the review fixes, Mac, with the same variables as below:
+
+```text
+uv sync --locked --dev: Resolved 154 packages, Checked 145 packages
+uv lock --check: Resolved 154 packages (agrees with pyproject.toml)
+pytest: 438 passed in 3.04s (387 + 41 in tests/test_mcp_server.py + 10 in tests/test_mcp_stdio_smoke.py)
+compileall src tests scripts: clean
+Ruff src tests scripts: All checks passed!
+frozen fixture regression: all cases as expected, exit 0
+current retrieval verification (HF_HUB_OFFLINE=1): 6 x [OK], exit 0
+graph regression (HF_HUB_OFFLINE=1): every graph contract holds, 4 counted stand-in LLM calls, exit 0
+scripts/mcp_stdio_smoke.py: PASSED, exit 0 (Mac; and in a Linux container, see "Follow-up (2026-10-25)")
+the MCP test files with LANGSMITH_TRACING(_V2)=true exported: 51 passed, 0 upload attempts
+git diff --check: clean
+```
+
+Historical, 2026-10-24, before the push: re-run after the elicitation change, Mac, with `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVAL_TELEMETRY_OPT_OUT=1 OMP_NUM_THREADS=1` (the 2026-10-22 run, before it: 415 passed, the MCP file 28):
 
 ```text
 uv sync --locked --dev: Resolved 154 packages, Checked 145 packages
@@ -7758,8 +7871,8 @@ MCP-specific tests/client: tests/test_mcp_server.py 38 passed in 0.85s; scripts/
 git diff --check: clean
 git status --short: the Day 25 files (staged by Juan), plus the 2026-10-24 elicitation changes on top: src/mcp_server.py,
   tests/test_mcp_server.py, scripts/mcp_stdio_smoke.py, docs/test-queries.md, this entry, docs/eval-report.md
-remote CI run URL / commit / result: not yet available: nothing is committed or pushed. Juan's steps: review, branch,
-  commit, open a PR; then record the run URL, the head SHA, and the three required jobs' results here.
+remote CI run URL / commit / result: not yet available on 2026-10-24: nothing was committed or pushed yet.
+  (Since recorded above: PR #10, run 40116671344, head 14e7c1c, three jobs green.)
 ```
 
 ### What failed or was confusing
@@ -7768,7 +7881,8 @@ remote CI run URL / commit / result: not yet available: nothing is committed or 
 - **An unknown argument is dropped, not refused.** The SDK's argument model ignores keys it does not know, so `"decison"` simply vanished, where Day 21's HTTP contract gives a 422. It fails closed (Q091 stays `pending_approval`), so it is documented and tested rather than worked around through SDK internals.
 - **"The lifespan runs once" needed a qualifier.** I first assumed once per server. Measured: once per CONNECTION (two `async with Client(server)` blocks ran it twice). For stdio that is once per process, because one process serves one host, and the SDK's `run()` enters it once around the serve loop.
 - **The first stdout check could not fail.** Three stray prints (in the lifespan, in the tool body, and an unflushed one at import time) did not corrupt the wire, because the SDK diverts flushed output to stderr while serving, and the unflushed one was only flushed after the diversion began. Only a print flushed at import time, before serving, reached stdout, and that one made the smoke fail. Without that last mutation, "stdout clean" would have been an untested claim.
-- **The log handler wraps lines.** `MCPServer` configures Rich logging, which wraps a long line at 80 columns, so the first line-based check on the startup line read half of it. The smoke now matches a pattern on the stderr text with its whitespace collapsed.
+- **The log handler wraps lines.** `MCPServer` configures Rich logging, which wraps a long line at 80 columns, so the first line-based check on the startup line read half of it. The smoke now matches a pattern on the stderr text with its whitespace collapsed. (That fix was incomplete: where Rich's source location lands depends on the numbers in the line, and on a Linux run it split "96.4 s". Fixed on 2026-10-25, with parser tests for both formats.)
+- **A sanitized result is not a sanitized log (2026-10-25, from review).** The SDK kept a crash's text out of the client's result, and the 2026-10-22 test checked exactly that. But the SDK also logs the crash with its full traceback, message included, and the test accepted that log line as "the operator still gets it". A secret in an exception's text would have been on stderr, and in a LangSmith trace when the shell had tracing on. A test that asserts what SHOULD be there also has to assert what must NOT be.
 - **Developer docs leak into the model's schema.** Pydantic puts `ApprovalDecision`'s docstring (865 characters about Day 18 and HTTP 422/500) into the tool's `$defs`, so the model reads it in `tools/list`. FastAPI's OpenAPI page shows the same text. Not changed: it is noise, not a secret, and a separate MCP-only decision model would be a second contract to keep in sync. (Gone since 2026-10-24: the tool no longer takes an `ApprovalDecision`. The elicitation form has its own short descriptions.)
 - **Asking a host that cannot ask is a crash, not a question (2026-10-24).** In the SDK, a resolver that returns `Elicit(...)` to a client that declared no elicitation support raises a protocol error (`MISSING_REQUIRED_CLIENT_CAPABILITY`). So the fail-closed fallback needed its own check of the declared capabilities (`host_can_ask`) before asking.
 - **Day 21's pending text would have looped the model (2026-10-24).** `PENDING_APPROVAL_MESSAGE` tells the caller to send the same request again with a `decision`. The MCP tool has no `decision` argument any more, so a model following that text would retry with an argument the SDK drops, and get the same answer. The MCP path replaces the text with one of two messages that say why no decision came.
@@ -7779,12 +7893,11 @@ remote CI run URL / commit / result: not yet available: nothing is committed or 
 
 - **The adapter is small because Day 21 already did the work.** The tool is one call to `answer_question`, and `answer_question` is four steps: build the request, count the call, check the id, run the pipeline. The parity test (same arguments through MCP and through `POST /query`, same response) is the proof that this is one service with two doors, not two policies.
 - **Discovery is self-description, generated.** The input schema came from the type hints and `Field` limits, and the output schema IS `QueryResponse`. Nothing was written twice.
-- **Each evidence layer has its own claim.** Direct: adapter logic. In memory: the protocol path (28 tests on 2026-10-22, 38 since the elicitation change). Real stdio: the process boundary (one build, clean stdout, clean exit, real models). Remote CI: not yet. A green test of one layer says nothing about the next.
+- **Each evidence layer has its own claim.** Direct: adapter logic. In memory: the protocol path (28 tests on 2026-10-22, 38 since the elicitation change, 41 since the review fixes). Real stdio: the process boundary (one build, clean stdout, clean exit, real models), on the Mac and, since 2026-10-25, in a Linux container. Remote CI: PR #10's run re-ran the in-memory layer on Linux, green; it does not run the stdio smoke. A green test of one layer says nothing about the next: the Linux smoke failure was invisible to the green CI run.
 - **Under MCP the "caller" is a model.** The role and the decision were caller-asserted on Day 21. Here the caller writes them in tool arguments, which makes the gap concrete: identity has to come from the connection, and approval from a person (host confirmation, or MCP elicitation), not from an argument. On 2026-10-24 the decision moved to elicitation; the role is still an argument.
 
 ### What I can now explain in an interview
 
-Draft answers, built from the Day 25 evidence above. Practised by Juan without notes: _pending (Juan confirms before the review)._
 
 1. **Host vs client vs server in this demo**
    - host = user-facing AI application;
@@ -7809,7 +7922,7 @@ Draft answers, built from the Day 25 evidence above. Practised by Juan without n
    - My answer: `tools/list` proves the server started, negotiated, and advertises `answer_procurement_question` with that description, those required arguments, and the `QueryResponse` output schema. It says nothing about what the tool does: that took the representative calls (Q001, Q091, blocked, invalid), the parity test, and the mutation check. `MCPServer` even declares resources and prompts with none registered.
 6. **Direct function vs in-memory MCP client vs Inspector/stdio**
    - adapter logic vs protocol path vs real process/transport boundary.
-   - My answer: calling `answer_question` directly proves the adapter's mapping. `Client(server)` in memory proves the SDK's protocol path (schema generation, argument validation, structured and error results), with no process, models, or key. The smoke script and the Inspector CLI prove the real process: it starts, loads the models once, keeps stdout clean, answers real retrieval, and exits on its own. Remote CI is a fourth claim, still pending.
+   - My answer: calling `answer_question` directly proves the adapter's mapping. `Client(server)` in memory proves the SDK's protocol path (schema generation, argument validation, structured and error results), with no process, models, or key. The smoke script and the Inspector CLI prove the real process: it starts, loads the models once, keeps stdout clean, answers real retrieval, and exits on its own. Remote CI is a fourth claim: PR #10's run re-ran the in-memory tests on Linux, green, but it does not run the stdio smoke, and a Linux-only smoke failure (a log-parsing bug, fixed on 2026-10-25) stayed invisible to it.
 7. **How HITL stays fail-closed**
    - pending response; explicit approve/edit/reject; no silent approval;
    - current reviewer identity remains caller-asserted/stateless.
@@ -7841,9 +7954,9 @@ Draft answers, built from the Day 25 evidence above. Practised by Juan without n
 
 1. ~~Complete the exact MCP readings and the artifact contract before coding.~~ Done 2026-10-22 (above).
 2. ~~Build and test the required tool; capture in-memory client plus Inspector/stdio evidence.~~ Done locally: 28 tests, the stdio smoke, and the Inspector 2.12.0 CLI. Since 2026-10-24: 38 tests, with the reviewer's decision asked by elicitation (see the follow-up).
-3. ~~Fill every Day 25 evidence field and the Week 5 gate inventory.~~ Done, except the remote CI run.
-4. **Juan:** read and run every line of `src/mcp_server.py`, `tests/test_mcp_server.py`, and `scripts/mcp_stdio_smoke.py`. Optional, by hand: `uv run mcp dev src/mcp_server.py` (the browser Inspector), and a real host session, e.g. `claude mcp add procurerag -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -- uv run --directory /Users/juanfpinzon/python_projects/ProcureRAG python src/mcp_server.py`, then `/mcp` and a Q091 question, to see Claude Code's elicitation dialog (the approve / edit / reject form) and what each answer does. The LangSmith flags matter here: Claude Code passes the shell environment to the server, so a `LANGSMITH_*` export in the shell would otherwise reach it. For a paid run, register a second server (e.g. `procurerag-live`) with `PROCURERAG_LIVE_LLM=1`; the key comes from `.env`, so never pass it with `-e` (that writes it into Claude Code's config file).
-5. **Juan:** branch, commit, and open a PR; record the remote CI run (URL, head SHA, the three required jobs) in "Full verification".
+3. ~~Fill every Day 25 evidence field and the Week 5 gate inventory.~~ Done, the remote CI run included (PR #10, run 40116671344).
+4. **Juan:** read and run every line of `src/mcp_server.py`, `tests/test_mcp_server.py`, `tests/test_mcp_stdio_smoke.py`, and `scripts/mcp_stdio_smoke.py`. Optional, by hand: `uv run mcp dev src/mcp_server.py` (the browser Inspector), and a real host session. From the repository root: `REPO_ROOT="$(pwd)"`, then `claude mcp add procurerag -e PROCURERAG_LIVE_LLM=0 -e LANGSMITH_TRACING=false -e LANGSMITH_TRACING_V2=false -e HF_HUB_OFFLINE=1 -- uv run --directory "$REPO_ROOT" python src/mcp_server.py`, then `/mcp` and a Q091 question, to see Claude Code's elicitation dialog (the approve / edit / reject form) and what each answer does. Claude Code passes the shell environment to the server; since 2026-10-25 the server switches tracing off itself, and the LangSmith flags are a second safety. For a paid run, register a second server (e.g. `procurerag-live`) with `PROCURERAG_LIVE_LLM=1`; the key comes from `.env`, so never pass it with `-e` (that writes it into Claude Code's config file).
+5. ~~**Juan:** branch, commit, and open a PR; record the remote CI run.~~ Done 2026-10-24: PR #10, head `14e7c1c`, run 40116671344, three jobs green. **Juan:** review and push the 2026-10-25 review fixes to PR #10, then record that run (URL, head SHA, the three jobs) in "Full verification".
 6. Practise the twelve answers without notes, then send the review prompt to Hermes. Do not move HER-293 or HER-270 to Done before review.
 7. After Day 25 passes, close HER-293 and run a **separate HER-270 parent-gate review** across all five children and cumulative evidence.
 8. If HER-270 closes cleanly, begin Week 6 / HER-271 portfolio polish and interview readiness, carrying forward the explicit Q091 live-answer-quality weakness rather than hiding it.
