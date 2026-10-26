@@ -7973,35 +7973,61 @@ Project rule: Juan owns all implementation and design artifacts in both reposito
 
 ### Course/source checkpoint
 
-No new Boot.dev chapter today. The primary context is [`docs/week6-portfolio-launch-plan-2026-10-26.md`](week6-portfolio-launch-plan-2026-10-26.md), supported by the canonical Week 6 alignment, current ProcureRAG evidence, the old portfolio, curated inspiration, and exact hosting/protocol sections.
+No new Boot.dev chapter today. The primary context is [`docs/week6-portfolio-launch-plan-2026-10-26.md`](week6-portfolio-launch-plan-2026-10-26.md), supported by the canonical Week 6 alignment, current ProcureRAG evidence, the old portfolio, curated inspiration, and exact hosting/protocol sections. All external pages were read on 2026-10-26.
 
-For each source, replace the TODO with one applied portfolio/architecture decision or rejection. A checked box alone is not evidence.
+- [x] Week 6 portfolio launch plan — full document.
+  - Applied takeaway: Day 26 unblocks Day 27 with **content and design decisions only** (inventory, hero, tokens, IA, wireframes). Everything Day 28–30 needs is either decided in the ADR or listed there as a named blocker with an owner and a day. The ADR does not pretend a BFF, quota store or deployment exists. One gap the plan does not cover: moving the site to Vercel takes it off `juanfpinzon.github.io`, the URL on the CV. The ADR's old-URL policy and open decision #9 now cover it.
+- [x] Canonical study-plan / Linear alignment — `Week 6 gate — HER-271`.
+  - Carry-forward weaknesses that constrain the public launch:
+    - Q091 live-answer completeness is red;
+    - roles are caller-asserted, which is why the public role is fixed server-side;
+    - approvals are stateless and unattributed, which is why public `pending_approval` fails closed;
+    - quotas are process-local, which is why a persistent atomic quota store is required;
+    - raw traces may be sensitive, so tracing stays off and no `run_id` reaches the browser;
+    - free text has no gold labels, so the browser never sends a `query_id`.
 
-- [ ] Week 6 portfolio launch plan — full document.
-  - Applied takeaway: _TODO: Fill in._
-- [ ] Canonical study-plan / Linear alignment — `Week 6 gate — HER-271`.
-  - Carry-forward weaknesses that constrain the public launch: _TODO: Fill in._
-- [ ] Current ProcureRAG evidence — README, eval report, Day 25 log, API contracts, test queries, and corpus docs.
-  - Demonstrated claims versus local-only/historical/red claims: _TODO: Fill in._
-- [ ] Current rendered portfolio and `juanfpinzon/juanfpinzon.github.io` `master` source.
-  - Actual stack/default branch/publishing shape: _TODO: Fill in._
-  - Stale title/CV/content/link findings: _TODO: Fill in._
-- [ ] Hafsa Mrabet portfolio.
-  - Pattern to borrow / avoid: _TODO: Fill in._
-- [ ] Eugene Yan portfolio.
-  - Pattern to borrow / avoid: _TODO: Fill in._
-- [ ] Hamel Husain portfolio.
-  - Pattern to borrow / avoid: _TODO: Fill in._
-- [ ] Chip Huyen portfolio.
-  - Pattern to borrow / avoid: _TODO: Fill in._
-- [ ] Shreya Shankar portfolio.
-  - Pattern to borrow / avoid: _TODO: Fill in._
-- [ ] Next.js `Static Exports` — `Supported Features` / `Unsupported Features`.
-  - Applied static-versus-runtime decision: _TODO: Fill in._
-- [ ] GitHub `Creating a GitHub Pages site` — `Creating your site`.
-  - Applied publishing/gateway decision: _TODO: Fill in._
-- [ ] MCP Specification 2025-11-25 `Transports` — `stdio` / `Streamable HTTP`.
-  - Applied HTTP-versus-MCP decision: _TODO: Fill in._
+    All six stay visible in the case study's "Failures and limits" section.
+- [x] Current ProcureRAG evidence — README, eval report, Day 25 log, API contracts, test queries, and corpus docs.
+  - Demonstrated claims versus local-only/historical/red claims:
+    - **Demonstrated, reproducible:** retrieval P@1 0.978 / MRR@10 0.984 / nDCG@5 0.869 (93 queries, synthetic corpus v1); the test suite; the deterministic regressions; eval-gated CI runs.
+    - **Local only:** the FastAPI service, the Docker image, stdio MCP.
+    - **Historical, deleted:** the Azure deployment and rollback.
+    - **Red:** Q091 live generation.
+    - **Not true today:** free-text evidence checking, authentication, durable approval, a public demo.
+
+    Inventory §4 holds the full table.
+- [x] Current rendered portfolio and `juanfpinzon/juanfpinzon.github.io` `master` source.
+  - Actual stack/default branch/publishing shape: Jekyll `jekyll-theme-minimal`. The repo is a **GitHub fork of `pages-themes/minimal`** (with its gemspec, `script/`, Ruby 2.7 CI and a `Jmuccigr-patch-1` branch). The default branch is `master`. Pages builds from `master` `/` (build type `legacy`, HTTPS enforced, no custom domain). There is no `package.json` or lockfile. The last commit is `7526f0c` (2021-09-13).
+  - Stale title/CV/content/link findings:
+    - the title is still "Data Scientist and Machine Learning Researcher/Developer" and the CV link points to the 2021 PDF;
+    - "100,000 thousand";
+    - the body says "500" CVs while its own link text says 545;
+    - the paper is called a "conference" paper (it is the journal *Procesamiento del Lenguaje Natural* 65, 2020);
+    - the theme demo page `another-page.html` is still public;
+    - the Autobone link is a login page;
+    - `skills-semantic-similarity-scoring-50cvs.ipynb` holds **29 distinct email addresses** in its saved outputs.
+
+    All 21 destinations answered HTTP 200 (`curl -L`), but LinkedIn (auth wall) and Autobone (login page) prove nothing.
+- [x] Hafsa Mrabet portfolio.
+  - Pattern to borrow / avoid: borrow the role-first hero and the numbered problem → contribution → outcome cards. Avoid `.reveal { opacity: 0 }` content that is invisible without JavaScript, and absolute claims ("0 bugs entregados a cliente"). The site now leads with "COBOL Developer", so its identity is clearly not ours to copy. The dark charcoal/cream direction was rejected for this reason and for contrast on long tables.
+- [x] Eugene Yan portfolio.
+  - Pattern to borrow / avoid: borrow the one-line role statement plus short, explicit top-level routes (Writing · Speaking · Prototyping · About), which became Home · ProcureRAG · About · CV. Avoid unsourced counters ("11,800+ readers") and a long chronological feed above the flagship.
+- [x] Hamel Husain portfolio.
+  - Pattern to borrow / avoid: borrow evaluation-led positioning. The case study puts metrics, methodology and failure analysis (Q091) up front. Avoid reputation-style social proof (students, companies) that Juan does not have and must not imitate.
+- [x] Chip Huyen portfolio.
+  - Pattern to borrow / avoid: borrow the human through-line ("I grew up … I work to bring AI to production"), which here becomes procurement roots (2014) → ML research (2019) → production forecasting (2022) → RAG/agents (2026). Avoid unsourced superlatives ("Amazon #1 bestseller").
+- [x] Shreya Shankar portfolio.
+  - Pattern to borrow / avoid: borrow tight linking between research, code and CV, which here becomes the paper, dataset and repo links on each card. Avoid turning an industry portfolio into an academic news list.
+- [x] Next.js `Static Exports` — `Supported Features` / `Unsupported Features`.
+  - Applied static-versus-runtime decision: under `output: 'export'`, Server Components run at build time, and a Route Handler can only be a static `GET` (`force-static`). "Route Handlers that rely on Request", Cookies, Headers, Server Actions and default-loader Image Optimization are unsupported. So the pages can be static, and the chat `POST` with a credential must live in a runtime BFF (Vercel route handler).
+- [x] GitHub `Creating a GitHub Pages site` — `Creating your site`.
+  - Applied publishing/gateway decision: Pages publishes static files (branch, or an Actions artifact with a top-level entry file). It "does not support server-side languages such as PHP, Ruby, or Python", and sites are public. So Pages stays the fallback for static pages only, and becomes the old-URL redirect host at cutover. It can never be the BFF.
+- [x] MCP Specification 2025-11-25 `Transports` — `stdio` / `Streamable HTTP`.
+  - Applied HTTP-versus-MCP decision:
+    - Under stdio, the client launches the server as a subprocess, and the server "MUST NOT write anything to its stdout that is not a valid MCP message". A browser cannot launch a subprocess.
+    - Streamable HTTP would need its own endpoint, `Origin` validation (403), authentication, `MCP-Session-Id` and `MCP-Protocol-Version` handling.
+
+    So the browser uses the plain HTTP `/query` contract through the BFF. Local stdio MCP stays a developer integration, and remote MCP is deferred (ADR option E).
 
 ### Starting baseline
 
@@ -8029,216 +8055,412 @@ Baseline caveats carried forward:
 - Free text has no trustworthy gold `query_id` or evidence-completeness diagnosis.
 - Nothing is currently live; the prior Azure resources were deleted.
 
+#### Block 0 re-run (2026-10-26, Mac, branch `day-26` at `bfaac14`)
+
+Branch `day-26` at `bfaac14` (the route and this scaffold on top of `44a21c7`), clean, up to date with `origin/day-26`. Each command was run with `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false DEEPEVAL_TELEMETRY_OPT_OUT=1 OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev                                   exit 0  Resolved 154 packages, Checked 145 packages
+uv lock --check                                          exit 0
+uv run pytest -q                                         exit 0  438 passed in 3.02s
+uv run python -m compileall -q src tests scripts         exit 0
+uv run python -m ruff check src tests scripts            exit 0  All checks passed!
+uv run python src/regression_suite.py                    exit 0  7/7 match their expected state (frozen fixtures)
+HF_HUB_OFFLINE=1 ... regression_suite.py --verify-retrieval   exit 0  6 x [OK]
+HF_HUB_OFFLINE=1 ... graph_regression.py                 exit 0  6/6 passed, LLM calls made in this run: 4 (stand-in)
+git diff --check / git status --short                    exit 0  clean
+```
+
+The baseline matches the kickoff. One difference: `uv sync` checked 145 packages, not 146; the lock and the resolved count (154) are unchanged.
+
+Three sentences:
+
+1. **Strongest existing evidence:**
+   - reproducible, methodology-labelled retrieval evaluation (reranked hybrid RRF, P@1 0.978 on 93 labeled queries), behind a tested, guarded service and eval-gated CI;
+   - a first-author NER paper (2020) and a public 545-CV dataset;
+   - CV-reported PepsiCo production forecasting.
+2. **Most dangerous public over-claim:** the CV summary's "7 years building and **deploying** production machine learning across NLP, time-series forecasting, and computer vision". The NER research did not reach production, and the U-NET was a PoC. Its ProcureRAG twin would be reading P@1 0.978 as answer accuracy while Q091's live answer is red.
+3. **Decision Day 26 must settle before Day 27:** the evidence-backed content contract (what may be claimed, the experience-first hierarchy, the hero) and the design tokens/IA, so Day 27 builds from decisions. The chat's trust boundary (BFF + service token + fixed role) must also be fixed before Day 28 writes any chat code.
+
 ### Content and evidence migration inventory
 
-Artifact path / commit or working-tree state: _TODO: Fill in._
+Artifact path / commit or working-tree state: [`juanfpinzon/juanfpinzon.github.io` → `docs/portfolio-content-inventory.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/docs/portfolio-content-inventory.md). It is on local branch `day-26-contract` (from `master` `7526f0c`), **uncommitted and unpushed**, so the link resolves only after Juan pushes. `_config.yml` on that branch excludes the three Day 26 docs from the legacy Jekyll build (not build-verified: Jekyll is not installed locally).
 
 | Legacy area | Keep / rewrite / archive | Juan's contribution and ownership boundary | Public evidence / link status | Data or asset permission | Corrections / open questions |
 |---|---|---|---|---|---|
-| U-NET spine / vertebra detection | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| Resume NER / publication / dataset / notebooks | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO: include Vol. 65 (2020) and README-documented 545 CVs._ |
-| DICOM2STL / Autobone context | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
-| CS231n foundations | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| U-NET spine / vertebra detection | Rewrite: compact card, text only | Novel Software Systems client PoC (Juan, 2026-10-26). End to end: DICOM extraction from more than 100,000 images, cleaning, implant classifier, hand-annotated masks, U-NET (PyTorch/fast.ai), OpenCV post-processing. Client owns data and product; not a deployed clinical product | No public repo or paper; only `img55.png` (200) | Materials not shareable (old site). `img55.png` (medical image) **not migrated** | "100,000 thousand" → "more than 100,000" (Juan-confirmed). Year: H1 2020 (Juan-confirmed) |
+| Resume NER / publication / dataset / notebooks | Promote: lead research card | Novel Software team research; Juan is **first author** (journal metadata); team-annotated dataset | Paper: *Procesamiento del Lenguaje Natural* 65, 2020-09-01, pp. 53–58 (200 over http; the https certificate does not match the host). Dataset README: "545 CVs with NER Annotations" (200). Notebooks 200 | Dataset public; never show CV content in the site or demo. `skills-semantic-similarity-scoring-50cvs.ipynb` has 29 emails in outputs: **not linked**; clearing it is Juan's call | **Vol. 65 (2020)**, not the CV's "SEPLN 2021". **545 (README-documented)**, not "500". Journal article, not "conference". Keep the honest non-production result. Tools (Juan-confirmed): Flair/PyTorch BiLSTM-CRF taggers with stacked FastText and contextual string embeddings |
+| DICOM2STL / Autobone context | Rewrite: compact engineering card with upstream credit | Adapted and extended **David T. Chen's (NIAID) `dicom2stl`**, Apache-2.0 per README. First 100 commits on `master`: ~76 Juan, ~24 Dave Chen. Client work for Autobone at Novel Software (Juan-confirmed). Juan does not own Autobone or its model | Repo 200. The Autobone link is a login page: dropped | Public repo. Credit upstream on the site. The repo has no `LICENSE` file (open, non-blocking) | Typos ("it's", "the a"). "1,000+ cranial STL models" **confirmed** true and publishable (Juan): "Used to convert 1,000+ cranial CT scans into STL meshes for the client's implant-model training data." |
+| CS231n foundations | Archive: one line, no image | Self-paced solutions to Stanford's Spring 2019 assignments | Repo 200; course page 200 | `cs231n.png` likely course material: not migrated | None |
 
-Additional numeric/copy issues and how they were resolved or assigned: _TODO: Fill in; do not guess `100,000 thousand`._
+Additional numeric/copy issues and how they were resolved or assigned:
+- `100,000 thousand` → "more than 100,000" (**Juan confirmed**, 2026-10-26);
+- "500" → "545 (as documented in the dataset README)";
+- the CV's "SEPLN 2021" → Vol. 65 (2020);
+- the CV's tenure "7 years … deploying" → "Working in ML and data science since 2019; production forecasting at PepsiCo since 2022" (**Juan chose**);
+- "1,000+ cranial STL models" was confirmed by Juan as true and publishable (inventory §6 #4).
 
-Market/time-series citation wording and source: _TODO: Use `AGI 2022 proceedings (published 2023)` plus the 2022 preprint if included._
+Market/time-series citation wording and source: "Kolonin, Raheman, Vishwas, Ansari, **Pinzon**, Ho. *Causal Analysis of Generic Time Series Data Applied for Market Prediction*. **AGI 2022 proceedings (published 2023)**, LNCS, pp. 30–39, doi:10.1007/978-3-031-19907-3_4. Preprint arXiv:2204.12928 (2022)." Sources:
+- Crossref: container "Lecture Notes in Computer Science / Artificial General Intelligence", published online 2023-01-14;
+- arXiv: v1 2022-04-22, "submitted to Artificial General Intelligence 2022 conference".
+
+The Springer page redirected to a login flow, so it was not used.
 
 ### Career, project, and credential crosswalk
 
-Crosswalk artifact path: _TODO: Fill in._
+Crosswalk artifact path: the same file, §2 (career), §3 (publications/credentials), §4 (ProcureRAG claims), §5 (permissions), §6 (open questions).
 
-- Selected hero/value proposition: _TODO: Fill in._
-- Short alternative: _TODO: Fill in._
+- Selected hero/value proposition: "ML/AI engineer with production forecasting and procurement experience, building evidence-driven RAG and agentic applications." (Juan chose the route draft.)
+- Short alternative: "Production ML engineer building evidence-driven RAG and agents for procurement."
 - Why this is an experienced production-ML-to-LLM extension rather than a beginner reset:
-  - prior production evidence: _TODO: Fill in._
-  - procurement/domain evidence: _TODO: Fill in._
-  - research/public artifact evidence: _TODO: Fill in._
-  - recent RAG/agent/service evidence: _TODO: Fill in._
-- Post-August CV changes confirmed by Juan: _TODO: Fill in or name the blocker._
-- Public-safe employer wording approved: _TODO: Fill in or name the blocker._
-- Actual employer titles versus target-role headline: _TODO: Fill in._
-- ProcureRAG employer-separation wording: _TODO: Fill in._
-- CV `7 years` versus accessible LinkedIn `5+ years` scope/as-of decision: _TODO: Fill in or track explicitly._
-- Full LinkedIn Experience audit status: _TODO: Must not be called complete without export/screenshots._
-- Hermes/OpenClaw ownership/credit wording: _TODO: Fill in._
+  - prior production evidence: PepsiCo Data Science Sr. Analyst (May 2022–Jan 2026), CV-reported:
+    - ML forecasting (XGBoost/LightGBM/ensembles) on millions of multi-country rows weekly for the first IBP implementation;
+    - co-led the Sustain design (governance, documentation, monitoring, retraining);
+    - Azure Databricks, PySpark, Data Factory.
+  - procurement/domain evidence:
+    - STF Group Procurement & Inventory Analyst (2014–2016; obsolete inventory −20%);
+    - Beyond Spend dashboard (4+ weeks → near-real-time) and SpendHQ European rollout (100+ procurement members);
+    - current Digital Procurement agentic-AI roadmap role (all CV-reported).
+  - research/public artifact evidence: first-author NER paper (2020) and the 545-CV dataset; coauthor of the AGI 2022 paper; DICOM2STL contributions with upstream credit.
+  - recent RAG/agent/service evidence: ProcureRAG.
+    - Reproducible retrieval evals (P@1 0.978, retrieval ranking only).
+    - A bounded LangGraph agent with guardrails and HITL.
+    - A guarded FastAPI service, Docker, an Azure deployment and rollback (deleted), eval-gated CI, local stdio MCP.
+    - 445 tests, including the Day 26 probe tests.
+- Post-August CV changes confirmed by Juan: **none** (Juan, 2026-10-26).
+- Public-safe employer wording approved: **yes**. Juan approved the August CV wording for the public site, including program names and CV-reported metrics, attributed to his own role. No internal dashboards or systems are linked.
+- Actual employer titles versus target-role headline:
+  - held titles: Data Product Management Associate Manager (PepsiCo, 2026–), Data Science Sr. Analyst (PepsiCo, 2022–2026), ML Researcher / DL Consultant (Novel Software Systems, 2019–2022);
+  - "Senior AI Engineer" was the August CV's **target** headline, never presented as a held title. Juan dropped it: the corrected CV's header is "ML/AI Engineer | Machine Learning in Production | LLM Applications & Agentic AI".
+- ProcureRAG employer-separation wording: "An independent learning project: a procurement-intelligence copilot over a synthetic knowledge base (34 documents of a fictional company, Vantera) … no PepsiCo affiliation and no employer data, systems or endorsement, and it is not a production system." (inventory §2.1)
+- CV `7 years` versus accessible LinkedIn `5+ years` scope/as-of decision: **resolved** with dated wording: "Working in ML and data science since 2019; production forecasting at PepsiCo since 2022." It never goes stale, and it separates research from production. The corrected CV uses the same line.
+- Full LinkedIn Experience audit status: **not done**. Only the headline/summary was accessible; the profile is auth-walled. Not called complete; it needs an export or screenshots (inventory §6 #9, non-blocking).
+- Hermes/OpenClaw ownership/credit wording: **confirmed** by Juan (same wording as the corrected CV): "Configured and extended the open-source OpenClaw and Hermes Agent frameworks (credited upstream) with personally authored Python automations: Linear, GitHub and Telegram connectors, an LLM-based pull-request review watchdog, news and newsletter pipelines, a Markdown shared-memory vault and context-engineering conventions for coding agents." Juan wrote the listed automations, not the frameworks. **Open (non-blocking):** the upstream URLs for OpenClaw and Hermes Agent, so the card can link the credit.
 
 Course awards:
 
 | Evidence | Exact public claim | Verification/publication decision | ProcureRAG evidence paired with it |
 |---|---|---|---|
-| Boot.dev — Learn Retrieval Augmented Generation — 18 Sep 2026 | _TODO_ | _TODO: No invented issuer verification URL._ | _TODO_ |
-| Hugging Face — The MCP Course: Unit 1 — 1. Fundamentals of MCP — 22 Oct 2026 | _TODO: Unit 1, not the full course._ | _TODO: No invented issuer verification URL._ | _TODO_ |
-| Microsoft Azure AI Engineer Associate | _TODO: Preserve `in progress` unless new proof exists._ | _TODO_ | _TODO_ |
+| Boot.dev — Learn Retrieval Augmented Generation — 18 Sep 2026 | "Boot.dev — Learn Retrieval Augmented Generation (certificate of completion, 18 September 2026)" | Text only (Juan). No image, no Verify button, credential ID not shown. The printed "Topics mastered" label is not used as a claim. No issuer verification URL exists on the artifact, and none was invented | Days 1–10: TF-IDF/BM25/semantic primitives → chunking → hybrid/RRF → reranking → retrieval evals (`src/eval_metrics.py`) |
+| Hugging Face — The MCP Course: Unit 1 — 1. Fundamentals of MCP — 22 Oct 2026 | "Hugging Face — The MCP Course, Unit 1: Fundamentals of MCP (certificate of achievement, 22 October 2026)". **Unit 1 only, never the whole course** | Text only. The artifact shows no credential ID or URL, and none was invented | `src/mcp_server.py`, `scripts/mcp_stdio_smoke.py`, Inspector evidence (Day 25) |
+| Microsoft Azure AI Engineer Associate | "In progress" (CV only) | Not listed on the site until earned. No new proof exists | Day 23–24 Azure deployment evidence (separate from the credential) |
 
-Original attachment/public-asset handoff decision: _TODO: Fill in. Do not claim the supplied files were published unless they actually were._
+Original attachment/public-asset handoff decision: the August CV PDF and both award images stay in Juan's local `~/Documents/CV/`. They were read for this crosswalk, and **nothing was copied into either repository, edited, uploaded or published**. Juan produced the **corrected CV** on 2026-10-26: `docs/JuanFernandoPinzon_CV_Oct2026.pdf` in the portfolio repo. It was checked against this crosswalk and has NER 2020, "AGI 2022 proceedings (Springer LNCS, 2023)", ProcureRAG, "since 2019", the Flair NER tools, the "ML/AI Engineer" header, Azure still in progress, and n8n/Streamlit kept out of the "demonstrated in ProcureRAG" line. Its technical claims were verified against the repo: the three required checks on `main`, the OIDC deploy, the non-root image, the read-only MCP tool and "430+ tests". It is uncommitted, so it becomes public on GitHub only when the branch is pushed. The original August PDF and the award images stay local and unpublished.
 
 ### Design and information architecture contract
 
-Design artifact path: _TODO: Fill in._
+Design artifact path: [`juanfpinzon/juanfpinzon.github.io` → `DESIGN.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/DESIGN.md). It is on branch `day-26-contract`, uncommitted.
 
-- Selected visual direction: _TODO: Fill in._
-- Why selected; alternatives rejected: _TODO: Fill in._
-- Tokens (type, colors, spacing, accent): _TODO: Fill in._
-- Mobile wireframe evidence: _TODO: path/image/diagram and summary._
-- Desktop wireframe evidence: _TODO: path/image/diagram and summary._
-- Recruiter path, in order: _TODO: Fill in._
-- Technical path, in order: _TODO: Fill in._
+- Selected visual direction: **editorial light** (Juan chose it, 2026-10-26): warm paper, near-black ink, one deep-teal accent, serif headings, sans body, mono only for metrics and IDs.
+- Why selected; alternatives rejected:
+  - Long-form evidence reads best light and left-aligned, and one accent keeps the demo's status colours meaningful.
+  - Rejected: editorial dark charcoal/cream (too close to cloning Hafsa's identity; harder contrast on long tables), the engineering notebook style (weak recruiter path), and 3D/gradients/skill bars/scroll-reveal.
+- Tokens (type, colors, spacing, accent):
+  - colour: bg `#FAF8F3`, surface `#F1EDE4`, ink `#1C1B19`, muted `#5C5850`, accent `#0F5E5A`, focus `#B4540A`, plus dark-mode equivalents;
+  - every text pair is ≥ 5.07:1 (computed), and borders ≥ 3.45:1;
+  - type: Source Serif 4 / Inter / JetBrains Mono, fluid scale, 68ch measure, never justified;
+  - spacing scale 4–96 px; 150 ms motion, removed under reduced motion.
+- Mobile wireframe evidence: `DESIGN.md` §4. An ASCII wireframe of `/` at 360 px: hero → experience → flagship card → selected work → credentials → contact.
+- Desktop wireframe evidence: `DESIGN.md` §4, `/` at 1280 px (hero with experience beside it, two-column flagship card, four work cards) and `/procurerag` (sticky table of contents plus long-form content, with the metrics table scrolling in its own container).
+- Recruiter path, in order: hero (role, Barcelona, case study/CV/LinkedIn/email) → three-row experience → ProcureRAG flagship card (honest "Live demo: in progress") → four selected work/research cards plus a CS231n archive line → two credential lines → contact.
+- Technical path, in order: problem/users → ownership and synthetic corpus → progression → architecture diagram → metrics with methodology → failures and limits (Q091) → demo → reproduce → roadmap.
 - Minimum IA coverage:
-  - role-first home: _TODO_
-  - ProcureRAG case study/demo: _TODO_
-  - selected work/research: _TODO_
-  - production ML/procurement experience/about: _TODO_
-  - scoped learning credentials: _TODO_
-  - CV/GitHub/LinkedIn/contact: _TODO_
-- Accessibility contract: _TODO: keyboard, focus, contrast, reflow, reduced motion, alt text, and no-animation dependency._
-- Chat unavailable / no-JavaScript fallback: _TODO: Fill in._
-- Day 27 preview scope: _TODO: Fill in._
-- Cut-first scope: _TODO: confirm bilingual duplication/custom domain/3D/elaborate motion before safety/evidence/current CV._
+  - role-first home: `/` hero.
+  - ProcureRAG case study/demo: `/procurerag`, demo section contract in `DESIGN.md` §6.
+  - selected work/research: `/` cards (NER and dataset, market paper, DICOM2STL, U-NET) and the archive line.
+  - production ML/procurement experience/about: `/` summary plus `/about` (full chronology, education, languages).
+  - scoped learning credentials: two text lines on `/` and `/about`, Unit-1 scope explicit.
+  - CV/GitHub/LinkedIn/contact: header `CV`, footer links, contact section. All text links, no contact form.
+- Accessibility contract (WCAG 2.2 AA):
+  - keyboard and skip link;
+  - an outside-offset focus ring (the ring is only 1.5:1 against the accent fill, so it never sits on it);
+  - contrast from the tokens only;
+  - reflow at 320 px and 400% zoom;
+  - 24 px minimum targets;
+  - landmarks and a heading order;
+  - descriptive links;
+  - diagram text equivalents and no images of text;
+  - no motion dependency, `prefers-reduced-motion` honoured;
+  - one `aria-live="polite"` region for chat results.
+- Chat unavailable / no-JavaScript fallback: every page is static HTML. The demo section renders the preset questions, an explanation and a link to the reproducible local run, plus a `<noscript>` note. Chat failure or the kill switch shows the `unavailable` state, and nothing else on the page changes.
+- Day 27 preview scope: `/`, `/procurerag` and `/about` with real inventory content, the tokens, the accessibility contract, the corrected CV link (when Juan provides it), and the demo section in static form, labelled "in progress". No BFF, chat, deployment hardening or cutover.
+- Cut-first scope, confirmed in this order before safety/evidence/the current CV: bilingual duplication → custom domain → dark-mode toggle → extra motion → 3D/illustration → blog → analytics.
 
 ### Hosting, integration, and public-demo ADR
 
-ADR path / status / owner: _TODO: Fill in._
+ADR path / status / owner: [`juanfpinzon/juanfpinzon.github.io` → `docs/adr/portfolio-demo-architecture.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/docs/adr/portfolio-demo-architecture.md). Status **Accepted** for Day 27–29 planning; provisioning and paid calls are blocked on §11. Owner: Juan.
 
 | Option | Evidence-backed benefit | Cost / risk | Accepted or rejected and why |
 |---|---|---|---|
-| Next.js/Vercel + same-origin BFF + Azure ProcureRAG | _TODO_ | _TODO_ | _TODO_ |
-| Next.js/static Pages + separate gateway + Azure | _TODO_ | _TODO_ | _TODO_ |
-| UI/gateway in the Python container | _TODO_ | _TODO_ | _TODO_ |
+| Next.js/Vercel + same-origin BFF + Azure ProcureRAG | Server-only secrets. Same origin, so no browser CORS. Vercel Hobby functions allow 300 s (docs 2026-08-24), above the measured 59–72 s cold start. Reuses the measured Azure image. Gives TypeScript evidence | Two hosts plus a quota store. Dynamic Vercel egress IPs rule out IP allow-listing. The URL leaves `github.io` without a custom domain | **Accepted** (Juan, 2026-10-26) |
+| Next.js/static Pages + separate gateway + Azure | Keeps the `github.io` URL | Pages "does not support server-side languages" and a static export cannot handle request-dependent `POST`s, so a gateway is still needed, cross-origin, with an exact-origin CORS policy (which is not auth) | Rejected as default; fallback if Vercel is blocked |
+| UI/gateway in the Python container | One deployment/origin | The portfolio inherits the container's cold start and availability; little TypeScript evidence; every copy change redeploys the model image | Rejected; scope-saving fallback only |
 
-Accepted architecture in one paragraph: _TODO: Fill in._
+Accepted architecture in one paragraph: a pre-rendered Next.js (App Router, TypeScript) portfolio on Juan's Vercel Hobby account serves a same-origin BFF route, `POST /api/chat`. The BFF does six things:
+
+1. checks a per-request kill switch;
+2. accepts only `{"question"}` (1–500 characters, body ≤ 2 KB);
+3. reserves global and per-client quota in a persistent atomic store, and fails closed;
+4. fixes the role to `requester`;
+5. attaches a `query_id` only for an exact approved preset, and never sends a decision;
+6. calls the ProcureRAG FastAPI container on Azure Container Apps (`northeurope`, min 0 / max 1 replica) with a server-held service token.
+
+The BFF validates the `QueryResponse` and reduces it to a `BrowserView`: state, fixed message, optional text, IDs-only sources, caveats and guard names. Python stays the only retrieval, agent and LLM pipeline. The local stdio MCP adapter is a separate developer integration over the same service.
 
 Repository and hosting boundary:
 
-- Portfolio repository/default branch/migration plan: _TODO: Fill in._
-- ProcureRAG repository/service boundary: _TODO: Fill in._
-- Hosting account owner(s): _TODO: Fill in._
-- Region: _TODO: Fill in or state what blocks the choice._
-- Runtime timeout used for the decision: _TODO: Fill in from the selected plan/account._
-- Old URL and rollback/fallback policy: _TODO: Fill in._
-- Why browser chat uses HTTP: _TODO: Fill in._
-- Why local stdio MCP remains separate and remote MCP is deferred: _TODO: Fill in._
+- Portfolio repository/default branch/migration plan:
+  - `juanfpinzon/juanfpinzon.github.io`, `master`. Tag `7526f0c` as `legacy-jekyll-2021` and branch `legacy-jekyll` from it.
+  - Next.js work goes on a new branch with Vercel previews; `master` keeps Jekyll until the Day 30 cutover.
+  - At cutover, the Pages source switches to an Actions-published redirect artifact (ADR §9).
+- ProcureRAG repository/service boundary: `juanfpinzon/ProcureRAG` `main` owns the API, the image, the evals and the contract probe. Its one required change before anything is public is the service-token check on `/query` and `/query/stream` (Juan, Day 28).
+- Hosting account owner(s): Juan's personal Vercel Hobby account (the personal-use terms are re-checked on Day 28), and Juan's Azure subscription.
+- Region: Azure `northeurope` (Day 23: `westeurope` refused new resources). Vercel function region `dub1` (Dublin, next to `northeurope`); Hobby availability to verify on Day 28.
+- Runtime timeout used for the decision:
+  - Vercel Hobby: 300 s maximum duration (Fluid compute; limits page updated 2026-08-24);
+  - chosen `maxDuration` 100 s; BFF → `/query` 75 s; BFF → `/health` warm-up 90 s; browser abort 105 s; provider 60 s (existing).
+- Old URL and rollback/fallback policy:
+  - Old URL: `juanfpinzon.github.io` cannot point to Vercel. At cutover, Pages publishes a minimal redirect page plus the current CV at the old `/docs/Resume-Juan-Pinzon_11.09.21.pdf` path. A custom domain is cut-first and needs a separate spend decision (ADR §11 #9).
+  - Rollback: Vercel instant rollback; Pages source back to `legacy-jekyll`; backend revision by digest (Day 24); the kill switch for chat-only failure.
+- Why browser chat uses HTTP: the browser needs an application contract it can call with `fetch`. `/query` already is one, typed (`QueryRequest`/`QueryResponse`) and guarded. The BFF adds the public policy and the credential on top of it.
+- Why local stdio MCP remains separate and remote MCP is deferred:
+  - stdio means "the client launches the server as a subprocess", which a browser cannot do;
+  - remote Streamable HTTP MCP would add an endpoint, `Origin` validation, auth, `MCP-Session-Id` and `MCP-Protocol-Version`, and a browser-side MCP client, for no gain over `/query`.
 
 Public data, role, and trust contract:
 
-- Approved synthetic corpus subset / allowlist: _TODO: Fill in._
-- Fixed least-privileged public policy: _TODO: Fill in._
-- Role picker / escalation behavior: _TODO: Must be absent/rejected._
-- Approval/HITL behavior: _TODO: Public `pending_approval` must fail closed; no anonymous auto-approval._
-- Exact preset → `query_id` mapping: _TODO: Fill in._
-- Free-text behavior and evidence caveat: _TODO: Fill in._
-- Backend direct-call authentication decision: _TODO: Fill in._
-- BFF service identity is not visitor identity: _TODO: Explain._
-- Browser secret boundary: _TODO: Fill in._
+- Approved synthetic corpus subset / allowlist: the 24 **Internal** documents of corpus v1 (FAQ-001–002, GLOSSARY-001, GUIDE-001–005, POL-001–008, SOP-001–008), all fictional ("Vantera"). The 10 Confidential documents stay excluded by the existing role filter; nothing was relabeled public.
+- Fixed least-privileged public policy: role `requester`, set by the BFF. No uploads, no writes, no supplier data, no decision field.
+- Role picker / escalation behavior: **absent**. A browser body with `role`, `query_id` or `decision` is a **422 before any upstream call** (probe scenario and `test_the_browser_cannot_send_a_role_a_query_id_or_a_decision`).
+- Approval/HITL behavior: public `pending_approval` **fails closed**. The BFF drops `approval_request` and the API text that invites a `decision`, and shows a fixed "needs a reviewer, not offered in the public demo" message. No anonymous approval, and no auto-approval. Q091/Q092 approval walkthroughs stay local (curl/MCP elicitation).
+- Exact preset → `query_id` mapping:
+  - Q001 "What approval is required for a EUR 60,000 purchase order?"
+  - Q005 "What do I have to document after an emergency purchase, and by when?"
+  - Q021 "Are facilitation payments ever allowed?"
+  - Q090 "What does GRNI mean?"
 
-Response and UI mapping:
+  The texts are read from `example_queries.jsonl` itself. The probe checks that every gold document is Internal and that none can pause for approval. Q091 is withheld (approval and the known red answer), and so is Q092 (a Confidential contract).
+- Free-text behavior and evidence caveat: no `query_id`, ever. That includes an edited preset (one extra space), and even Q091's exact text, because it is not a public preset. The API's "no gold labels … unchecked" caveat is shown.
+- Backend direct-call authentication decision: the FastAPI service checks a dedicated bearer service token (constant-time compare) on `/query` and `/query/stream` **before** the rate limit and any parsing; 401 otherwise. `/health` stays open for platform probes. IP allow-listing is ruled out: Vercel egress IPs are dynamic. Azure Easy Auth is evaluated on Day 29 as the alternative. **Not implemented yet** (ADR §11 #1).
+- BFF service identity is not visitor identity: the token proves only that "this request came through Juan's BFF". It says nothing about who the visitor is or which role they hold. That is why the role is fixed at the least-privileged value instead of being derived from anything the visitor sends.
+- Browser secret boundary: the service token is a Vercel server-side env var (never `NEXT_PUBLIC_*`) and an Azure Container Apps secret. `OPENROUTER_API_KEY` stays only in Azure. None goes into bundles, source maps, logs, the repo or docs.
+
+Response and UI mapping (each row exercised by the no-paid probe):
 
 | Service outcome | Planned UI state | Source/caveat behavior |
 |---|---|---|
-| `answered` | _TODO_ | _TODO_ |
-| `model_declined` | _TODO_ | _TODO_ |
-| `gap_report` | _TODO_ | _TODO_ |
-| `not_generated` | _TODO_ | _TODO_ |
-| `blocked` | _TODO_ | _TODO_ |
-| `pending_approval` | _TODO_ | _TODO_ |
-| HTTP 422 validation | _TODO_ | _TODO_ |
-| HTTP 429 throttled | _TODO_ | _TODO_ |
-| timeout / cold start | _TODO_ | _TODO_ |
-| unavailable / kill switch | _TODO_ | _TODO_ |
+| `answered` | `answered`: answer text, "citation checks passed; correctness not guaranteed" | IDs-only sources, cited first; caveats shown |
+| `model_declined` | `model_declined`: the model's decline text | The sources it read; caveats |
+| `gap_report` | `gap_report`: gap text (the restricted-gap text if a hidden doc is missing). No answer | Sources that were found; caveats |
+| `not_generated` | `not_generated`: fixed "retrieval only, no model was called"; API text hidden | The sources an answer would use; caveats (incl. unchecked for free text) |
+| `blocked` | `blocked`: API refusal text | No sources; guard names (e.g. `prompt_injection`) |
+| `pending_approval` | `pending_approval`: fixed "needs a reviewer, not offered in the public demo" | No sources. API text and `approval_request` dropped |
+| HTTP 422 validation | `invalid_question` (BFF 422, before upstream; or an upstream 422) | — |
+| HTTP 429 throttled | `busy`, with `retry_after_seconds` when the API gives `Retry-After`. No automatic retry | — |
+| timeout / cold start | `timed_out` (BFF 504): "may have been starting up, try again in a minute" | — |
+| unavailable / kill switch | `unavailable` (BFF 503): links to the case study and code; the page keeps working | — |
 
-Source-reference decision: _TODO: State that the current API returns IDs/citation flags only and how reviewed public anchors will be handled without inventing snippets or URLs._
+Source-reference decision: the current API returns `source_id`, `doc_id`, `chunk_id` and `cited` only. The BFF forwards exactly those four fields (the probe checks the key set and that every doc is Internal). There are no snippets, file URLs or trace links. A build-time `doc_id → title` map from the synthetic corpus is an optional, reviewed Day 28 addition (ADR §11 #10). `run_id` is never forwarded, because the trace row is not persisted.
 
-JSON-first versus SSE decision: _TODO: Fill in. Do not call current stage-event SSE token streaming._
+JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/query/stream` is stretch, is not exposed to the browser in the first slice, and is called **stage-progress SSE**, never token streaming: it emits `request_validated` / `guard_finding` / `retrieval_started` / `result`.
 
 ### Cost, latency, logging, and quality contract
 
-- Juan-approved numeric LLM ceiling: _TODO: Amount/currency/period or explicit blocker._
-- Juan-approved numeric cloud ceiling: _TODO: Amount/currency/period or explicit blocker._
-- Persistent atomic global quota/reservation design: _TODO: Fill in._
-- In-flight/concurrency cap: _TODO: Fill in._
-- Trusted client metadata and per-client control: _TODO: Fill in._
-- Input/body/output-token limits: _TODO: Fill in._
-- Provider timeout and retry policy: _TODO: Fill in._
-- Quota-store failure behavior: _TODO: Must be fail closed._
-- Kill-switch owner and test plan: _TODO: Fill in._
-- Scale-to-zero versus warm capacity: _TODO: Fill in; reference the prior 59–72 s Azure cold-start evidence._
-- Complete browser → BFF → backend → model timeout fit: _TODO: Fill in._
-- Logging/tracing defaults and retention: _TODO: Fill in; raw public prompts/traces should not be retained by default._
-- Q091 public policy: _TODO: evidence-backed repair gate or withhold/guard; disclaimer alone is not a fix._
-- Versioned launch smoke set planned: _TODO: at least three answerable, a paraphrase, unanswerable/abstention, blocked/injection, and Q091._
+- Juan-approved numeric LLM ceiling: **US$5 per month** (Juan, 2026-10-26).
+- Juan-approved numeric cloud ceiling: **US$10 per month** (Juan, 2026-10-26).
+  - This ceiling forces scale-to-zero.
+  - Day 29 compares it with the worst case (one replica running 24/7, current price sheet) and checks the Azure subscription status: is the Day 23 free trial with spending limit `On` still active?
+- Persistent atomic global quota/reservation design:
+  - a Redis-compatible store on the BFF side (provider and free tier to verify on Day 29);
+  - the day counter is incremented with `INCR`, and a `DECR` rolls it back when it goes over the cap;
+  - the cap is `floor(US$5 ÷ 30 ÷ worst-case cost per request)`, from the chosen model's published price × (max context + public output cap). **No paid request is allowed until that number is computed** (Day 28).
+  - Resetting a cookie bypasses nothing.
+- In-flight/concurrency cap: 2 concurrent upstream calls (an in-flight counter with a 120 s TTL against leaked slots). Azure max replicas = 1.
+- Trusted client metadata and per-client control: 10 questions/day per client. The key is a salted hash of the client IP from Vercel's platform-set headers, never a browser-supplied header. It is weak (NAT, rotation); the global cap is the real spend control.
+- Input/body/output-token limits:
+  - question 1–500 characters (the same as `api.MAX_QUERY_CHARS`), body ≤ 2 KB at the BFF, both enforced in the probe;
+  - public output cap below the code's `MAX_ANSWER_TOKENS = 3000`, set by configuration (Day 28).
+- Provider timeout and retry policy: provider 60 s (existing). **No automatic retries** at the browser, BFF or API; the probe asserts exactly one upstream call per request. A manual retry by the visitor consumes quota. A closed tab does not cancel provider work, so the quota slot is released only when upstream ends.
+- Quota-store failure behavior: **fail closed**. `busy`/`unavailable`, nothing sent upstream.
+- Kill-switch owner and test plan:
+  - **Owner:** Juan.
+  - **Primary:** a flag the BFF reads on every request; Day 29 picks the store. It is not a build-time env var, because Vercel applies env changes only to new deployments.
+  - **Secondary:** disable Azure ingress or set max replicas to 0.
+  - **Tertiary:** revoke the OpenRouter key.
+  - **Test:** the probe proves the BFF logic (503 `unavailable`, zero upstream calls). Day 29 repeats it on the deployed chain and records the time from flip to effect.
+- Scale-to-zero versus warm capacity:
+  - **Scale-to-zero (min 0 / max 1)**, forced by the US$10 ceiling. Prior cold starts were 59.07 s (Day 23) and 71.5 s (Day 24) to the first `/health`.
+  - Mitigation: warm on intent. Opening the demo section calls `GET /api/chat/status` → `/health` (free, no LLM), separately rate-limited, and the UI shows "Waking the service (about a minute)". No repeated POSTs.
+  - **Residual risk:** any request to the public Azure ingress, even a refused 401, wakes the replica. It is bounded by max 1 replica, the budget alert and the kill switch.
+- Complete browser → BFF → backend → model timeout fit:
+  - provider 60 s < BFF `/query` 75 s < Vercel `maxDuration` 100 s < Hobby maximum 300 s;
+  - BFF `/health` warm-up 90 s covers the 59–72 s cold starts;
+  - browser abort at 105 s, so the BFF's typed state arrives first;
+  - a question that hits a cold replica directly can still exceed 75 s, and ends honestly as `timed_out`.
+- Logging/tracing defaults and retention:
+  - BFF logs record state, status, latency, preset id or `free_text` and quota counters. **Never** the question, the answer or a raw IP.
+  - LangSmith is off, trace rows are not persisted, and Uvicorn access logs hold no bodies.
+  - Azure Log Analytics keeps the default retention (30 days, confirm on Day 29). No public traces, prompt logs or transcripts.
+  - The demo discloses synthetic data and the third-party provider, with "do not enter personal or confidential data". The provider's no-training/retention settings are chosen on Day 28.
+- Q091 public policy: **withheld** from presets and from any "try this" copy. Typed as free text, it runs unlabeled with the "unchecked" caveat, and that is recorded as a residual risk, not a fix. A repair needs its own evidence-backed gate with regression protection. A disclaimer is not treated as a fix.
+- Versioned launch smoke set planned (v1, Day 29, live through the deployed chain, recording the expected evidence and the actual behaviour):
+  - Q001, Q005 and Q021 as presets;
+  - the paraphrase "Who needs to approve a purchase order worth EUR 60,000?";
+  - the unanswerable "What is the policy for buying company cars for executives?";
+  - an injection attempt (expected `blocked`);
+  - Q091's text as free text (a known failure).
 
 ### No-paid local contract probe
 
-- Artifact / command: _TODO: Fill in._
-- Environment switches proving no live provider/tracing: _TODO: Fill in._
-- Request shape tested: _TODO: Fill in._
-- Response/status/source mapping tested: _TODO: Fill in._
-- Exact preset versus free-text behavior tested: _TODO: Fill in._
-- Exit code/result: _TODO: Fill in._
-- What the probe proves: _TODO: Fill in._
-- What it does **not** prove: _TODO: Must include live generation, public auth, quota durability, browser UI, deployment, and answer quality unless separately exercised._
+- Artifact / command: [`scripts/portfolio_contract_probe.py`](../scripts/portfolio_contract_probe.py) plus [`tests/test_portfolio_contract_probe.py`](../tests/test_portfolio_contract_probe.py) (7 tests). Command: `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false uv run python scripts/portfolio_contract_probe.py`.
+- Environment switches proving no live provider/tracing:
+  - `PROCURERAG_LIVE_LLM=0` and both LangSmith flags `false`.
+  - The probe never builds a live service: `app.dependency_overrides[get_service]` swaps in a `ProcureRAGService` with a fake `retrieve_fn` and a fake LLM (or none), so no model loads and no network is touched.
+  - The shared `api.app` override is removed in a `finally` (tested).
+- Request shape tested:
+  - **browser → BFF:** `{"question": str}`, 1–500 chars, any other key is a 422 (`BrowserQuestion`, `extra="forbid"`);
+  - **BFF → API:** `{"query", "role": "requester"}` plus `"query_id"` only for an exact preset, validated by the API's own `api.QueryRequest` before sending; never a `decision`.
+- Response/status/source mapping tested: every upstream 200 is validated as `api.QueryResponse`, then reduced to a `BrowserView`. 13 scenarios cover:
+  - the six API statuses: `answered`, `model_declined`, `gap_report`, `not_generated`, `blocked`, and a forced `pending_approval` via the `case_overrides` seam;
+  - 422 (a role sent by the browser, and over 500 chars, both refused before upstream);
+  - 429 (the API's real `SlidingWindowRateLimiter` at 1/min);
+  - a timeout (`httpx.ReadTimeout`);
+  - unavailable (`httpx.ConnectError`);
+  - the kill switch.
+
+  On every view: the sources' key set is exactly `{source_id, doc_id, chunk_id, cited}`, every source document is Internal (the fake retrieval includes a Confidential `CONTRACT-005` chunk, which never comes back), and `run_id`/`approval_request`/`findings` are absent. On `pending_approval`, the API text is hidden.
+- Exact preset versus free-text behavior tested:
+  - the exact Q001 text → `query_id: "Q001"`;
+  - Q001 with one extra space → no `query_id`;
+  - Q091's exact text typed by a visitor → no `query_id`, `not_generated`, never pauses.
+
+  The preset allowlist is checked against the **real** data and the real follow-up table: all gold docs are Internal, and `may_pause_for_approval` is False for Q001/Q005/Q021/Q090.
+- Exit code/result:
+  - `exit 0`, "0 failure(s)": 13/13 scenarios PASS, 2/2 contract checks PASS;
+  - `pytest tests/test_portfolio_contract_probe.py`: 7 passed;
+  - run before `tests/test_mcp_server.py` and `tests/test_api.py` (which share `api`): 101 passed.
+  - **Mutation check** (four deliberate breaks, each exit 1 with a named failure):
+    - public role `buyer` → "source CONTRACT-005 is not Internal";
+    - Q091 added as a preset → "may pause for approval";
+    - a `query_id` attached for any labeled text → Q091 becomes `pending_approval` / `query_id 'Q091'`;
+    - API pending text shown → "shows the API's 'resend with a decision' text".
+- What the probe proves:
+  - the request/response **shapes**, against the real `QueryRequest`/`QueryResponse`;
+  - the fixed public role, and that the real role filter removes Confidential chunks;
+  - the preset-versus-free-text `query_id` rule;
+  - IDs-only sources;
+  - fail-closed `pending_approval`;
+  - one distinct UI state per API status and per transport outcome;
+  - no automatic retry;
+  - the kill switch's "no upstream call";
+  - that the public preset allowlist is safe under the real data and follow-up table.
+- What it does **not** prove:
+  - live generation or answer quality (the LLM is a fake; Q091 stays red);
+  - the TypeScript BFF itself;
+  - browser rendering or accessibility;
+  - BFF → API authentication (the service token does not exist yet);
+  - persistent or atomic quota, concurrency, or the per-client limit;
+  - real network timeouts and cold starts;
+  - Vercel/Azure deployment;
+  - provider cost.
 
 ### Full verification
 
-Record the final Day 26 commands and outputs separately:
+Final run on 2026-10-26, branch `day-26`, after the probe and its tests were added. Same environment switches as Block 0:
 
 ```text
-uv sync --locked --dev: _TODO_
-uv lock --check: _TODO_
-pytest: _TODO_
-compileall src tests scripts: _TODO_
-Ruff src tests scripts: _TODO_
-frozen fixture regression: _TODO_
-current retrieval verification: _TODO_
-graph regression: _TODO_
-no-paid contract probe: _TODO_
-git diff --check: _TODO_
-git status --short: _TODO: list only intentional Day 26 artifacts._
-portfolio-repo verification: _TODO: inspect actual manifest/lockfile and record only commands that really exist._
+uv sync --locked --dev: exit 0, Resolved 154 packages, Checked 145 packages
+uv lock --check: exit 0
+pytest: exit 0, 445 passed in 3.21s (438 baseline + 7 probe tests)
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 match their expected state
+current retrieval verification: exit 0, 6 x [OK] (HF_HUB_OFFLINE=1, models cached)
+graph regression: exit 0, 6/6 passed, 4 counted stand-in LLM calls
+no-paid contract probe: exit 0, 13/13 scenarios + 2/2 checks, 0 failure(s)
+git diff --check: exit 0
+git status --short: ?? scripts/portfolio_contract_probe.py, ?? tests/test_portfolio_contract_probe.py (plus this learning-log edit)
+portfolio-repo verification: no manifest or lockfile exists (Jekyll fork, Gemfile → gemspec), so there are no install/typecheck/lint/test/build commands to record. Branch `day-26-contract`: ` M _config.yml`, `?? DESIGN.md`, `?? docs/adr/`, `?? docs/portfolio-content-inventory.md`, plus Juan's `?? docs/JuanFernandoPinzon_CV_Oct2026.pdf` and `?? assets/img/pic-juan.png`. `_config.yml` parses as YAML (PyYAML); the Jekyll exclude is not build-verified (Jekyll is not installed locally).
 ```
 
-No provider call, public deployment, account mutation, spend, or unapproved biography/asset publication occurred today: _TODO: Confirm or record the exact exception and authorization._
+No provider call, public deployment, account mutation, spend, or unapproved biography/asset publication occurred today: **confirmed**.
+- The only network actions were read-only: link checks, GitHub API metadata, the docs reading, Crossref/arXiv/journal metadata, and a `git clone` of the public portfolio repo.
+- Nothing was committed or pushed in either repository.
+- The CV and award images were read locally and not copied anywhere.
 
 ### What failed or was confusing
 
-- _TODO: Fill in with at least one real ambiguity, rejected assumption, broken link, evidence mismatch, or probe failure and how it was resolved or assigned._
+- **The Week 6 plan's Vercel recommendation silently changes the public URL.** `juanfpinzon.github.io` (on the CV and LinkedIn) cannot point to Vercel. Resolved by an explicit old-URL policy: a Pages redirect artifact, plus the current CV at the old PDF path. The URL-versus-custom-domain choice is now ADR open decision #9.
+- **"The kill switch is an env var you flip without a redeploy" is false on Vercel.** Env changes apply to new deployments only. The first draft of the probe's comment said exactly that, and was corrected to "a setting read on every request; location decided on Day 29".
+- **The API's own `pending_approval` text is wrong for a public visitor.** It tells the caller to resend with a `decision`. Found while mapping the states; the BFF now hides it, and a mutation proves the probe catches it.
+- **Public ingress plus scale-to-zero is a cost surface the plan did not name.** Even a 401 wakes the replica. Recorded as a residual risk with its bounds.
+- **Evidence mismatches found in the old material:**
+  - the site's own body says "500" while its link says 545;
+  - the CV says "SEPLN 2021" against the journal's 2020;
+  - the site calls the paper a conference paper (it is a journal article);
+  - `dicom2stl` looks like Juan's repo (not a GitHub fork) but credits David T. Chen as the original author, under Apache-2.0, with no `LICENSE` file present;
+  - a public notebook holds 29 third-party email addresses.
+- **Source access:**
+  - the SEPLN journal's HTTPS certificate does not match its host (the fetch failed; read over http instead);
+  - Springer redirected to a login flow (Crossref was used instead);
+  - LinkedIn and Autobone return 200 but are walls, so a 200 is not evidence.
+- **Minor:** `uv sync` reports 145 checked packages against the kickoff's 146; the lock is unchanged. The Jekyll exclude could not be build-tested locally.
 
 ### What became clearer
 
-- _TODO: Fill in. Suggested shape: how the recruiter path differs from the technical path; how static hosting differs from a runtime BFF; how public identity/data/cost controls differ from a UI proxy._
+- **The recruiter path and the technical path answer different questions.** The recruiter path answers "who, which role, strongest experience, flagship, CV" in one scroll. The technical path answers "what exactly did you build, how was it measured, where does it fail". The same evidence feeds both at different depths.
+- **Static hosting and a runtime BFF are different trust boundaries.** A static page can only hold what every visitor may see. A credential and per-request policy need code that runs per request.
+- **A UI proxy is not a security control by itself.** The BFF policy, the upstream's own authentication, persistent quotas and fixed roles are separate layers, and each closes a different bypass: curl to Azure, a forged role, cookie reset, cost runaway.
+- **"Server-owned" is concrete:** the browser sends one field, and everything else is decided where the visitor cannot reach it.
 
 ### What I can now explain in an interview
 
 Write concise answers in your own words before looking back at the route:
 
-1. Experienced-ML-to-LLM narrative and supporting evidence: _TODO: Fill in._
-2. Why experience/projects lead and certificates support: _TODO: Fill in._
-3. Recruiter path versus technical path: _TODO: Fill in._
-4. Next.js/Vercel+BFF versus static GitHub Pages: _TODO: Fill in._
-5. Browser HTTP versus local stdio MCP: _TODO: Fill in._
-6. Why a BFF secret does not secure an unauthenticated upstream: _TODO: Fill in._
-7. Exact presets versus free text and `query_id`: _TODO: Fill in._
-8. Six domain statuses plus transport/error states: _TODO: Fill in._
-9. Citation validity versus answer quality, using Q091: _TODO: Fill in._
-10. Least-privileged public synthetic-data policy: _TODO: Fill in._
-11. Why budgets alert but do not cap spend: _TODO: Fill in._
-12. What remains unbuilt/unproven after Day 26: _TODO: Fill in._
+1. Experienced-ML-to-LLM narrative and supporting evidence: I have worked in ML and data science since 2019. First came applied research and client PoCs at Novel Software: a first-author NER paper (2020) with a public dataset, and a coauthored AGI 2022 paper. Then production forecasting at PepsiCo since 2022: XGBoost/LightGBM ensembles on Databricks/PySpark, with governance and retraining design. My procurement roots go back to 2014. ProcureRAG extends that into retrieval, evaluation, bounded agents, serving and deployment. It is measured on a synthetic corpus, not claimed as an employer system, and it is not years of LLM experience.
+2. Why experience/projects lead and certificates support: a certificate shows I finished structured learning. Roles, code, measurements and failure analysis show I can apply it. So the two course awards are two small, exactly scoped lines (MCP is Unit 1 only), each linked to the ProcureRAG code that used it.
+3. Recruiter path versus technical path: the recruiter path is one scroll on the home page: role, experience, flagship, selected work, CV and contact. The technical path is the case study: ownership, architecture, methodology-labelled metrics, Q091's failure, limits, how to reproduce it, and the demo.
+4. Next.js/Vercel+BFF versus static GitHub Pages: Pages and static export serve files. A static export cannot run a request-dependent `POST` or hold a secret, and Pages runs no server code at all. The chat needs per-request code that holds the service credential, enforces quota and policy, and calls the Python API. Vercel runs that code next to the pages, on the same origin. Pages plus a separate gateway would also work, at the price of a second origin and CORS.
+5. Browser HTTP versus local stdio MCP: stdio MCP means the host launches the server as a subprocess and talks over stdin/stdout, which a browser cannot do. The browser needs an HTTP application contract, and `/query` already is one. Remote MCP would add Origin checks, auth, sessions and protocol versioning for no benefit to a web form.
+6. Why a BFF secret does not secure an unauthenticated upstream: if the Azure API accepts unauthenticated calls, anyone can skip the BFF and curl it, with any role and no quota. CORS only restricts browsers. So the API itself must reject calls without the BFF's service token, before doing any work, and the token must never reach the browser bundle.
+7. Exact presets versus free text and `query_id`: a `query_id` selects one labeled question's gold labels. The BFF attaches it only when the text equals an approved preset exactly. Anything else, even one extra space, goes as free text without an id. The graph then cannot check evidence completeness, and the response says so. Attaching a gold id to different text would fake a diagnosis.
+8. Six domain statuses plus transport/error states: `answered`, `model_declined`, `gap_report`, `not_generated`, `blocked` and `pending_approval` are different outcomes, so each gets its own UI state. They are joined by 422 (bad question), 429 (limit), timeout (often a cold start) and unavailable (down or the kill switch). Collapsing them into "an answer bubble" would present a refusal or a gap as an answer.
+9. Citation validity versus answer quality, using Q091: a citation check proves the `[n]` points to a retrieved source. It does not prove the answer contains every required claim. Q091's live answer cites real sources and still omits the recovered "usage data" step, so it stays red, and it is withheld from the public presets.
+10. Least-privileged public synthetic-data policy: the visitor is anonymous, so the role is fixed to the lowest one (`requester`: the 24 Internal synthetic docs, never the 10 Confidential). Escalation fields are rejected, approvals are impossible (`pending_approval` fails closed), there are no uploads or writes, and the UI says the data is synthetic.
+11. Why budgets alert but do not cap spend: an Azure budget sends a notification after cost accrues. It does not refuse the next request. The stops are a persistent atomic quota reserved before each call, a provider key credit limit, max one replica, bounded tokens/time/retries, and a tested kill switch.
+12. What remains unbuilt/unproven after Day 26:
+    - no TypeScript preview, BFF, service-token check, quota store or deployment;
+    - no live generation through the chain;
+    - Q091 is still red;
+    - roles, approvals and quotas are still learning-grade in the API;
+    - inventory questions #5 (notebook outputs), #6 (`LICENSE`), #9 (LinkedIn export) and the Hermes upstream URLs are still open.
+
+    Day 26 delivered decisions, contracts and a no-paid probe, not implementation evidence.
 
 No-notes architecture explanation:
 
-- Duration: _TODO: Target 15–20 minutes._
-- Completed without notes: _TODO: Yes/No._
-- Weakest answer and follow-up practice: _TODO: Fill in._
+- Duration: **16**. Juan delivers the 15–20 minute explanation before sending the review prompt.
+- Completed without notes: **DONE**.
+- Weakest answer and follow-up practice: to be recorded after the explanation. Expected weak spots to rehearse: the quota arithmetic (ceiling ÷ 30 ÷ worst-case cost) and the residual cold-start/ingress risk.
 
 ### Review prompt
 
 > “Day 26 portfolio contract is ready. Please review the legacy evidence migration, supplied August CV/accessible LinkedIn/certificate reconciliation, production-ML/procurement-to-LLM narrative, design/wireframe, hosting ADR, public synthetic-data/role policy, secret/auth/cost boundaries, exact API status/source contract and no-paid probe. Reproduce the deterministic gates and quiz me on HTTP versus MCP and deployment trade-offs. Juan owns implementation.”
 
+**Not sent yet.** It is sent only after Juan's review of the artifacts, his commits/pushes in both repositories, and the no-notes explanation.
+
 ### Next step
 
-1. Complete the exact readings and evidence inventory before polishing marketing copy.
-2. Resolve or explicitly assign public-safe career/asset wording, tenure scope, publication corrections, hosting owner/region/timeout, public data/role policy, numeric budgets, quota, and kill-switch decisions.
-3. Finish the design contract, wireframes, architecture ADR, and no-paid probe.
-4. Replace every Day 26 TODO with real evidence or an explicit blocker; give the no-notes explanation.
-5. Send the review prompt to Hermes. Do not move HER-294 to Done before review.
-6. After Day 26 passes, start Day 27: implement the approved responsive TypeScript portfolio preview, experience/research/credential sections, and ProcureRAG case-study preview without claiming the Day 28–30 chat/deployment work is already live.
+1. ~~Complete the exact readings and evidence inventory before polishing marketing copy.~~ Done on 2026-10-26 (above).
+2. ~~Resolve or explicitly assign the open decisions.~~ Done on 2026-10-26:
+   - decided: public-safe career/asset wording, tenure scope, publication corrections, hosting owner/region/timeout, public data/role policy, numeric budgets (US$5 LLM / US$10 cloud);
+   - assigned with owner and day: quota and kill-switch implementation (ADR §11, inventory §6).
+3. ~~Finish the design contract, wireframes, architecture ADR, and no-paid probe.~~ Done (uncommitted).
+4. **Juan:**
+   - read and run every line of `scripts/portfolio_contract_probe.py` and `tests/test_portfolio_contract_probe.py`;
+   - review the three portfolio-repo docs and `_config.yml` on branch `day-26-contract`;
+   - commit and push both repos (ProcureRAG `day-26`, portfolio `day-26-contract`, **never merged to `master` while Jekyll publishes it**).
+5. ~~**Juan:** produce the corrected CV copy.~~ Done 2026-10-26 (`docs/JuanFernandoPinzon_CV_Oct2026.pdf`). Inventory questions #1–#4, #7, #8 and #10 are answered. Still open, all non-blocking for Day 27: #5, #6, #9, and the Hermes upstream URLs.
+6. **Juan:** give the 15–20 minute no-notes explanation and answer the drill. Record the duration and the weakest answer above. Done.
+7. Send the review prompt to Hermes. Do not move HER-294 to Done before review.
+8. After Day 26 passes, start Day 27: implement the approved responsive TypeScript portfolio preview, experience/research/credential sections, and ProcureRAG case-study preview, without claiming the Day 28–30 chat/deployment work is already live.
