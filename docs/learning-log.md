@@ -8548,3 +8548,327 @@ git diff --check (both repositories)                  clean
 ```
 
 **Verdict:** Day 26 satisfies the HER-294 acceptance gate. No paid provider call, live deployment or implementation beyond the submitted work was performed. HER-294 is ready for `Done`; Day 27 may begin with the remaining launch-blocking ADR items still explicitly assigned to Days 28–29.
+
+## 2026-10-26 — Day 27: Responsive TypeScript Portfolio Preview and ProcureRAG Case Study
+
+Route: [`docs/day-27-portfolio-case-study.md`](day-27-portfolio-case-study.md)
+
+Linear: HER-295 — Day 27 loop: responsive portfolio preview and ProcureRAG case study.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns every portfolio implementation decision and every code, test, asset, deployment, account, and spending change in both repositories. Hermes wrote only the route and this evidence scaffold, then reviews and quizzes. Day 27 does not implement the BFF, live chat, authenticated upstream, persistent quota, production deployment, or legacy-site cutover.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Required sources:
+
+- portfolio `DESIGN.md`, full document;
+- portfolio `docs/portfolio-content-inventory.md`, full document;
+- portfolio `docs/adr/portfolio-demo-architecture.md`, full document;
+- Next.js `Server and Client Components`, especially `When to use Server and Client Components?`, the `use client` boundary, and reducing client JavaScript;
+- Next.js `Metadata and OG images`: `Static metadata`, `Generated metadata`, and `File-based metadata`;
+- W3C WCAG 2.2 Quick Reference: 1.1.1 Non-text Content, 1.4.3 Contrast (Minimum), 1.4.10 Reflow, 2.1.1 Keyboard, 2.4.7 Focus Visible, and 2.5.8 Target Size (Minimum).
+
+Record one applied decision or rejection per source:
+
+- [ ] Day 26 design contract read.
+  - Applied takeaway: _TODO: Fill in._
+- [ ] Day 26 content/evidence inventory read.
+  - Applied takeaway: _TODO: Fill in._
+- [ ] Day 26 architecture ADR read.
+  - Applied takeaway: _TODO: Fill in._
+- [ ] Next.js Server and Client Components sections read.
+  - Server-first decision and every required `use client` boundary: _TODO: Fill in._
+  - Why no larger client boundary is needed: _TODO: Fill in._
+- [ ] Next.js Metadata and OG images sections read.
+  - Static metadata and file-based metadata decision by route: _TODO: Fill in._
+  - Deferred metadata/share artifacts and why: _TODO: Fill in._
+- [ ] WCAG 2.2 criteria read.
+  - Concrete keyboard/focus/reflow/contrast/target/alternative-text checks adopted: _TODO: Fill in._
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-26:
+
+```text
+ProcureRAG branch/head: day-26 @ b2ca157
+ProcureRAG remote sync: origin/day-26, divergence 0/0
+ProcureRAG working tree before scaffold: clean
+portfolio accepted branch/head: day-26-contract @ 76c719e
+portfolio audit-clone remote sync: divergence 0/0
+portfolio audit-clone working tree: clean
+portfolio live branch: master, legacy Jekyll site
+portfolio Node manifest/lockfile: none
+```
+
+All ProcureRAG commands below used `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1`, and `OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev: exit 0, 154 packages resolved, 146 checked
+uv lock --check: exit 0
+pytest: exit 0, 452 passed in 14.78s
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 as expected
+current retrieval verification: exit 0, 6/6 [OK]
+graph regression: exit 0, 6/6 contracts, 4 stand-in LLM calls
+no-paid portfolio contract probe: exit 0, 19/19 scenarios + 2/2 checks, 0 failures
+git diff --check: exit 0
+```
+
+No provider call or trace upload ran. Q091 remains red for live-answer completeness and retains the deterministic `Band 3` term-level gap. Nothing is currently deployed.
+
+### Block 0 — contract reactivation and branch discipline
+
+- Recruiter's first-minute question: _TODO: Fill in one sentence._
+- Technical interviewer's evidence question: _TODO: Fill in one sentence._
+- Most dangerous false-live or metric overclaim to prevent: _TODO: Fill in one sentence._
+- Portfolio implementation branch name: _TODO: Fill in._
+- Branch base and exact starting SHA: _TODO: Fill in; expected accepted base is `day-26-contract` at or after `76c719e`._
+- Fetch/status/divergence evidence before implementation: _TODO: Fill in._
+- Confirmation that `master`/Pages publishing remained untouched: _TODO: Fill in._
+- Accepted Day 26 files present before scaffolding: _TODO: Fill in paths and checks._
+
+### Application scaffold and component-boundary evidence
+
+- Exact scaffold command: _TODO: Fill in._
+- Framework and exact version: _TODO: Fill in._
+- Node runtime/version policy: _TODO: Fill in._
+- Package manager and exact version: _TODO: Fill in._
+- Lockfile path; confirmation that exactly one lockfile exists: _TODO: Fill in._
+- Actual manifest scripts:
+  - development: _TODO: Fill in._
+  - typecheck: _TODO: Fill in._
+  - lint: _TODO: Fill in._
+  - test: _TODO: Fill in._
+  - production build: _TODO: Fill in._
+  - built-artifact preview/start: _TODO: Fill in._
+- Files the scaffold proposed to overwrite and how the accepted contracts/CV/assets were preserved: _TODO: Fill in._
+- Server Component routes/sections: _TODO: Fill in._
+- Client Component islands, with one reason each: _TODO: Fill in, or write `none on Day 27`._
+- How the `use client` boundary was kept below the page/layout root: _TODO: Fill in._
+- No-JavaScript behavior: _TODO: Fill in what remains readable and navigable._
+- Secret boundary: _TODO: Record how client assets were checked and why no server credential exists on Day 27._
+
+### Recruiter-path evidence (`/`)
+
+- Hero/value proposition used: _TODO: Fill in exact text._
+- Supporting continuity line (`since 2019`, production since 2022, procurement roots): _TODO: Fill in exact text._
+- Barcelona/location treatment: _TODO: Fill in._
+- Experience hierarchy and exact held titles: _TODO: Fill in._
+- How actual employer titles stay separate from the target role: _TODO: Fill in._
+- ProcureRAG flagship wording and synthetic/employer-separation disclosure: _TODO: Fill in._
+- Short evidence chips and their methodology labels: _TODO: Fill in._
+- Exact live-demo wording: _TODO: Fill in; must remain `in progress` or equivalent._
+- CV/GitHub/LinkedIn/email navigation: _TODO: Fill in paths/URLs and check results._
+- First-time visitor / two-interaction check: _TODO: Describe the path and result._
+
+Expected explanation shape:
+
+- Juan is an experienced ML practitioner, not a beginner career reset.
+- Production forecasting, procurement experience, and research precede and support the RAG/agent work.
+- ProcureRAG is an independent learning project over synthetic data, not an employer deployment.
+- The recruiter can reach the flagship case study, current CV, GitHub, LinkedIn, and email immediately.
+
+### Experience, earlier work, publications, credentials, and assets
+
+- PepsiCo production ML and current Digital Procurement wording used: _TODO: Fill in._
+- Novel Software research wording and ownership boundary: _TODO: Fill in._
+- Earlier procurement/operations roots: _TODO: Fill in._
+- NER paper citation, 2020 year, first-author wording, and destination: _TODO: Fill in._
+- NER dataset wording (`545`, attributed to the README) and destination: _TODO: Fill in._
+- Market/time-series citation (`AGI 2022 proceedings (published 2023)`) and links: _TODO: Fill in._
+- DICOM2STL upstream credit and Juan's scoped contribution: _TODO: Fill in._
+- U-NET client-PoC / non-clinical-production boundary: _TODO: Fill in._
+- CS231n archive/foundation treatment: _TODO: Fill in._
+- Boot.dev exact title/date/scope and paired ProcureRAG evidence: _TODO: Fill in._
+- Hugging Face MCP Unit 1 exact title/date/scope and paired evidence: _TODO: Fill in._
+- Azure credential remains `in progress`: _TODO: Confirm where this appears and does not appear._
+- Confirmation that private award images remain unpublished: _TODO: Fill in._
+- Corrected CV route and source path: _TODO: Fill in._
+- CV link/readability/tag evidence: _TODO: Fill in._
+- Source photo path, crop decision, optimized output path/format/dimensions/file size: _TODO: Fill in._
+- Photo alt-text decision: _TODO: Fill in._
+- Asset permissions/ownership caveats carried forward: _TODO: Fill in._
+- Remaining non-blocking inventory questions: _TODO: Record status; do not claim they vanished._
+
+### ProcureRAG technical-path evidence (`/procurerag`)
+
+- Problem/intended users and why procurement: _TODO: Fill in._
+- Juan's personal ownership and what he did not build/own: _TODO: Fill in._
+- Synthetic corpus disclosure (`Vantera`, 34 documents, 93 labeled queries): _TODO: Fill in._
+- Progression from retrieval primitives to MCP: _TODO: Fill in the compact sequence._
+- Architecture diagram path/type: _TODO: Fill in._
+- Visible text alternative for the diagram: _TODO: Fill in._
+- Evidence table and reproduction links: _TODO: Fill in._
+- Retrieval metrics shown, including method/corpus/query count/cutoff/date/commit: _TODO: Fill in._
+- Exact wording that prevents P@1 from being read as answer accuracy: _TODO: Fill in._
+- Short test-count wording and exact count/date/commit wording: _TODO: Fill in._
+- Demonstrated/reproducible claims: _TODO: Fill in._
+- Local-only claims: _TODO: Fill in._
+- Historical/deleted deployment claims: _TODO: Fill in._
+- Red/limited claims: _TODO: Fill in._
+- Not-built claims: _TODO: Fill in._
+- Q091 live-answer completeness and `Band 3` wording: _TODO: Fill in._
+- Caller-asserted role/stateless approval/process-local rate limit/free-text/source-ID limitations: _TODO: Fill in._
+- Static demo section wording and approved preset display: _TODO: Fill in._
+- Evidence that the static demo sends no request and simulates no answer: _TODO: Fill in._
+- Reproduction/runbook links and roadmap: _TODO: Fill in._
+
+Expected explanation shape:
+
+- Metrics are scoped retrieval measurements, never general answer quality.
+- The case study separates reproducible evidence from local, historical, red, and planned work.
+- Q091 remains visible because retrieval/citation plumbing can pass while the generated answer is incomplete.
+- The Day 27 preview explains the future demo contract without pretending Day 28–30 exists.
+
+### About-route evidence (`/about`)
+
+- Experience chronology and held titles: _TODO: Fill in._
+- Education and languages: _TODO: Fill in._
+- Production versus research versus independent-project distinction: _TODO: Fill in._
+- Publications/research links: _TODO: Fill in._
+- Credentials' subordinate placement: _TODO: Fill in._
+- CV and contact path: _TODO: Fill in._
+- OpenClaw/Hermes upstream-credit wording and unresolved URLs: _TODO: Fill in honestly._
+
+### Metadata and share evidence
+
+- Root title and description: _TODO: Fill in._
+- ProcureRAG route title and description: _TODO: Fill in._
+- About route title and description: _TODO: Fill in._
+- Canonical URL policy for a non-production preview: _TODO: Fill in._
+- Favicon/file-based metadata added: _TODO: Fill in._
+- Open Graph image path/content/alt text, or explicit deferral: _TODO: Fill in._
+- Check that metadata/share images make no live-demo, answer-accuracy, employer-endorsement, or enterprise-readiness claim: _TODO: Fill in._
+
+### Responsive and accessibility evidence
+
+Record actual method, viewport, result, and any fix for each item.
+
+- Semantic structure: one `h1`, heading order, `header`/`nav`/`main`/`footer`, `lang="en"`: _TODO: Fill in._
+- Skip link behavior: _TODO: Fill in._
+- Full keyboard path and DOM order: _TODO: Fill in._
+- Keyboard traps: _TODO: Fill in._
+- Visible focus against each background/control type: _TODO: Fill in._
+- `outline: none` audit: _TODO: Fill in._
+- Color-token contrast evidence and any new-color ratios: _TODO: Fill in._
+- 320 px reflow: _TODO: Fill in._
+- 375 px mobile result/capture: _TODO: Fill in._
+- Intermediate/tablet result: _TODO: Fill in._
+- 1280/1440 px desktop result/capture: _TODO: Fill in._
+- 400% zoom result: _TODO: Fill in._
+- Page-level horizontal overflow check: _TODO: Fill in._
+- Wide-table labeled/focusable overflow region: _TODO: Fill in or mark not applicable._
+- Reduced-motion behavior: _TODO: Fill in._
+- Meaningful/decorative image alternatives: _TODO: Fill in._
+- Architecture-diagram text equivalent: _TODO: Fill in._
+- Target-size check: _TODO: Fill in._
+- No-JavaScript content/navigation/static-demo result: _TODO: Fill in._
+- Automated accessibility tool, if used, plus its limits: _TODO: Fill in or mark not used._
+- Manual findings that a score would not have caught: _TODO: Fill in._
+
+### Build, tests, links, console, and preview evidence
+
+Record every command separately with exact exit code and meaningful output:
+
+```text
+locked install: _TODO: command / exit / result_
+typecheck: _TODO: command / exit / result_
+lint: _TODO: command / exit / result_
+tests: _TODO: command / exit / count/result_
+production build: _TODO: command / exit / route/build result_
+built-artifact preview/start: _TODO: command / exit / URL_
+internal link check: _TODO: command/method / result_
+external link check: _TODO: command/method / result and any walls/redirects_
+client-asset secret-name scan: _TODO: command/method / result; never print a credential value_
+unsupported-live-claim scan: _TODO: command/method / result_
+git diff --check: _TODO: exit/result_
+git status --short: _TODO: result_
+```
+
+- Tests added and what they prove: _TODO: Fill in._
+- What remains manual/unproven: _TODO: Fill in._
+- Browser console errors/warnings on `/`, `/procurerag`, `/about`: _TODO: Fill in._
+- Unexpected first-party network failures: _TODO: Fill in._
+- Mixed-content check: _TODO: Fill in._
+- Confirmation that no credential appears in browser assets/source maps: _TODO: Fill in._
+- Preview URL: _TODO: Fill in, or write `not deployed`._
+- Preview commit SHA: _TODO: Fill in._
+- Preview access/account blocker if not deployed: _TODO: Fill in._
+- Reproducible local production URL/command if no preview exists: _TODO: Fill in._
+- Evidence that live Jekyll `master`/Pages remained unchanged: _TODO: Fill in._
+
+### ProcureRAG re-verification
+
+Run with live LLM and tracing forced off. Record each command separately:
+
+```text
+uv sync --locked --dev: _TODO: Fill in._
+uv lock --check: _TODO: Fill in._
+pytest: _TODO: Fill in._
+compileall src tests scripts: _TODO: Fill in._
+Ruff src tests scripts: _TODO: Fill in._
+frozen fixture regression: _TODO: Fill in._
+current retrieval verification: _TODO: Fill in._
+graph regression: _TODO: Fill in._
+no-paid portfolio contract probe: _TODO: Fill in._
+git diff --check / git status --short: _TODO: Fill in._
+```
+
+- Confirmation that no live provider call or trace upload ran: _TODO: Fill in._
+- Q091 state after the rerun: _TODO: Fill in without hiding the known failure._
+
+### What failed or was confusing
+
+- _TODO: Fill in._
+- _TODO: Fill in._
+- _TODO: Fill in._
+
+### What became clearer
+
+- _TODO: Fill in._
+- _TODO: Fill in._
+- _TODO: Fill in._
+
+### What I can now explain in an interview
+
+Write concise answers in your own words before looking back at the route:
+
+1. What a recruiter should understand in the first minute: _TODO: Fill in._
+2. Why experience/projects lead and course awards support: _TODO: Fill in._
+3. Why most Day 27 routes are Server Components: _TODO: Fill in._
+4. What makes the ProcureRAG metrics defensible: _TODO: Fill in._
+5. Why Q091 is shown rather than hidden: _TODO: Fill in._
+6. Demonstrated versus local-only versus historical versus red versus unbuilt: _TODO: Fill in._
+7. Why the static demo section is not a fake chat: _TODO: Fill in._
+8. How accessibility was verified beyond a score: _TODO: Fill in._
+9. Why the live Jekyll site remains untouched: _TODO: Fill in._
+10. How employer, client, independent-project, and upstream ownership stay separate: _TODO: Fill in._
+11. What remains unbuilt after Day 27: _TODO: Fill in._
+12. What gets cut first under time pressure: _TODO: Fill in._
+
+Three-minute walkthrough:
+
+- Duration: _TODO: Fill in._
+- Completed without notes: _TODO: Fill in._
+- Weakest answer and follow-up practice: _TODO: Fill in._
+
+### Review prompt
+
+> “Day 27 portfolio preview is ready. Please fetch both repos and review the implementation branch against the accepted Day 26 design/inventory/ADR. Check the recruiter path, production ML/procurement experience, preserved work/publications, scoped course awards, current CV/contact, ProcureRAG ownership/architecture/eval claims, Q091 and synthetic-data limitations, Server/Client boundary, responsive/accessibility/no-JS behavior, real build/test evidence, preview URL or blocker, and that no Day 28–30 chat/deployment work is falsely presented as live. Juan owns implementation.”
+
+Sent: _TODO: Fill in only after the artifacts, evidence, and walkthrough are complete._
+
+### Next step
+
+1. Complete the exact readings and record applied decisions before scaffolding.
+2. Create the Day 27 portfolio branch from the accepted `day-26-contract` head; preserve `master` and the live Jekyll site.
+3. Build the three responsive routes, current-CV path, optimized photo crop, accurate evidence hierarchy, and static non-live demo explanation.
+4. Run the real locked install, typecheck, lint, tests, production build, link, responsive, accessibility, no-JS, console, network, and secret-boundary checks.
+5. Record a preview URL + commit, or a reproducible local production command + explicit preview blocker.
+6. Fill every Day 27 evidence field with real output or an explicit blocker.
+7. Give the three-minute walkthrough and answer the interview drill without notes.
+8. Send the review prompt to Hermes. Do not move HER-295 to Done before review.
+9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
