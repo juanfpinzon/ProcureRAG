@@ -7960,3 +7960,285 @@ remote CI run URL / commit / result: not yet available on 2026-10-24: nothing wa
 6. Practise the twelve answers without notes, then send the review prompt to Hermes. Do not move HER-293 or HER-270 to Done before review.
 7. After Day 25 passes, close HER-293 and run a **separate HER-270 parent-gate review** across all five children and cumulative evidence.
 8. If HER-270 closes cleanly, begin Week 6 / HER-271 portfolio polish and interview readiness, carrying forward the explicit Q091 live-answer-quality weakness rather than hiding it.
+
+## 2026-10-26 — Day 26: AI Portfolio Narrative, Design, and Launch Architecture
+
+Route: [`docs/day-26-portfolio-contract.md`](day-26-portfolio-contract.md)
+
+Linear: HER-294 — Day 26 loop: AI portfolio narrative, design and launch architecture.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns all implementation and design artifacts in both repositories, all portfolio code, every ProcureRAG `src/` / `tests/` change, deployment, account, and spending decisions. Hermes wrote only the route and this evidence scaffold, then reviews and quizzes.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. The primary context is [`docs/week6-portfolio-launch-plan-2026-10-26.md`](week6-portfolio-launch-plan-2026-10-26.md), supported by the canonical Week 6 alignment, current ProcureRAG evidence, the old portfolio, curated inspiration, and exact hosting/protocol sections.
+
+For each source, replace the TODO with one applied portfolio/architecture decision or rejection. A checked box alone is not evidence.
+
+- [ ] Week 6 portfolio launch plan — full document.
+  - Applied takeaway: _TODO: Fill in._
+- [ ] Canonical study-plan / Linear alignment — `Week 6 gate — HER-271`.
+  - Carry-forward weaknesses that constrain the public launch: _TODO: Fill in._
+- [ ] Current ProcureRAG evidence — README, eval report, Day 25 log, API contracts, test queries, and corpus docs.
+  - Demonstrated claims versus local-only/historical/red claims: _TODO: Fill in._
+- [ ] Current rendered portfolio and `juanfpinzon/juanfpinzon.github.io` `master` source.
+  - Actual stack/default branch/publishing shape: _TODO: Fill in._
+  - Stale title/CV/content/link findings: _TODO: Fill in._
+- [ ] Hafsa Mrabet portfolio.
+  - Pattern to borrow / avoid: _TODO: Fill in._
+- [ ] Eugene Yan portfolio.
+  - Pattern to borrow / avoid: _TODO: Fill in._
+- [ ] Hamel Husain portfolio.
+  - Pattern to borrow / avoid: _TODO: Fill in._
+- [ ] Chip Huyen portfolio.
+  - Pattern to borrow / avoid: _TODO: Fill in._
+- [ ] Shreya Shankar portfolio.
+  - Pattern to borrow / avoid: _TODO: Fill in._
+- [ ] Next.js `Static Exports` — `Supported Features` / `Unsupported Features`.
+  - Applied static-versus-runtime decision: _TODO: Fill in._
+- [ ] GitHub `Creating a GitHub Pages site` — `Creating your site`.
+  - Applied publishing/gateway decision: _TODO: Fill in._
+- [ ] MCP Specification 2025-11-25 `Transports` — `stdio` / `Streamable HTTP`.
+  - Applied HTTP-versus-MCP decision: _TODO: Fill in._
+
+### Starting baseline
+
+Kickoff on 2026-10-26 at `44a21c7`, branch `main`, clean and synchronized with `origin/main`. Required live/provider/tracing switches were forced off.
+
+```text
+uv sync --locked --dev: 154 packages resolved, 146 checked
+uv lock --check: clean
+pytest: 438 passed in 9.70s
+compileall src tests scripts: clean
+Ruff src tests scripts: All checks passed!
+frozen fixture regression: 7/7 as expected, exit 0
+current retrieval verification: 6 x [OK], exit 0
+graph regression: 6/6 contracts passed, 4 counted stand-in LLM calls, exit 0
+git diff --check: clean
+git status --short: clean before the Day 26 route/log scaffold
+```
+
+Baseline caveats carried forward:
+
+- Q091 deterministic evidence still records an open term-level `Band 3` gap.
+- Day 24 live-generation evidence remains red because the answer omitted the recovered `usage data` step.
+- Roles are caller-asserted; approvals are stateless/unattributed; quotas are process-local; raw traces may be sensitive.
+- The source response contains ids/citation flags, not snippets or public file URLs.
+- Free text has no trustworthy gold `query_id` or evidence-completeness diagnosis.
+- Nothing is currently live; the prior Azure resources were deleted.
+
+### Content and evidence migration inventory
+
+Artifact path / commit or working-tree state: _TODO: Fill in._
+
+| Legacy area | Keep / rewrite / archive | Juan's contribution and ownership boundary | Public evidence / link status | Data or asset permission | Corrections / open questions |
+|---|---|---|---|---|---|
+| U-NET spine / vertebra detection | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| Resume NER / publication / dataset / notebooks | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO: include Vol. 65 (2020) and README-documented 545 CVs._ |
+| DICOM2STL / Autobone context | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+| CS231n foundations | _TODO_ | _TODO_ | _TODO_ | _TODO_ | _TODO_ |
+
+Additional numeric/copy issues and how they were resolved or assigned: _TODO: Fill in; do not guess `100,000 thousand`._
+
+Market/time-series citation wording and source: _TODO: Use `AGI 2022 proceedings (published 2023)` plus the 2022 preprint if included._
+
+### Career, project, and credential crosswalk
+
+Crosswalk artifact path: _TODO: Fill in._
+
+- Selected hero/value proposition: _TODO: Fill in._
+- Short alternative: _TODO: Fill in._
+- Why this is an experienced production-ML-to-LLM extension rather than a beginner reset:
+  - prior production evidence: _TODO: Fill in._
+  - procurement/domain evidence: _TODO: Fill in._
+  - research/public artifact evidence: _TODO: Fill in._
+  - recent RAG/agent/service evidence: _TODO: Fill in._
+- Post-August CV changes confirmed by Juan: _TODO: Fill in or name the blocker._
+- Public-safe employer wording approved: _TODO: Fill in or name the blocker._
+- Actual employer titles versus target-role headline: _TODO: Fill in._
+- ProcureRAG employer-separation wording: _TODO: Fill in._
+- CV `7 years` versus accessible LinkedIn `5+ years` scope/as-of decision: _TODO: Fill in or track explicitly._
+- Full LinkedIn Experience audit status: _TODO: Must not be called complete without export/screenshots._
+- Hermes/OpenClaw ownership/credit wording: _TODO: Fill in._
+
+Course awards:
+
+| Evidence | Exact public claim | Verification/publication decision | ProcureRAG evidence paired with it |
+|---|---|---|---|
+| Boot.dev — Learn Retrieval Augmented Generation — 18 Sep 2026 | _TODO_ | _TODO: No invented issuer verification URL._ | _TODO_ |
+| Hugging Face — The MCP Course: Unit 1 — 1. Fundamentals of MCP — 22 Oct 2026 | _TODO: Unit 1, not the full course._ | _TODO: No invented issuer verification URL._ | _TODO_ |
+| Microsoft Azure AI Engineer Associate | _TODO: Preserve `in progress` unless new proof exists._ | _TODO_ | _TODO_ |
+
+Original attachment/public-asset handoff decision: _TODO: Fill in. Do not claim the supplied files were published unless they actually were._
+
+### Design and information architecture contract
+
+Design artifact path: _TODO: Fill in._
+
+- Selected visual direction: _TODO: Fill in._
+- Why selected; alternatives rejected: _TODO: Fill in._
+- Tokens (type, colors, spacing, accent): _TODO: Fill in._
+- Mobile wireframe evidence: _TODO: path/image/diagram and summary._
+- Desktop wireframe evidence: _TODO: path/image/diagram and summary._
+- Recruiter path, in order: _TODO: Fill in._
+- Technical path, in order: _TODO: Fill in._
+- Minimum IA coverage:
+  - role-first home: _TODO_
+  - ProcureRAG case study/demo: _TODO_
+  - selected work/research: _TODO_
+  - production ML/procurement experience/about: _TODO_
+  - scoped learning credentials: _TODO_
+  - CV/GitHub/LinkedIn/contact: _TODO_
+- Accessibility contract: _TODO: keyboard, focus, contrast, reflow, reduced motion, alt text, and no-animation dependency._
+- Chat unavailable / no-JavaScript fallback: _TODO: Fill in._
+- Day 27 preview scope: _TODO: Fill in._
+- Cut-first scope: _TODO: confirm bilingual duplication/custom domain/3D/elaborate motion before safety/evidence/current CV._
+
+### Hosting, integration, and public-demo ADR
+
+ADR path / status / owner: _TODO: Fill in._
+
+| Option | Evidence-backed benefit | Cost / risk | Accepted or rejected and why |
+|---|---|---|---|
+| Next.js/Vercel + same-origin BFF + Azure ProcureRAG | _TODO_ | _TODO_ | _TODO_ |
+| Next.js/static Pages + separate gateway + Azure | _TODO_ | _TODO_ | _TODO_ |
+| UI/gateway in the Python container | _TODO_ | _TODO_ | _TODO_ |
+
+Accepted architecture in one paragraph: _TODO: Fill in._
+
+Repository and hosting boundary:
+
+- Portfolio repository/default branch/migration plan: _TODO: Fill in._
+- ProcureRAG repository/service boundary: _TODO: Fill in._
+- Hosting account owner(s): _TODO: Fill in._
+- Region: _TODO: Fill in or state what blocks the choice._
+- Runtime timeout used for the decision: _TODO: Fill in from the selected plan/account._
+- Old URL and rollback/fallback policy: _TODO: Fill in._
+- Why browser chat uses HTTP: _TODO: Fill in._
+- Why local stdio MCP remains separate and remote MCP is deferred: _TODO: Fill in._
+
+Public data, role, and trust contract:
+
+- Approved synthetic corpus subset / allowlist: _TODO: Fill in._
+- Fixed least-privileged public policy: _TODO: Fill in._
+- Role picker / escalation behavior: _TODO: Must be absent/rejected._
+- Approval/HITL behavior: _TODO: Public `pending_approval` must fail closed; no anonymous auto-approval._
+- Exact preset → `query_id` mapping: _TODO: Fill in._
+- Free-text behavior and evidence caveat: _TODO: Fill in._
+- Backend direct-call authentication decision: _TODO: Fill in._
+- BFF service identity is not visitor identity: _TODO: Explain._
+- Browser secret boundary: _TODO: Fill in._
+
+Response and UI mapping:
+
+| Service outcome | Planned UI state | Source/caveat behavior |
+|---|---|---|
+| `answered` | _TODO_ | _TODO_ |
+| `model_declined` | _TODO_ | _TODO_ |
+| `gap_report` | _TODO_ | _TODO_ |
+| `not_generated` | _TODO_ | _TODO_ |
+| `blocked` | _TODO_ | _TODO_ |
+| `pending_approval` | _TODO_ | _TODO_ |
+| HTTP 422 validation | _TODO_ | _TODO_ |
+| HTTP 429 throttled | _TODO_ | _TODO_ |
+| timeout / cold start | _TODO_ | _TODO_ |
+| unavailable / kill switch | _TODO_ | _TODO_ |
+
+Source-reference decision: _TODO: State that the current API returns IDs/citation flags only and how reviewed public anchors will be handled without inventing snippets or URLs._
+
+JSON-first versus SSE decision: _TODO: Fill in. Do not call current stage-event SSE token streaming._
+
+### Cost, latency, logging, and quality contract
+
+- Juan-approved numeric LLM ceiling: _TODO: Amount/currency/period or explicit blocker._
+- Juan-approved numeric cloud ceiling: _TODO: Amount/currency/period or explicit blocker._
+- Persistent atomic global quota/reservation design: _TODO: Fill in._
+- In-flight/concurrency cap: _TODO: Fill in._
+- Trusted client metadata and per-client control: _TODO: Fill in._
+- Input/body/output-token limits: _TODO: Fill in._
+- Provider timeout and retry policy: _TODO: Fill in._
+- Quota-store failure behavior: _TODO: Must be fail closed._
+- Kill-switch owner and test plan: _TODO: Fill in._
+- Scale-to-zero versus warm capacity: _TODO: Fill in; reference the prior 59–72 s Azure cold-start evidence._
+- Complete browser → BFF → backend → model timeout fit: _TODO: Fill in._
+- Logging/tracing defaults and retention: _TODO: Fill in; raw public prompts/traces should not be retained by default._
+- Q091 public policy: _TODO: evidence-backed repair gate or withhold/guard; disclaimer alone is not a fix._
+- Versioned launch smoke set planned: _TODO: at least three answerable, a paraphrase, unanswerable/abstention, blocked/injection, and Q091._
+
+### No-paid local contract probe
+
+- Artifact / command: _TODO: Fill in._
+- Environment switches proving no live provider/tracing: _TODO: Fill in._
+- Request shape tested: _TODO: Fill in._
+- Response/status/source mapping tested: _TODO: Fill in._
+- Exact preset versus free-text behavior tested: _TODO: Fill in._
+- Exit code/result: _TODO: Fill in._
+- What the probe proves: _TODO: Fill in._
+- What it does **not** prove: _TODO: Must include live generation, public auth, quota durability, browser UI, deployment, and answer quality unless separately exercised._
+
+### Full verification
+
+Record the final Day 26 commands and outputs separately:
+
+```text
+uv sync --locked --dev: _TODO_
+uv lock --check: _TODO_
+pytest: _TODO_
+compileall src tests scripts: _TODO_
+Ruff src tests scripts: _TODO_
+frozen fixture regression: _TODO_
+current retrieval verification: _TODO_
+graph regression: _TODO_
+no-paid contract probe: _TODO_
+git diff --check: _TODO_
+git status --short: _TODO: list only intentional Day 26 artifacts._
+portfolio-repo verification: _TODO: inspect actual manifest/lockfile and record only commands that really exist._
+```
+
+No provider call, public deployment, account mutation, spend, or unapproved biography/asset publication occurred today: _TODO: Confirm or record the exact exception and authorization._
+
+### What failed or was confusing
+
+- _TODO: Fill in with at least one real ambiguity, rejected assumption, broken link, evidence mismatch, or probe failure and how it was resolved or assigned._
+
+### What became clearer
+
+- _TODO: Fill in. Suggested shape: how the recruiter path differs from the technical path; how static hosting differs from a runtime BFF; how public identity/data/cost controls differ from a UI proxy._
+
+### What I can now explain in an interview
+
+Write concise answers in your own words before looking back at the route:
+
+1. Experienced-ML-to-LLM narrative and supporting evidence: _TODO: Fill in._
+2. Why experience/projects lead and certificates support: _TODO: Fill in._
+3. Recruiter path versus technical path: _TODO: Fill in._
+4. Next.js/Vercel+BFF versus static GitHub Pages: _TODO: Fill in._
+5. Browser HTTP versus local stdio MCP: _TODO: Fill in._
+6. Why a BFF secret does not secure an unauthenticated upstream: _TODO: Fill in._
+7. Exact presets versus free text and `query_id`: _TODO: Fill in._
+8. Six domain statuses plus transport/error states: _TODO: Fill in._
+9. Citation validity versus answer quality, using Q091: _TODO: Fill in._
+10. Least-privileged public synthetic-data policy: _TODO: Fill in._
+11. Why budgets alert but do not cap spend: _TODO: Fill in._
+12. What remains unbuilt/unproven after Day 26: _TODO: Fill in._
+
+No-notes architecture explanation:
+
+- Duration: _TODO: Target 15–20 minutes._
+- Completed without notes: _TODO: Yes/No._
+- Weakest answer and follow-up practice: _TODO: Fill in._
+
+### Review prompt
+
+> “Day 26 portfolio contract is ready. Please review the legacy evidence migration, supplied August CV/accessible LinkedIn/certificate reconciliation, production-ML/procurement-to-LLM narrative, design/wireframe, hosting ADR, public synthetic-data/role policy, secret/auth/cost boundaries, exact API status/source contract and no-paid probe. Reproduce the deterministic gates and quiz me on HTTP versus MCP and deployment trade-offs. Juan owns implementation.”
+
+### Next step
+
+1. Complete the exact readings and evidence inventory before polishing marketing copy.
+2. Resolve or explicitly assign public-safe career/asset wording, tenure scope, publication corrections, hosting owner/region/timeout, public data/role policy, numeric budgets, quota, and kill-switch decisions.
+3. Finish the design contract, wireframes, architecture ADR, and no-paid probe.
+4. Replace every Day 26 TODO with real evidence or an explicit blocker; give the no-notes explanation.
+5. Send the review prompt to Hermes. Do not move HER-294 to Done before review.
+6. After Day 26 passes, start Day 27: implement the approved responsive TypeScript portfolio preview, experience/research/credential sections, and ProcureRAG case-study preview without claiming the Day 28–30 chat/deployment work is already live.
