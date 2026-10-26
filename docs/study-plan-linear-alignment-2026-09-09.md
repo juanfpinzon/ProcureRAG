@@ -112,3 +112,4 @@ Every future `start ProcureRAG Day N` response must include:
 4. evidence fields to update in `docs/learning-log.md`;
 5. baseline verification commands;
 6. the exact review prompt to send Hermes when ready.
+ 
