@@ -1,7 +1,7 @@
 # Week 6 portfolio launch plan and research — 2026-10-26
 
 **Gate:** HER-271. **Status:** planning contract, not an implemented or deployed portfolio.
-**Canonical study plan:** [study-plan / Linear alignment](docs/study-plan-linear-alignment-2026-09-09.md).
+**Canonical study plan:** [study-plan / Linear alignment](study-plan-linear-alignment-2026-09-09.md).
 
 ## Outcome and positioning
 
