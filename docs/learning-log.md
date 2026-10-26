@@ -8276,13 +8276,13 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
   - every admission is **one Lua script**, which Redis runs atomically: drop expired leases; if any cap is reached, refuse and change nothing; otherwise add the lease and `INCR` the global and per-client day counters. A refusal reserves nothing, so no rollback `DECR` is needed (ADR §8.3.1);
   - the cap is `floor(US$5 ÷ 30 ÷ worst-case cost per request)`, from the chosen model's published price × (max context + public output cap). **No paid request is allowed until that number is computed** (Day 28).
   - Resetting a cookie bypasses nothing.
-- In-flight/concurrency cap: 2 concurrent upstream calls, held as **one lease per request** in a Redis sorted set (member: a random lease id; score: its expiry, `now + 120 s`), released by id in a `finally`. The lease TTL (120 s) is above Vercel `maxDuration` (100 s), so expiry only reclaims the leases of functions that died. Azure max replicas = 1.
+- In-flight/concurrency cap: 2 concurrent upstream calls, held as **one lease per request** in a Redis sorted set (member: a random lease id; score: its expiry). The provisional lease is 180 s and Day 29 must verify it against the measured cold-start + provider-timeout + cleanup path. A completed response or definitive upstream error releases by id. A BFF timeout, browser disconnect or function death does not prove Azure/provider work stopped, so it leaves the lease for expiry. Azure max replicas = 1.
   - Rejected in review round 1: one in-flight counter with a 120 s TTL. If admissions refresh the TTL, a leaked slot survives as long as traffic continues. If they do not, the key expires under running requests and the cap is exceeded. A `DECR` cannot say which request ended.
 - Trusted client metadata and per-client control: 10 questions/day per client. The key is a salted hash of the client IP from Vercel's platform-set headers, never a browser-supplied header. It is weak (NAT, rotation); the global cap is the real spend control.
 - Input/body/output-token limits:
   - question 1–500 characters (the same as `api.MAX_QUERY_CHARS`) and body ≤ 2 KB at the BFF, both enforced in the probe. The byte cap is checked on the raw body before parsing (413). It was added in review round 1: at `8323b48` the probe received an already-parsed dict, so only the character cap was proven;
   - public output cap below the code's `MAX_ANSWER_TOKENS = 3000`, set by configuration (Day 28).
-- Provider timeout and retry policy: provider 60 s (existing). **No automatic retries** at the browser, BFF or API; the probe asserts exactly one upstream call per request. A manual retry by the visitor consumes quota. A closed tab does not cancel provider work, so the in-flight lease is released only when the BFF's upstream call ends.
+- Provider timeout and retry policy: provider 60 s (existing). **No automatic retries** at the browser, BFF or API; the probe asserts exactly one upstream call per request. A manual retry by the visitor consumes quota. A closed tab or BFF timeout does not cancel provider work; in those cases the in-flight lease is not released early and expires conservatively.
 - Quota-store failure behavior: **fail closed**. `busy`/`unavailable`, nothing sent upstream.
 - Kill-switch owner and test plan:
   - **Owner:** Juan.
@@ -8422,7 +8422,7 @@ Review round 1 (Hermes, 2026-10-26) was made against `8323b48` and `52bb49d`. Fi
 |---|---|---|---|
 | 1 | Blocker: 29 emails in a public notebook's outputs and the X-ray `img55.png` are live now | **Not accepted (owner decision, Juan).** Both projects used data that was anonymized before it reached Juan, and the data and images are cleared for use. Both stay as they are, and inventory #5 is closed. This rests on Juan's statement: the anonymization happened upstream, so this repository has no record of it | inventory §5.1 |
 | 2 | The 2 KB body limit was claimed but not implemented in the probe | **Fixed** (the reviewer's first option). `handle_browser_request` now takes raw bytes and answers 413 above `MAX_BODY_BYTES = 2048`, before parsing. New scenarios: whitespace padding past 2 KB (413) and a cut-off JSON body (422). A test checks that the largest valid question (500 four-byte characters) fits. The ADR says the real BFF stops reading at 2 KB + 1 byte | probe; ADR §6.1 |
-| 3 | An in-flight counter with a shared TTL is not a safe semaphore | **Accepted.** One lease per request in a Redis sorted set, admitted by one atomic Lua script that also checks the day caps, and released by id. Lease TTL 120 s > `maxDuration` 100 s | ADR §8.3.1; the cost section above |
+| 3 | An in-flight counter with a shared TTL is not a safe semaphore | **Accepted.** One lease per request in a Redis sorted set, admitted by one atomic Lua script that also checks the day caps, and released by id after a completed response or definitive error. Closure re-review corrected timeout handling: a BFF timeout does not prove backend work stopped, so the lease remains until the provisional 180 s expiry; Day 29 measures and confirms the TTL | ADR §8.3.1; the cost section above |
 | 4 | The log and the inventory still said "uncommitted" | **Fixed.** This section, plus the status lines in this log and the inventory | here; inventory §5 |
 | 5 | Upstream hardening gaps (malformed 200, date-form `Retry-After`) | **Fixed.** A 200 that is not a valid `QueryResponse` (cut off or wrong shape) → 503 `unavailable`, logged without the body. `parse_retry_after` keeps only whole seconds. New scenarios: a real API 500, a cut-off 200, a wrong-shape 200, a date `Retry-After` | probe; ADR §6.3, §8.5 |
 | 7 | The photo needs a head-and-shoulders crop, not just a format change | **Accepted for Day 27** | `DESIGN.md` §7; inventory §1 |
@@ -8512,12 +8512,39 @@ No-notes architecture explanation:
 2. ~~Resolve or explicitly assign the open decisions.~~ Done on 2026-10-26:
    - decided: public-safe career/asset wording, tenure scope, publication corrections, hosting owner/region/timeout, public data/role policy, numeric budgets (US$5 LLM / US$10 cloud);
    - assigned with owner and day: quota and kill-switch implementation (ADR §11, inventory §6).
-3. ~~Finish the design contract, wireframes, architecture ADR, and no-paid probe.~~ Done (ProcureRAG `8323b48`, portfolio `52bb49d`).
+3. ~~Finish the design contract, wireframes, architecture ADR, and no-paid probe.~~ Done (initial artifacts: ProcureRAG `8323b48`, portfolio `52bb49d`; round-1 fixes: ProcureRAG `00f32c0`, portfolio `57d45e4`).
 4. ~~**Juan:**~~ Done (both branches pushed, 2026-10-26):
    - read and run every line of `scripts/portfolio_contract_probe.py` and `tests/test_portfolio_contract_probe.py`;
    - review the three portfolio-repo docs and `_config.yml` on branch `day-26-contract`;
    - commit and push both repos (ProcureRAG `day-26`, portfolio `day-26-contract`, **never merged to `master` while Jekyll publishes it**).
 5. ~~**Juan:** produce the corrected CV copy.~~ Done 2026-10-26 (`docs/JuanFernandoPinzon_CV_Oct2026.pdf`). Inventory questions #1–#4, #7, #8 and #10 are answered. Still open, all non-blocking for Day 27: #6, #9, and the Hermes upstream URLs. #5 was closed by Juan's owner decision after review (inventory §5.1).
 6. **Juan:** give the 15–20 minute no-notes explanation and answer the drill. Record the duration and the weakest answer above. Done.
-7. ~~Send the review prompt to Hermes.~~ Sent; round 1 answered above. **Next:** Juan reviews and commits the round-1 changes in both repositories, then asks Hermes to re-review. Do not move HER-294 to Done before the re-review passes.
+7. ~~Send the review prompt to Hermes.~~ Done. Round 1 was answered and committed in both repositories; the closure re-review below passed.
 8. After Day 26 passes, start Day 27: implement the approved responsive TypeScript portfolio preview, experience/research/credential sections, and ProcureRAG case-study preview, without claiming the Day 28–30 chat/deployment work is already live.
+
+### Closure re-review — 2026-10-26
+
+Hermes fetched both pushed branches and re-reviewed the round-1 responses at ProcureRAG `00f32c0` and portfolio `57d45e4`.
+
+- **Accepted fixes:** the probe now enforces the 2 KB raw-byte limit before parsing; malformed upstream 200s and non-numeric `Retry-After` values fail closed; the contract has 19 scenarios and 14 focused tests; the ADR uses atomic per-request leases rather than a shared counter; stale publication wording and the drifting homepage test count are corrected; the photo crop is assigned to Day 27; and the CV now has a semantic HTML source plus a tagged PDF (`pdfinfo`: `Tagged: yes`).
+- **Owner-accepted data decision:** Juan explicitly attested that the notebook records and X-ray had been anonymized before he received them and accepted continued publication. The repository contains no independent provenance record, so closure records this as an owner risk/permission attestation rather than independently verified anonymization.
+- **Docs-only correction during closure:** the follow-up ADR released an in-flight lease at the BFF's 75 s timeout even though Azure/provider work can continue. The closure edit now fails closed: timeout/disconnect/process death leaves the lease until a provisional 180 s expiry, and Day 29 must derive and verify the final TTL from the measured cold-start + provider-timeout + cleanup path.
+
+Fresh deterministic evidence, with live LLM and tracing disabled:
+
+```text
+uv sync --locked --dev                               exit 0; 154 resolved, 146 checked
+uv lock --check                                      exit 0
+uv run pytest -q                                     452 passed in 9.50s
+uv run python -m compileall -q src tests scripts     exit 0
+uv run python -m ruff check src tests scripts        All checks passed
+uv run python src/regression_suite.py                 7/7 frozen cases as expected
+HF_HUB_OFFLINE=1 ... --verify-retrieval              6/6 current retrieval checks [OK]
+HF_HUB_OFFLINE=1 uv run python src/graph_regression.py 6/6 contracts; 4 stand-in LLM calls
+uv run python scripts/portfolio_contract_probe.py     19/19 scenarios; 2/2 checks; 0 failures
+relative Markdown link scan                           0 missing targets
+portfolio YAML / HTML / PDF checks                    passed; tagged two-page A4 PDF
+git diff --check (both repositories)                  clean
+```
+
+**Verdict:** Day 26 satisfies the HER-294 acceptance gate. No paid provider call, live deployment or implementation beyond the submitted work was performed. HER-294 is ready for `Done`; Day 27 may begin with the remaining launch-blocking ADR items still explicitly assigned to Days 28–29.
