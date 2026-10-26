@@ -8084,12 +8084,12 @@ Three sentences:
 
 ### Content and evidence migration inventory
 
-Artifact path / commit or working-tree state: [`juanfpinzon/juanfpinzon.github.io` → `docs/portfolio-content-inventory.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/docs/portfolio-content-inventory.md). It is on local branch `day-26-contract` (from `master` `7526f0c`), **uncommitted and unpushed**, so the link resolves only after Juan pushes. `_config.yml` on that branch excludes the three Day 26 docs from the legacy Jekyll build (not build-verified: Jekyll is not installed locally).
+Artifact path / commit or working-tree state: [`juanfpinzon/juanfpinzon.github.io` → `docs/portfolio-content-inventory.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/docs/portfolio-content-inventory.md). It is on branch `day-26-contract` (from `master` `7526f0c`), committed by Juan as `52bb49d` and pushed (see "Commit record and review round 1"). `_config.yml` on that branch excludes the three Day 26 docs from the legacy Jekyll build (not build-verified: Jekyll is not installed locally).
 
 | Legacy area | Keep / rewrite / archive | Juan's contribution and ownership boundary | Public evidence / link status | Data or asset permission | Corrections / open questions |
 |---|---|---|---|---|---|
-| U-NET spine / vertebra detection | Rewrite: compact card, text only | Novel Software Systems client PoC (Juan, 2026-10-26). End to end: DICOM extraction from more than 100,000 images, cleaning, implant classifier, hand-annotated masks, U-NET (PyTorch/fast.ai), OpenCV post-processing. Client owns data and product; not a deployed clinical product | No public repo or paper; only `img55.png` (200) | Materials not shareable (old site). `img55.png` (medical image) **not migrated** | "100,000 thousand" → "more than 100,000" (Juan-confirmed). Year: H1 2020 (Juan-confirmed) |
-| Resume NER / publication / dataset / notebooks | Promote: lead research card | Novel Software team research; Juan is **first author** (journal metadata); team-annotated dataset | Paper: *Procesamiento del Lenguaje Natural* 65, 2020-09-01, pp. 53–58 (200 over http; the https certificate does not match the host). Dataset README: "545 CVs with NER Annotations" (200). Notebooks 200 | Dataset public; never show CV content in the site or demo. `skills-semantic-similarity-scoring-50cvs.ipynb` has 29 emails in outputs: **not linked**; clearing it is Juan's call | **Vol. 65 (2020)**, not the CV's "SEPLN 2021". **545 (README-documented)**, not "500". Journal article, not "conference". Keep the honest non-production result. Tools (Juan-confirmed): Flair/PyTorch BiLSTM-CRF taggers with stacked FastText and contextual string embeddings |
+| U-NET spine / vertebra detection | Rewrite: compact card, text only | Novel Software Systems client PoC (Juan, 2026-10-26). End to end: DICOM extraction from more than 100,000 images, cleaning, implant classifier, hand-annotated masks, U-NET (PyTorch/fast.ai), OpenCV post-processing. Client owns data and product; not a deployed clinical product | No public repo or paper; only `img55.png` (200) | Materials not shareable (old site). `img55.png`: **cleared for use** (Juan, after review: anonymized before it reached him; inventory §5.1). The card stays text-only by default | "100,000 thousand" → "more than 100,000" (Juan-confirmed). Year: H1 2020 (Juan-confirmed) |
+| Resume NER / publication / dataset / notebooks | Promote: lead research card | Novel Software team research; Juan is **first author** (journal metadata); team-annotated dataset | Paper: *Procesamiento del Lenguaje Natural* 65, 2020-09-01, pp. 53–58 (200 over http; the https certificate does not match the host). Dataset README: "545 CVs with NER Annotations" (200). Notebooks 200 | Dataset public; never show CV content in the site or demo. `skills-semantic-similarity-scoring-50cvs.ipynb` has 29 emails in outputs: **not a blocker** (Juan, after review: the CVs were anonymized before they reached him; inventory §5.1) | **Vol. 65 (2020)**, not the CV's "SEPLN 2021". **545 (README-documented)**, not "500". Journal article, not "conference". Keep the honest non-production result. Tools (Juan-confirmed): Flair/PyTorch BiLSTM-CRF taggers with stacked FastText and contextual string embeddings |
 | DICOM2STL / Autobone context | Rewrite: compact engineering card with upstream credit | Adapted and extended **David T. Chen's (NIAID) `dicom2stl`**, Apache-2.0 per README. First 100 commits on `master`: ~76 Juan, ~24 Dave Chen. Client work for Autobone at Novel Software (Juan-confirmed). Juan does not own Autobone or its model | Repo 200. The Autobone link is a login page: dropped | Public repo. Credit upstream on the site. The repo has no `LICENSE` file (open, non-blocking) | Typos ("it's", "the a"). "1,000+ cranial STL models" **confirmed** true and publishable (Juan): "Used to convert 1,000+ cranial CT scans into STL meshes for the client's implant-model training data." |
 | CS231n foundations | Archive: one line, no image | Self-paced solutions to Stanford's Spring 2019 assignments | Repo 200; course page 200 | `cs231n.png` likely course material: not migrated | None |
 
@@ -8126,7 +8126,7 @@ Crosswalk artifact path: the same file, §2 (career), §3 (publications/credenti
     - Reproducible retrieval evals (P@1 0.978, retrieval ranking only).
     - A bounded LangGraph agent with guardrails and HITL.
     - A guarded FastAPI service, Docker, an Azure deployment and rollback (deleted), eval-gated CI, local stdio MCP.
-    - 445 tests, including the Day 26 probe tests.
+    - 445 tests at `8323b48`, including the Day 26 probe tests (public surfaces say "430+ tests", so the claim does not go stale).
 - Post-August CV changes confirmed by Juan: **none** (Juan, 2026-10-26).
 - Public-safe employer wording approved: **yes**. Juan approved the August CV wording for the public site, including program names and CV-reported metrics, attributed to his own role. No internal dashboards or systems are linked.
 - Actual employer titles versus target-role headline:
@@ -8145,11 +8145,11 @@ Course awards:
 | Hugging Face — The MCP Course: Unit 1 — 1. Fundamentals of MCP — 22 Oct 2026 | "Hugging Face — The MCP Course, Unit 1: Fundamentals of MCP (certificate of achievement, 22 October 2026)". **Unit 1 only, never the whole course** | Text only. The artifact shows no credential ID or URL, and none was invented | `src/mcp_server.py`, `scripts/mcp_stdio_smoke.py`, Inspector evidence (Day 25) |
 | Microsoft Azure AI Engineer Associate | "In progress" (CV only) | Not listed on the site until earned. No new proof exists | Day 23–24 Azure deployment evidence (separate from the credential) |
 
-Original attachment/public-asset handoff decision: the August CV PDF and both award images stay in Juan's local `~/Documents/CV/`. They were read for this crosswalk, and **nothing was copied into either repository, edited, uploaded or published**. Juan produced the **corrected CV** on 2026-10-26: `docs/JuanFernandoPinzon_CV_Oct2026.pdf` in the portfolio repo. It was checked against this crosswalk and has NER 2020, "AGI 2022 proceedings (Springer LNCS, 2023)", ProcureRAG, "since 2019", the Flair NER tools, the "ML/AI Engineer" header, Azure still in progress, and n8n/Streamlit kept out of the "demonstrated in ProcureRAG" line. Its technical claims were verified against the repo: the three required checks on `main`, the OIDC deploy, the non-root image, the read-only MCP tool and "430+ tests". It is uncommitted, so it becomes public on GitHub only when the branch is pushed. The original August PDF and the award images stay local and unpublished.
+Original attachment/public-asset handoff decision: the August CV PDF and both award images stay in Juan's local `~/Documents/CV/`. They were read for this crosswalk, and **nothing was copied into either repository, edited, uploaded or published**. Juan produced the **corrected CV** on 2026-10-26: `docs/JuanFernandoPinzon_CV_Oct2026.pdf` in the portfolio repo. It was checked against this crosswalk and has NER 2020, "AGI 2022 proceedings (Springer LNCS, 2023)", ProcureRAG, "since 2019", the Flair NER tools, the "ML/AI Engineer" header, Azure still in progress, and n8n/Streamlit kept out of the "demonstrated in ProcureRAG" line. Its technical claims were verified against the repo: the three required checks on `main`, the OIDC deploy, the non-root image, the read-only MCP tool and "430+ tests". Juan committed it in `52bb49d` and pushed the branch, so it is public on GitHub. The live site does not link it yet. The original August PDF and the award images stay local and unpublished.
 
 ### Design and information architecture contract
 
-Design artifact path: [`juanfpinzon/juanfpinzon.github.io` → `DESIGN.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/DESIGN.md). It is on branch `day-26-contract`, uncommitted.
+Design artifact path: [`juanfpinzon/juanfpinzon.github.io` → `DESIGN.md`](https://github.com/juanfpinzon/juanfpinzon.github.io/blob/day-26-contract/DESIGN.md). It is on branch `day-26-contract`, committed in `52bb49d` and pushed.
 
 - Selected visual direction: **editorial light** (Juan chose it, 2026-10-26): warm paper, near-black ink, one deep-teal accent, serif headings, sans body, mono only for metrics and IDs.
 - Why selected; alternatives rejected:
@@ -8199,8 +8199,8 @@ ADR path / status / owner: [`juanfpinzon/juanfpinzon.github.io` → `docs/adr/po
 Accepted architecture in one paragraph: a pre-rendered Next.js (App Router, TypeScript) portfolio on Juan's Vercel Hobby account serves a same-origin BFF route, `POST /api/chat`. The BFF does six things:
 
 1. checks a per-request kill switch;
-2. accepts only `{"question"}` (1–500 characters, body ≤ 2 KB);
-3. reserves global and per-client quota in a persistent atomic store, and fails closed;
+2. accepts only `{"question"}` (1–500 characters; body ≤ 2 KB, checked on the raw bytes before parsing, 413);
+3. admits the request with one atomic script in a persistent store (an in-flight lease plus the global and per-client day counters, ADR §8.3.1), and fails closed;
 4. fixes the role to `requester`;
 5. attaches a `query_id` only for an exact approved preset, and never sends a decision;
 6. calls the ProcureRAG FastAPI container on Azure Container Apps (`northeurope`, min 0 / max 1 replica) with a server-held service token.
@@ -8255,10 +8255,11 @@ Response and UI mapping (each row exercised by the no-paid probe):
 | `not_generated` | `not_generated`: fixed "retrieval only, no model was called"; API text hidden | The sources an answer would use; caveats (incl. unchecked for free text) |
 | `blocked` | `blocked`: API refusal text | No sources; guard names (e.g. `prompt_injection`) |
 | `pending_approval` | `pending_approval`: fixed "needs a reviewer, not offered in the public demo" | No sources. API text and `approval_request` dropped |
-| HTTP 422 validation | `invalid_question` (BFF 422, before upstream; or an upstream 422) | — |
-| HTTP 429 throttled | `busy`, with `retry_after_seconds` when the API gives `Retry-After`. No automatic retry | — |
+| HTTP 422 validation | `invalid_question` (BFF 422, before upstream, also for a body that is not valid JSON; or an upstream 422) | — |
+| Body over 2 KB | `invalid_question` (BFF 413, on the raw bytes, before parsing) | — |
+| HTTP 429 throttled | `busy`, with `retry_after_seconds` when `Retry-After` is a whole number of seconds (a date form or garbage is dropped). No automatic retry | — |
 | timeout / cold start | `timed_out` (BFF 504): "may have been starting up, try again in a minute" | — |
-| unavailable / kill switch | `unavailable` (BFF 503): links to the case study and code; the page keeps working | — |
+| unavailable / kill switch | `unavailable` (BFF 503), also for any other upstream status (500, 401) and a malformed upstream 200: links to the case study and code; the page keeps working | — |
 
 Source-reference decision: the current API returns `source_id`, `doc_id`, `chunk_id` and `cited` only. The BFF forwards exactly those four fields (the probe checks the key set and that every doc is Internal). There are no snippets, file URLs or trace links. A build-time `doc_id → title` map from the synthetic corpus is an optional, reviewed Day 28 addition (ADR §11 #10). `run_id` is never forwarded, because the trace row is not persisted.
 
@@ -8271,16 +8272,17 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
   - This ceiling forces scale-to-zero.
   - Day 29 compares it with the worst case (one replica running 24/7, current price sheet) and checks the Azure subscription status: is the Day 23 free trial with spending limit `On` still active?
 - Persistent atomic global quota/reservation design:
-  - a Redis-compatible store on the BFF side (provider and free tier to verify on Day 29);
-  - the day counter is incremented with `INCR`, and a `DECR` rolls it back when it goes over the cap;
+  - a Redis-compatible store on the BFF side (provider, free tier and Lua scripting support to verify on Day 29);
+  - every admission is **one Lua script**, which Redis runs atomically: drop expired leases; if any cap is reached, refuse and change nothing; otherwise add the lease and `INCR` the global and per-client day counters. A refusal reserves nothing, so no rollback `DECR` is needed (ADR §8.3.1);
   - the cap is `floor(US$5 ÷ 30 ÷ worst-case cost per request)`, from the chosen model's published price × (max context + public output cap). **No paid request is allowed until that number is computed** (Day 28).
   - Resetting a cookie bypasses nothing.
-- In-flight/concurrency cap: 2 concurrent upstream calls (an in-flight counter with a 120 s TTL against leaked slots). Azure max replicas = 1.
+- In-flight/concurrency cap: 2 concurrent upstream calls, held as **one lease per request** in a Redis sorted set (member: a random lease id; score: its expiry, `now + 120 s`), released by id in a `finally`. The lease TTL (120 s) is above Vercel `maxDuration` (100 s), so expiry only reclaims the leases of functions that died. Azure max replicas = 1.
+  - Rejected in review round 1: one in-flight counter with a 120 s TTL. If admissions refresh the TTL, a leaked slot survives as long as traffic continues. If they do not, the key expires under running requests and the cap is exceeded. A `DECR` cannot say which request ended.
 - Trusted client metadata and per-client control: 10 questions/day per client. The key is a salted hash of the client IP from Vercel's platform-set headers, never a browser-supplied header. It is weak (NAT, rotation); the global cap is the real spend control.
 - Input/body/output-token limits:
-  - question 1–500 characters (the same as `api.MAX_QUERY_CHARS`), body ≤ 2 KB at the BFF, both enforced in the probe;
+  - question 1–500 characters (the same as `api.MAX_QUERY_CHARS`) and body ≤ 2 KB at the BFF, both enforced in the probe. The byte cap is checked on the raw body before parsing (413). It was added in review round 1: at `8323b48` the probe received an already-parsed dict, so only the character cap was proven;
   - public output cap below the code's `MAX_ANSWER_TOKENS = 3000`, set by configuration (Day 28).
-- Provider timeout and retry policy: provider 60 s (existing). **No automatic retries** at the browser, BFF or API; the probe asserts exactly one upstream call per request. A manual retry by the visitor consumes quota. A closed tab does not cancel provider work, so the quota slot is released only when upstream ends.
+- Provider timeout and retry policy: provider 60 s (existing). **No automatic retries** at the browser, BFF or API; the probe asserts exactly one upstream call per request. A manual retry by the visitor consumes quota. A closed tab does not cancel provider work, so the in-flight lease is released only when the BFF's upstream call ends.
 - Quota-store failure behavior: **fail closed**. `busy`/`unavailable`, nothing sent upstream.
 - Kill-switch owner and test plan:
   - **Owner:** Juan.
@@ -8312,21 +8314,23 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
 
 ### No-paid local contract probe
 
-- Artifact / command: [`scripts/portfolio_contract_probe.py`](../scripts/portfolio_contract_probe.py) plus [`tests/test_portfolio_contract_probe.py`](../tests/test_portfolio_contract_probe.py) (7 tests). Command: `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false uv run python scripts/portfolio_contract_probe.py`.
+- Artifact / command: [`scripts/portfolio_contract_probe.py`](../scripts/portfolio_contract_probe.py) plus [`tests/test_portfolio_contract_probe.py`](../tests/test_portfolio_contract_probe.py) (14 tests). Command: `PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false uv run python scripts/portfolio_contract_probe.py`.
 - Environment switches proving no live provider/tracing:
   - `PROCURERAG_LIVE_LLM=0` and both LangSmith flags `false`.
   - The probe never builds a live service: `app.dependency_overrides[get_service]` swaps in a `ProcureRAGService` with a fake `retrieve_fn` and a fake LLM (or none), so no model loads and no network is touched.
   - The shared `api.app` override is removed in a `finally` (tested).
 - Request shape tested:
-  - **browser → BFF:** `{"question": str}`, 1–500 chars, any other key is a 422 (`BrowserQuestion`, `extra="forbid"`);
+  - **browser → BFF:** the raw body, at most 2 KB (413 before parsing). Then `{"question": str}`, 1–500 chars, parsed and validated in one step by `BrowserQuestion.model_validate_json` (`extra="forbid"`): any other key, or a body that is not valid JSON, is a 422;
   - **BFF → API:** `{"query", "role": "requester"}` plus `"query_id"` only for an exact preset, validated by the API's own `api.QueryRequest` before sending; never a `decision`.
-- Response/status/source mapping tested: every upstream 200 is validated as `api.QueryResponse`, then reduced to a `BrowserView`. 13 scenarios cover:
+- Response/status/source mapping tested: every upstream 200 is validated as `api.QueryResponse` (a malformed one becomes 503 `unavailable`), then reduced to a `BrowserView`. 19 scenarios cover:
   - the six API statuses: `answered`, `model_declined`, `gap_report`, `not_generated`, `blocked`, and a forced `pending_approval` via the `case_overrides` seam;
-  - 422 (a role sent by the browser, and over 500 chars, both refused before upstream);
+  - 422 (a role sent by the browser, over 500 chars, and a cut-off JSON body, all refused before upstream);
+  - 413 (a valid question padded past 2 KB with whitespace, refused before parsing);
   - 429 (the API's real `SlidingWindowRateLimiter` at 1/min);
   - a timeout (`httpx.ReadTimeout`);
   - unavailable (`httpx.ConnectError`);
-  - the kill switch.
+  - the kill switch;
+  - bad upstream replies (added in review round 1): a real API 500 (an LLM that raises), a 200 cut off mid-JSON, a 200 of the wrong shape, and a 429 with a date-form `Retry-After`. Each ends in a typed state, never an exception. `parse_retry_after` has its own tests (seconds, zero, missing, date, negative, garbage).
 
   On every view: the sources' key set is exactly `{source_id, doc_id, chunk_id, cited}`, every source document is Internal (the fake retrieval includes a Confidential `CONTRACT-005` chunk, which never comes back), and `run_id`/`approval_request`/`findings` are absent. On `pending_approval`, the API text is hidden.
 - Exact preset versus free-text behavior tested:
@@ -8336,16 +8340,21 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
 
   The preset allowlist is checked against the **real** data and the real follow-up table: all gold docs are Internal, and `may_pause_for_approval` is False for Q001/Q005/Q021/Q090.
 - Exit code/result:
-  - `exit 0`, "0 failure(s)": 13/13 scenarios PASS, 2/2 contract checks PASS;
-  - `pytest tests/test_portfolio_contract_probe.py`: 7 passed;
-  - run before `tests/test_mcp_server.py` and `tests/test_api.py` (which share `api`): 101 passed.
-  - **Mutation check** (four deliberate breaks, each exit 1 with a named failure):
+  - `exit 0`, "0 failure(s)": 19/19 scenarios PASS, 2/2 contract checks PASS;
+  - `pytest tests/test_portfolio_contract_probe.py`: 14 passed;
+  - run before `tests/test_mcp_server.py` and `tests/test_api.py` (which share `api`): 108 passed.
+  - **Mutation check** (seven deliberate breaks, each exit 1):
     - public role `buyer` → "source CONTRACT-005 is not Internal";
     - Q091 added as a preset → "may pause for approval";
     - a `query_id` attached for any labeled text → Q091 becomes `pending_approval` / `query_id 'Q091'`;
-    - API pending text shown → "shows the API's 'resend with a decision' text".
+    - API pending text shown → "shows the API's 'resend with a decision' text";
+    - byte cap removed → the padded body goes upstream as preset Q090, "HTTP 200, expected 413" (review round 1);
+    - the catch around the upstream `QueryResponse` removed → an uncaught `ValidationError` on the cut-off 200 (review round 1);
+    - `int(Retry-After)` put back → an uncaught `ValueError` on the date form (review round 1).
 - What the probe proves:
   - the request/response **shapes**, against the real `QueryRequest`/`QueryResponse`;
+  - the 2 KB byte cap, before parsing;
+  - that malformed upstream replies (a 500, a cut-off or wrong-shape 200, a date-form `Retry-After`) become typed states;
   - the fixed public role, and that the real role filter removes Confidential chunks;
   - the preset-versus-free-text `query_id` rule;
   - IDs-only sources;
@@ -8356,7 +8365,7 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
   - that the public preset allowlist is safe under the real data and follow-up table.
 - What it does **not** prove:
   - live generation or answer quality (the LLM is a fake; Q091 stays red);
-  - the TypeScript BFF itself;
+  - the TypeScript BFF itself, including its streaming read cap (the probe gets the body already in memory);
   - browser rendering or accessibility;
   - BFF → API authentication (the service token does not exist yet);
   - persistent or atomic quota, concurrency, or the per-client limit;
@@ -8366,7 +8375,7 @@ JSON-first versus SSE decision: JSON `/query` is the first vertical slice. `/que
 
 ### Full verification
 
-Final run on 2026-10-26, branch `day-26`, after the probe and its tests were added. Same environment switches as Block 0:
+Pre-commit run on 2026-10-26, branch `day-26`, after the probe and its tests were added. Same environment switches as Block 0. **The commit record, the post-commit verification and review round 1 are in the next section.**
 
 ```text
 uv sync --locked --dev: exit 0, Resolved 154 packages, Checked 145 packages
@@ -8385,8 +8394,52 @@ portfolio-repo verification: no manifest or lockfile exists (Jekyll fork, Gemfil
 
 No provider call, public deployment, account mutation, spend, or unapproved biography/asset publication occurred today: **confirmed**.
 - The only network actions were read-only: link checks, GitHub API metadata, the docs reading, Crossref/arXiv/journal metadata, and a `git clone` of the public portfolio repo.
-- Nothing was committed or pushed in either repository.
-- The CV and award images were read locally and not copied anywhere.
+- Nothing was committed or pushed in either repository at the time of this run. Juan's commits and pushes came after it (next section).
+- The August CV and the award images were read locally and not copied anywhere.
+
+### Commit record and review round 1
+
+Commit record (checked 2026-10-26 with `git status -sb` and `git ls-remote`):
+
+| Repository | Branch | Commits | Pushed | State |
+|---|---|---|---|---|
+| ProcureRAG | `day-26` | `bfaac14` (route + log scaffold), `8323b48` (Day 26 log, probe, probe tests) | `origin/day-26` = `8323b48` | clean, in sync |
+| Portfolio | `day-26-contract` | `52bb49d` (`DESIGN.md`, ADR, inventory, `_config.yml`, corrected CV, photo) | `origin/day-26-contract` = `52bb49d` | clean, in sync. `master` unchanged at `7526f0c` |
+
+Post-commit verification at `8323b48`, clean tree, before any review-round change:
+
+```text
+uv run pytest -q                                   445 passed in 3.08s
+uv run python scripts/portfolio_contract_probe.py  13/13 scenarios + 2/2 checks, 0 failure(s)
+git status --porcelain (both repos)                empty
+```
+
+Publication state: the corrected CV and the photo are **public on GitHub** through branch `day-26-contract` since the push. They are **not linked from the live site**: Pages still builds the Jekyll site from `master` (`7526f0c`).
+
+Review round 1 (Hermes, 2026-10-26) was made against `8323b48` and `52bb49d`. Findings 1–5, 7 and 8 are answered here. Finding 6 is not covered by this response.
+
+| # | Finding | Response | Where |
+|---|---|---|---|
+| 1 | Blocker: 29 emails in a public notebook's outputs and the X-ray `img55.png` are live now | **Not accepted (owner decision, Juan).** Both projects used data that was anonymized before it reached Juan, and the data and images are cleared for use. Both stay as they are, and inventory #5 is closed. This rests on Juan's statement: the anonymization happened upstream, so this repository has no record of it | inventory §5.1 |
+| 2 | The 2 KB body limit was claimed but not implemented in the probe | **Fixed** (the reviewer's first option). `handle_browser_request` now takes raw bytes and answers 413 above `MAX_BODY_BYTES = 2048`, before parsing. New scenarios: whitespace padding past 2 KB (413) and a cut-off JSON body (422). A test checks that the largest valid question (500 four-byte characters) fits. The ADR says the real BFF stops reading at 2 KB + 1 byte | probe; ADR §6.1 |
+| 3 | An in-flight counter with a shared TTL is not a safe semaphore | **Accepted.** One lease per request in a Redis sorted set, admitted by one atomic Lua script that also checks the day caps, and released by id. Lease TTL 120 s > `maxDuration` 100 s | ADR §8.3.1; the cost section above |
+| 4 | The log and the inventory still said "uncommitted" | **Fixed.** This section, plus the status lines in this log and the inventory | here; inventory §5 |
+| 5 | Upstream hardening gaps (malformed 200, date-form `Retry-After`) | **Fixed.** A 200 that is not a valid `QueryResponse` (cut off or wrong shape) → 503 `unavailable`, logged without the body. `parse_retry_after` keeps only whole seconds. New scenarios: a real API 500, a cut-off 200, a wrong-shape 200, a date `Retry-After` | probe; ADR §6.3, §8.5 |
+| 7 | The photo needs a head-and-shoulders crop, not just a format change | **Accepted for Day 27** | `DESIGN.md` §7; inventory §1 |
+| 8 | "445 tests" on the home chip will drift | **Accepted, option 2 (Juan):** short surfaces say "430+ tests", the same as the CV. The case study keeps the exact count with its commit and date (445 at `8323b48`) | `DESIGN.md` §3–4; inventory §4 |
+
+Verification after the review-round changes (uncommitted until Juan reviews and commits them). Same environment switches as Block 0:
+
+```text
+uv run pytest -q                                          452 passed (445 + 7: six Retry-After cases, one body-cap fit test)
+uv run pytest -q tests/test_portfolio_contract_probe.py   14 passed
+probe tests + tests/test_mcp_server.py + tests/test_api.py   108 passed
+uv run python scripts/portfolio_contract_probe.py         19/19 scenarios + 2/2 checks, 0 failure(s), exit 0
+ruff check src tests scripts                              All checks passed!
+compileall src tests scripts                              clean
+mutation checks (byte cap, malformed-200 catch, Retry-After)   each exit 1
+git diff --check (both repos)                             clean
+```
 
 ### What failed or was confusing
 
@@ -8399,11 +8452,15 @@ No provider call, public deployment, account mutation, spend, or unapproved biog
   - the CV says "SEPLN 2021" against the journal's 2020;
   - the site calls the paper a conference paper (it is a journal article);
   - `dicom2stl` looks like Juan's repo (not a GitHub fork) but credits David T. Chen as the original author, under Apache-2.0, with no `LICENSE` file present;
-  - a public notebook holds 29 third-party email addresses.
+  - a public notebook holds 29 email addresses in its saved outputs (after review, Juan: anonymized before the data reached him, so not a blocker; inventory §5.1).
 - **Source access:**
   - the SEPLN journal's HTTPS certificate does not match its host (the fetch failed; read over http instead);
   - Springer redirected to a login flow (Crossref was used instead);
   - LinkedIn and Autobone return 200 but are walls, so a 200 is not evidence.
+- **Review round 1 found three gaps in the Day 26 work:**
+  - **the 2 KB body claim was written before it was proven.** The probe received an already-parsed dict, so it never saw bytes, yet the log said "both enforced in the probe". It now takes raw bytes;
+  - **an in-flight counter with a TTL is not a semaphore.** One key cannot track requests that start and end at different times. It was replaced by one lease per request (ADR §8.3.1);
+  - **a probe that only feeds well-formed replies cannot show that the BFF survives bad ones.** A cut-off 200 and a date-form `Retry-After` crashed the first version.
 - **Minor:** `uv sync` reports 145 checked packages against the kickoff's 146; the lock is unchanged. The Jekyll exclude could not be build-tested locally.
 
 ### What became clearer
@@ -8433,7 +8490,7 @@ Write concise answers in your own words before looking back at the route:
     - no live generation through the chain;
     - Q091 is still red;
     - roles, approvals and quotas are still learning-grade in the API;
-    - inventory questions #5 (notebook outputs), #6 (`LICENSE`), #9 (LinkedIn export) and the Hermes upstream URLs are still open.
+    - inventory questions #6 (`LICENSE`), #9 (LinkedIn export) and the Hermes upstream URLs are still open (#5 was closed by Juan's owner decision, inventory §5.1).
 
     Day 26 delivered decisions, contracts and a no-paid probe, not implementation evidence.
 
@@ -8447,7 +8504,7 @@ No-notes architecture explanation:
 
 > “Day 26 portfolio contract is ready. Please review the legacy evidence migration, supplied August CV/accessible LinkedIn/certificate reconciliation, production-ML/procurement-to-LLM narrative, design/wireframe, hosting ADR, public synthetic-data/role policy, secret/auth/cost boundaries, exact API status/source contract and no-paid probe. Reproduce the deterministic gates and quiz me on HTTP versus MCP and deployment trade-offs. Juan owns implementation.”
 
-**Not sent yet.** It is sent only after Juan's review of the artifacts, his commits/pushes in both repositories, and the no-notes explanation.
+**Sent** on 2026-10-26, after Juan's commits/pushes in both repositories and the no-notes explanation. Round 1 findings and responses: "Commit record and review round 1" above.
 
 ### Next step
 
@@ -8455,12 +8512,12 @@ No-notes architecture explanation:
 2. ~~Resolve or explicitly assign the open decisions.~~ Done on 2026-10-26:
    - decided: public-safe career/asset wording, tenure scope, publication corrections, hosting owner/region/timeout, public data/role policy, numeric budgets (US$5 LLM / US$10 cloud);
    - assigned with owner and day: quota and kill-switch implementation (ADR §11, inventory §6).
-3. ~~Finish the design contract, wireframes, architecture ADR, and no-paid probe.~~ Done (uncommitted).
-4. **Juan:**
+3. ~~Finish the design contract, wireframes, architecture ADR, and no-paid probe.~~ Done (ProcureRAG `8323b48`, portfolio `52bb49d`).
+4. ~~**Juan:**~~ Done (both branches pushed, 2026-10-26):
    - read and run every line of `scripts/portfolio_contract_probe.py` and `tests/test_portfolio_contract_probe.py`;
    - review the three portfolio-repo docs and `_config.yml` on branch `day-26-contract`;
    - commit and push both repos (ProcureRAG `day-26`, portfolio `day-26-contract`, **never merged to `master` while Jekyll publishes it**).
-5. ~~**Juan:** produce the corrected CV copy.~~ Done 2026-10-26 (`docs/JuanFernandoPinzon_CV_Oct2026.pdf`). Inventory questions #1–#4, #7, #8 and #10 are answered. Still open, all non-blocking for Day 27: #5, #6, #9, and the Hermes upstream URLs.
+5. ~~**Juan:** produce the corrected CV copy.~~ Done 2026-10-26 (`docs/JuanFernandoPinzon_CV_Oct2026.pdf`). Inventory questions #1–#4, #7, #8 and #10 are answered. Still open, all non-blocking for Day 27: #6, #9, and the Hermes upstream URLs. #5 was closed by Juan's owner decision after review (inventory §5.1).
 6. **Juan:** give the 15–20 minute no-notes explanation and answer the drill. Record the duration and the weakest answer above. Done.
-7. Send the review prompt to Hermes. Do not move HER-294 to Done before review.
+7. ~~Send the review prompt to Hermes.~~ Sent; round 1 answered above. **Next:** Juan reviews and commits the round-1 changes in both repositories, then asks Hermes to re-review. Do not move HER-294 to Done before the re-review passes.
 8. After Day 26 passes, start Day 27: implement the approved responsive TypeScript portfolio preview, experience/research/credential sections, and ProcureRAG case-study preview, without claiming the Day 28–30 chat/deployment work is already live.

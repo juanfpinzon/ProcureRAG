@@ -64,7 +64,7 @@ def test_only_an_exact_preset_text_gets_its_query_id():
 )
 def test_the_browser_cannot_send_a_role_a_query_id_or_a_decision(extra_field):
     probe = _load_probe_module()
-    body = {"question": probe.LABELED_QUERIES["Q001"]["query"], **extra_field}
+    body = probe.browser_json({"question": probe.LABELED_QUERIES["Q001"]["query"], **extra_field})
 
     http_status, view = probe.handle_browser_request(body, _send_that_must_not_be_called)
 
@@ -74,6 +74,30 @@ def test_the_browser_cannot_send_a_role_a_query_id_or_a_decision(extra_field):
 def test_the_kill_switch_answers_before_validation_or_any_upstream_call():
     probe = _load_probe_module()
 
-    http_status, view = probe.handle_browser_request({"anything": 1}, _send_that_must_not_be_called, demo_enabled=False)
+    http_status, view = probe.handle_browser_request(b"not even json", _send_that_must_not_be_called, demo_enabled=False)
 
     assert (http_status, view.state) == (503, "unavailable")
+
+
+def test_the_longest_valid_question_fits_in_the_body_cap():
+    """The byte cap must never refuse a question the character cap allows.
+
+    An emoji is one character but 4 bytes of UTF-8, the most any character
+    takes, so 500 of them is the largest body a valid question can produce.
+    """
+    probe = _load_probe_module()
+
+    largest_valid_body = probe.browser_json({"question": "\N{GRINNING FACE}" * probe.MAX_QUESTION_CHARS})
+
+    assert len(largest_valid_body) <= probe.MAX_BODY_BYTES
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected"),
+    [("30", 30), ("0", 0), (None, None), ("Wed, 21 Oct 2026 07:28:00 GMT", None), ("-5", None), ("soon", None)],
+    ids=["seconds", "zero", "missing", "date", "negative", "garbage"],
+)
+def test_retry_after_keeps_only_a_whole_number_of_seconds(header_value, expected):
+    probe = _load_probe_module()
+
+    assert probe.parse_retry_after(header_value) == expected
