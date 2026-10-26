@@ -8586,7 +8586,7 @@ Record one applied decision or rejection per source:
     - a static demo section that says `Live demo: in progress`;
     - exactly the Q001/Q005/Q021/Q090 presets, with Q091/Q092 withheld.
 
-    Canonical/OG/sitemap are deliberately absent because the public URL is still ADR §11 #9.
+    The canonical link, `og:url`, the share image and the sitemap are deliberately absent because the public URL is still ADR §11 #9. Text-only share tags were added in review round 1.
 - [x] Next.js Server and Client Components sections read (page `lastUpdated` 2026-10-05; applied to Next.js 16.4.3).
   - Server-first decision and every required `use client` boundary:
     - every layout, page and component is a Server Component, and `grep -rn "^['\"]use client['\"]" app components` finds none;
@@ -8600,7 +8600,7 @@ Record one applied decision or rejection per source:
     - static `metadata` objects only, since nothing is fetched. `generateMetadata` is for metadata that "depends on data", which none here does;
     - the root layout sets `title.default`, `title.template` and the description, and `/procurerag` and `/about` export their own title and description;
     - file-based: `app/icon.svg` (a JP monogram, accent `#0F5E5A` with white text, 7.6:1). The scaffold's framework-logo `favicon.ico` was not taken.
-  - Deferred metadata/share artifacts and why: `metadataBase`, canonical URLs, Open Graph/Twitter images, `robots.txt` and `sitemap.xml` are deferred to Day 30. Each needs the public URL, which is still ADR §11 #9 (open). A share image is also a public claim, so none exists that could imply a live demo, answer accuracy or an employer link.
+  - Deferred metadata/share artifacts and why: `metadataBase`, canonical URLs, `og:url`, Open Graph/Twitter **images**, `robots.txt` and `sitemap.xml` are deferred to Day 30. Each needs the public URL, which is still ADR §11 #9 (open). A share image is also a public claim, so none exists that could imply a live demo, answer accuracy or an employer link. Text-only Open Graph and Twitter card tags, which need no URL, were added in review round 1 (see "Review round 1 follow-up").
 - [x] WCAG 2.2 criteria read.
   - Concrete checks adopted (each maps to a test or a recorded manual check):
     - **1.1.1:**
@@ -8657,7 +8657,7 @@ No provider call or trace upload ran. Q091 remains red for live-answer completen
 - Recruiter's first-minute question: is this an experienced ML practitioner in Barcelona with production forecasting and procurement depth, what is the flagship project, and where are the current CV and contact links?
 - Technical interviewer's evidence question: what exactly did Juan build in ProcureRAG, how was each number measured (method, corpus, query count, cut-off, commit), where does it still fail, and can I reproduce it?
 - Most dangerous false-live or metric overclaim to prevent: presenting `P@1 0.978` as answer accuracy, or any "try the demo" or live wording. Retrieval ranking on a synthetic benchmark is what was measured, and no public demo or hosted service exists.
-- Portfolio implementation branch name: `day-27-preview` (local; not committed or pushed yet).
+- Portfolio implementation branch name: `day-27-preview`. Implementation commit `1745cbb` (2026-10-26), pushed to `origin/day-27-preview`.
 - Branch base and exact starting SHA: `0ct26-overhaul` @ `76c719ee8284d0a571cf050a96adddae64960f1d`. `day-26-contract` and both remote branches point to the same SHA.
 - Fetch/status/divergence evidence before implementation (`git fetch --all --prune`, 2026-10-26):
   - portfolio `0ct26-overhaul...origin/0ct26-overhaul` 0/0, working tree clean;
@@ -8916,8 +8916,12 @@ Expected explanation shape:
 - About route title and description: "About — Juan F. Pinzon" / "Experience, education, research and publications, learning credentials, CV and contact for Juan F. Pinzon, ML/AI engineer in Barcelona, Spain."
 - Canonical URL policy for a non-production preview: no canonical link and no `metadataBase`, until ADR §11 #9 fixes the public URL. Whether a Vercel preview would add its own `noindex` header is to be verified on Day 28, before any preview deploy.
 - Favicon/file-based metadata added: `app/icon.svg`, served as `/icon.svg` (static).
-- Open Graph image: **deferred** to Day 30 (no `opengraph-image.*` and no `openGraph` fields), because a share image needs the absolute public URL and is itself a public claim.
-- Check that metadata/share images make no live-demo, answer-accuracy, employer-endorsement, or enterprise-readiness claim: the three titles and descriptions above were read from the rendered pages. The only demo wording is "Live demo in progress", and there is no share image. The automated forbidden-claims list covers visible page text, not `<head>`. The `<head>` check was done by reading.
+- Open Graph and Twitter card tags:
+  - **Text-only, on every route** (added in review round 1): `og:title`, `og:description`, `og:type` (`website`), `og:site_name`, `og:locale` (`en_US`), `twitter:card` (`summary`), `twitter:title`, `twitter:description`. Each repeats the route's own `<title>` and description.
+  - **Acceptance exception (HER-295):** `og:image`, `og:url`, `twitter:image` and the canonical link are deliberately absent until the Day 30 public URL (ADR §11 #9). This was measured, not assumed: with a share image and no `metadataBase`, `next build` warns and emits `og:image` as `http://localhost:3000/…`. `tests/metadata.spec.ts` asserts that the four are absent.
+- Check that metadata/share images make no live-demo, answer-accuracy, employer-endorsement, or enterprise-readiness claim:
+  - read first from the rendered pages: the only demo wording is "Live demo in progress", and there is no share image;
+  - **since review round 1 the check is automated:** `tests/metadata.spec.ts` runs the same forbidden-claims list over the `<title>` and every `<meta content>`.
 
 ### Responsive and accessibility evidence
 
@@ -8934,8 +8938,8 @@ Record actual method, viewport, result, and any fix for each item.
   - `/`: skip → name → ProcureRAG → About → CV (PDF) → CTA → CV → LinkedIn → Email → Earlier roles → Read the case study → ProcureRAG code;
   - `/procurerag`: skip → 4 header links → the 9 table-of-contents links in reading order;
   - `/about`: skip → 4 header links → ProcureRAG → the publication links in order.
-  - **A manual real-browser pass to the footer: pending (Juan).**
-- Keyboard traps: no modal, custom widget or focus-managing script exists, and the automated walk never stalled. A manual confirmation is pending with the walk above.
+  - **Manual real-browser pass to the footer: done by Juan during review, on all three routes; no defect reported.**
+- Keyboard traps: no modal, custom widget or focus-managing script exists, and the automated walk never stalled. Juan's manual walk reported no trap.
 - Visible focus against each background/control type:
   - a `--color-focus` outline outside the element;
   - focus on bg 4.7:1 light / 9.0:1 dark, and on surface 4.3:1 / 8.1:1, all above the 3:1 non-text minimum;
@@ -8960,7 +8964,7 @@ Record actual method, viewport, result, and any fix for each item.
   - The hero has the photo on the right, the flagship card two columns, and the work grid four columns.
   - On `/procurerag`, the table of contents is a sticky sidebar.
   - **Observation:** at 4 columns the work cards are narrow and tall, because the approved copy is long. This follows DESIGN's 4-column rule, so it is Juan's call whether to shorten the copy or use 2 columns.
-- 400% zoom result: the automated equivalent is a 320 CSS px viewport (1280 ÷ 4), which passes. **A real 400% browser zoom check: pending (Juan).**
+- 400% zoom result: the automated equivalent is a 320 CSS px viewport (1280 ÷ 4), which passes. **Real 400% browser zoom: checked by Juan during review; no sideways scrolling reported.**
 - Page-level horizontal overflow check: 18 of 18 tests pass (3 routes × 320/375/768/1024/1280/1440).
 - Wide-table labeled/focusable overflow region: `<div role="region" aria-label="Retrieval metrics table, scrolls horizontally" tabindex="0">` (test).
 - Reduced-motion behavior: a test asserts the CTA's transition duration is `0.15s` normally and `0s` under `reducedMotion: "reduce"`. No animation exists, and no content depends on motion.
@@ -9012,7 +9016,7 @@ external link check: curl -L over the 28 unique external hrefs in the three buil
 client-asset secret-name scan: tests/build-artifacts.spec.ts over .next/static / 0 findings (names and key-shaped values); 0 browser source maps; no .env* file; no process.env read in app code
 unsupported-live-claim scan: tests/content.spec.ts forbidden list over the visible text of all three routes / 0 matches
 git diff --check: exit 0 (tracked files); trailing-whitespace grep over the new untracked files: none
-git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untracked .nvmrc, AGENTS.md, app/, components/, content/, eslint.config.mjs, next.config.ts, package-lock.json, package.json, playwright.config.ts, public/, tests/, tsconfig.json (nothing committed)
+git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untracked .nvmrc, AGENTS.md, app/, components/, content/, eslint.config.mjs, next.config.ts, package-lock.json, package.json, playwright.config.ts, public/, tests/, tsconfig.json (nothing committed) — snapshot before the implementation commit; everything listed was committed as 1745cbb
 ```
 
 - Tests added and what they prove: 58 Playwright tests in three files, all against the production build.
@@ -9046,10 +9050,10 @@ git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untr
 
     All 11 were caught, but only after two tests were strengthened: the first `Band 3` check passed on any mention of "Band 3", and the first employer-separation heuristic let "Built at PepsiCo" through.
 - What remains manual/unproven:
-  - a screen-reader pass;
-  - a real-browser keyboard walk to the footer;
-  - real 400% zoom;
-  - Safari and Firefox rendering (only Chromium is automated);
+  - ~~a screen-reader pass~~: done by Juan during review (the screen reader used was not recorded); no defect reported;
+  - ~~a real-browser keyboard walk to the footer~~: done by Juan;
+  - ~~real 400% zoom~~: done by Juan;
+  - **still open:** Safari and Firefox rendering (only Chromium is automated or checked);
   - whether the copy is *true*: tests prove the wording is present or absent, and truth comes from the inventory and ProcureRAG evidence;
   - visual quality between the tested widths.
 - Browser console errors/warnings on `/`, `/procurerag`, `/about`: 0 errors, 0 warnings (Chromium, production build, 1280 px; `console` and `pageerror` listeners).
@@ -9057,7 +9061,7 @@ git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untr
 - Mixed-content check: 0 `http://` subresources. The only `http://` URL is the SEPLN journal link, a navigation link.
 - Confirmation that no credential appears in browser assets/source maps: confirmed by the scan above. No browser source maps are emitted, and no credential exists on Day 27.
 - Preview URL: **not deployed.**
-- Preview commit SHA: **none yet.** The Day 27 work is uncommitted on local branch `day-27-preview` (base `76c719e`), pending Juan's review and commit.
+- Preview commit SHA: no deployment exists, so the evidence commit is the one to build locally: implementation commit `1745cbb279f06090c02710eef5fe7d351eaedcaa` (2026-10-26 23:58 +0100), pushed to `origin/day-27-preview`. The review round 1 follow-up sits on top of it (see "Review round 1 follow-up").
 - Preview access/account blocker if not deployed: on 2026-10-26 Juan chose a local production build only. ADR §5 and §11 #4 put the Vercel account, the Hobby-terms check, the `dub1` region and repository linking on Day 28.
 - Reproducible local production URL/command: `git switch day-27-preview && npm ci && npm run build && npm run start` → `http://localhost:3000`. Tests: `npx playwright install chromium && npm test`.
 - Evidence that live Jekyll `master`/Pages remained unchanged: `origin/master` is still `7526f0c`, and Pages is still built from `master` `/` (legacy) at `7526f0c`. See Block 0.
@@ -9102,7 +9106,7 @@ git diff --check / git status --short: exit 0 / clean (before this log was edite
 ### What became clearer
 
 - "No Client Components" is a statement about *app* code. The framework runtime (about 140 KB gzip) still loads, but the HTML is complete before it does, which is why the no-JavaScript tests pass.
-- Static `metadata` objects cover every Day 27 route. Canonical URLs, OG images and the sitemap all depend on one undecided fact, the public URL, so they move together to Day 30.
+- Static `metadata` objects cover every Day 27 route, including the text-only share tags. Next.js merges metadata shallowly, so a page that sets `openGraph` replaces the layout's whole object; one helper builds it per route. The URL-based items (canonical, `og:url`, the share image, the sitemap) all depend on one undecided fact, the public URL, so they move together to Day 30.
 - Accessibility evidence came from behaviour tests and screenshots, not the score. axe reported 0 violations throughout, while tests and screenshots found five real layout and target problems.
 
 ### What I can now explain in an interview
@@ -9169,7 +9173,7 @@ Write concise answers in your own words before looking back at the route:
     - the Vercel account and region, and Azure re-provisioning;
     - the kill switch;
     - the deployed smoke test and rollback;
-    - the public URL and cutover (and with it canonical, OG and sitemap);
+    - the public URL and cutover (and with it canonical, `og:url`, the share image and the sitemap);
     - the LinkedIn reconciliation;
     - the Q091 repair;
     - the weekly gate review.
@@ -9178,9 +9182,13 @@ Write concise answers in your own words before looking back at the route:
 
 Three-minute walkthrough:
 
-- Duration: not given yet. No timing exists at the time of writing; record the real duration after the first spoken run.
-- Completed without notes: not yet attempted.
-- Weakest answer and follow-up practice: to be identified on the first run. Answers 4 (metric provenance) and 11 (the unbuilt list) have the most items to recall, so practise them first.
+- Duration: 3–4 minutes, given on 2026-10-26 before the log commit `cc8539f`. Juan reported it as a range; no exact time was recorded.
+- Completed without notes: yes (Juan's report).
+- Weakest answer and follow-up practice: **#11, what remains unbuilt after Day 27.** Practise it grouped by the day that owns each item (ADR §11), out loud, until it takes under 30 seconds:
+  - **Day 28:** the BFF route; the ProcureRAG service-token check; the chat UI; the model choice, worst-case cost, public output cap and OpenRouter credit limit; the Vercel account, terms and `dub1` region.
+  - **Day 29:** the persistent atomic quota store; the Azure subscription and re-provisioning; the kill switch; the provider data-retention disclosure; the deployed launch smoke and rollback.
+  - **Day 30:** the public URL and cutover (with canonical, `og:url`, share image and sitemap); the old CV URL; the LinkedIn reconciliation; the weekly gate review.
+  - **Unscheduled:** the Q091 repair with its own regression gate.
 - Script (about 3 minutes; open the local build with `npm run start`):
   1. **`/` (60 s):** read the hero and point at "Based in Barcelona" and the three experience rows (production since 2022, research 2019–2022, procurement since 2014). Show the flagship card: synthetic, independent, the three method-labeled chips, "Live demo: in progress". Then the four work cards (NER 2020, AGI 2022, DICOM2STL credit, U-NET PoC) and the small credential lines.
   2. **`/procurerag` (90 s):** problem and users, then what I built versus what I did not, then the synthetic corpus. Walk the six-step diagram. Show the nine-row table and read the "retrieval ranking—not answer accuracy" sentence. Show the evidence lanes, then Q091, then the static demo ("Nothing on this page sends a question anywhere"), then the reproduce commands.
@@ -9190,16 +9198,57 @@ Three-minute walkthrough:
 
 > “Day 27 portfolio preview is ready. Please fetch both repos and review the implementation branch against the accepted Day 26 design/inventory/ADR. Check the recruiter path, production ML/procurement experience, preserved work/publications, scoped course awards, current CV/contact, ProcureRAG ownership/architecture/eval claims, Q091 and synthetic-data limitations, Server/Client boundary, responsive/accessibility/no-JS behavior, real build/test evidence, preview URL or blocker, and that no Day 28–30 chat/deployment work is falsely presented as live. Juan owns implementation.”
 
-Sent: not yet. It goes after the spoken walkthrough and after both repositories are committed and pushed, so Hermes can fetch `day-27-preview` and the Day 27 log.
+Sent: yes, after both pushes on 2026-10-26 (portfolio `1745cbb`, ProcureRAG `cc8539f`). Hermes review round 1 returned 2 findings (1 Medium, 1 Low), addressed in the next section. HER-295 stays open until the follow-up is committed and re-reviewed.
+
+### Review round 1 follow-up (2026-10-27)
+
+Hermes reviewed portfolio `1745cbb` and ProcureRAG `cc8539f`.
+
+1. **Medium: the closure evidence was internally stale.** The log still said the implementation was uncommitted and the walkthrough not given, while Next step #7 said DONE.
+   - **Fixed in this log:**
+     - implementation commit `1745cbb` recorded (Block 0, preview evidence, Next step #2 and #5);
+     - walkthrough recorded from Juan's report: 3–4 minutes, no notes, weakest answer #11, with a practice plan;
+     - review prompt marked as sent;
+     - Juan's manual keyboard, 400% zoom and screen-reader checks recorded;
+     - Safari/Firefox stays open.
+2. **Low: no Open Graph fields** (HER-295 mentions OG metadata). **Fixed in the portfolio** (Juan's decision: text-only tags now, image later):
+   - `app/share-metadata.ts`: `shareMetadata(title, description)` returns text-only `openGraph` and `twitter` objects.
+     - The root layout uses it, and `/` inherits from the layout; `/procurerag` and `/about` call it with their full titles.
+     - It is a helper because Next.js merges metadata shallowly, so a page's `openGraph` replaces the layout's (bundled Next.js 16.4.3 docs, "Merging").
+   - Rendered on `/procurerag`, from the build: `og:title` and `twitter:title` "ProcureRAG case study — Juan F. Pinzon", `og:description`/`twitter:description` equal to the page description, `og:site_name` "Juan F. Pinzon", `og:locale` `en_US`, `og:type` `website`, `twitter:card` `summary`.
+   - `tests/metadata.spec.ts`, 9 tests (3 per route):
+     - the share tags exist and equal the page's own title and description;
+     - `og:image`, `og:url`, `twitter:image` and the canonical link are absent;
+     - the forbidden-claims list holds for the `<head>` text too. The list moved from `tests/content.spec.ts` to the shared `tests/routes.ts`, so both tests use one copy.
+   - Mutation check, 3 of 3 caught: the page drops its share tags; a share image sneaks in; the `<head>` text says "Try the demo".
+   - **Explicit acceptance exception:** no share image, `og:url` or canonical on Day 27.
+     - The reason was measured: with an image and no `metadataBase`, `next build` printed `⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000"` and emitted `og:image` `http://localhost:3000/images/juan-pinzon-headshot.webp`.
+     - Owner: Juan. It lands with the Day 30 public URL (ADR §11 #9), with a share image whose visible claims are true at that point.
+
+Portfolio gates after the follow-up (working tree on top of `1745cbb`, 2026-10-27):
+
+```text
+typecheck: npm run typecheck / exit 0
+lint: npm run lint / exit 0
+production build: npm run build / exit 0 / /, /about, /procurerag, /icon.svg, /_not-found all ○ (Static); no warnings
+tests: npm test / exit 0 / 67 passed (the 58 from 1745cbb + 9 metadata tests)
+git diff --check: exit 0
+```
+
+- Live site re-checked 2026-10-27:
+  - `origin/master` = `7526f0c`;
+  - Pages: `legacy` build from `master` `/`, latest build `7526f0c`;
+  - 0 Actions runs ever on the repository (the deleted `ci.yaml` never ran).
+- Follow-up commit: pending (Juan). Add its SHA here after the push, then ask Hermes to re-review.
 
 ### Next step
 
 1. ~~Complete the exact readings and record applied decisions before scaffolding.~~ Done (Course/source checkpoint).
-2. ~~Create the Day 27 portfolio branch from the accepted head; preserve `master` and the live Jekyll site.~~ `day-27-preview` exists locally from `76c719e`. `master`/Pages are unchanged. The legacy Ruby `ci.yaml` workflow was deleted (see "What failed or was confusing"). **Pending (Juan):** commit and push.
+2. ~~Create the Day 27 portfolio branch from the accepted head; preserve `master` and the live Jekyll site.~~ Done. `day-27-preview` from `76c719e`, committed as `1745cbb` and pushed (2026-10-26). `master`/Pages are unchanged (re-checked 2026-10-27). The legacy Ruby `ci.yaml` workflow was deleted (see "What failed or was confusing").
 3. ~~Build the three responsive routes, current-CV path, optimized photo crop, accurate evidence hierarchy, and static non-live demo explanation.~~ Done.
-4. ~~Run the real locked install, typecheck, lint, tests, production build, link, responsive, accessibility, no-JS, console, network, and secret-boundary checks.~~ Done. **Still manual (Juan):** a screen-reader pass, a real-browser keyboard walk to the footer, real 400% zoom, and Safari/Firefox.
-5. ~~Record a preview URL + commit, or a reproducible local production command + explicit preview blocker.~~ The local command and the Vercel blocker are recorded. After the commit, add its SHA to the build evidence.
-6. ~~Fill every Day 27 evidence field with real output or an explicit blocker.~~ Done. The interview drill is answered. The walkthrough and the review prompt carry an explicit "not yet" status.
-7. **Pending (Juan):** give the three-minute walkthrough without notes, using the script above, and record its duration and weakest answer. DONE.
-8. **Pending (Juan):** after the commit and push (so Hermes can fetch the branch), send the review prompt. Do not move HER-295 to Done before review.
+4. ~~Run the real locked install, typecheck, lint, tests, production build, link, responsive, accessibility, no-JS, console, network, and secret-boundary checks.~~ Done. Juan's manual checks (keyboard walk to the footer, real 400% zoom, screen-reader pass) reported no defect. **Still open:** Safari and Firefox.
+5. ~~Record a preview URL + commit, or a reproducible local production command + explicit preview blocker.~~ Done. Not deployed: implementation commit `1745cbb`, the local command and the Vercel blocker are recorded.
+6. ~~Fill every Day 27 evidence field with real output or an explicit blocker.~~ Done, including the walkthrough, the review and the round 1 follow-up.
+7. ~~Give the three-minute walkthrough without notes.~~ Done: 3–4 minutes, no notes. Weakest answer #11, with a practice plan above.
+8. ~~Send the review prompt to Hermes.~~ Sent; round 1 returned 2 findings, both addressed. **Pending (Juan):** commit and push the follow-up, record its SHA, and ask Hermes to re-review. Do not move HER-295 to Done before the re-review passes.
 9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
