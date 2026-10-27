@@ -326,6 +326,37 @@ def test_make_openrouter_client_raises_a_clear_error_on_blank_provider_content()
             client("any prompt")
 
 
+def test_the_output_cap_reaches_the_provider_request():
+    """Day 28: the worst-case cost per request is computed from the output
+    cap, so the cap must really be in the request the SDK sends. The default
+    stays `MAX_ANSWER_TOKENS`; a public deployment passes a lower one. The
+    fake SDK records the `max_tokens` it was given (no network)."""
+    import types
+
+    import openai
+
+    generation = _load_generation_module()
+    sent_max_tokens = []
+
+    class RecordingOpenAIClient:
+        def __init__(self, **kwargs):
+            del kwargs
+            self.chat = types.SimpleNamespace(completions=types.SimpleNamespace(create=self._create))
+
+        def _create(self, **kwargs):
+            sent_max_tokens.append(kwargs["max_tokens"])
+            message = types.SimpleNamespace(content="An answer [1].")
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message, finish_reason="stop")])
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(openai, "OpenAI", RecordingOpenAIClient)
+
+        generation.make_openrouter_client(model="fake-model", api_key="fake-key")("any prompt")
+        generation.make_openrouter_client(model="fake-model", api_key="fake-key", max_tokens=800)("any prompt")
+
+    assert sent_max_tokens == [generation.MAX_ANSWER_TOKENS, 800]
+
+
 # ---------------------------------------------------------------------------
 # Day 19: structured generation (GeneratedAnswer). Fake clients return the
 # JSON text a provider returns under `response_format=json_schema`. No
@@ -430,7 +461,8 @@ def test_make_openrouter_client_sends_a_strict_json_schema_only_when_asked():
 
     plain, structured = sent_requests
     assert "response_format" not in plain
-    assert plain["extra_body"] == {"reasoning": {"enabled": False}}
+    # Day 28: every request, plain or structured, asks for Zero Data Retention endpoints only.
+    assert plain["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"zdr": True}}
 
     json_schema = structured["response_format"]["json_schema"]
     assert structured["response_format"]["type"] == "json_schema"

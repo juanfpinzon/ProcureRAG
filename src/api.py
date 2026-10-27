@@ -25,15 +25,21 @@ explicit, and enforces it on every request.
 **Endpoints.**
 
     GET  /health        liveness: app name and version. Never touches the pipeline.
+                        Open: no credential needed.
     POST /query         one request in, one JSON `QueryResponse` out.
     POST /query/stream  the same request, answered as Server-Sent Events:
                         progress events first, then the same `QueryResponse`
                         as the last event.
 
+Both query endpoints need the service token (Day 28):
+`Authorization: Bearer <PROCURERAG_SERVICE_TOKEN>`. See "The service token"
+below.
+
 **One request, in order.** Each step can end the request, and each one runs
 before the more expensive steps after it:
 
-    JSON body
+    HTTP request
+      -> [service token: is this the portfolio BFF?]  ....... HTTP 401, the body is never read
       -> [rate limit: has this client used up its requests?]  HTTP 429, nothing else runs
       -> [Pydantic: shape, lengths, role, decision]  ........ HTTP 422, the endpoint never runs
       -> [check_query_request: a labeled id, with ITS text?]  HTTP 422 otherwise
@@ -87,12 +93,38 @@ is paid), and this service's rate limit is only a learning-grade one (see
 "Honest limits"). That is the same reason every earlier day gated live
 calls behind `--generate`.
 
+**The service token (Day 28).** The portfolio's chat will not call this API
+from the browser. A small server on the portfolio's own origin (the "BFF",
+backend for frontend) calls it, and fixes the role to "requester". But this
+API's URL is public once deployed, and nothing stops a person from calling it
+directly with curl, skipping the BFF and its rules. CORS cannot stop that
+either: CORS is a rule BROWSERS follow, and curl is not a browser. So the
+query endpoints refuse every request that does not carry one shared secret,
+the service token, which only the BFF holds:
+
+- it authenticates a SERVICE ("this request came through the BFF"). It is not
+  a user login. It says nothing about who the visitor is, and nothing about
+  their role;
+- it is checked BEFORE everything else, the body included (see
+  `check_service_token_before_the_body_is_read`), so a refused request costs
+  no parsing, no rate-limit budget, no retrieval and no LLM call;
+- it is compared in constant time (`secrets.compare_digest`);
+- it is read once, at startup, from the process environment only
+  (`read_service_token`). Missing or blank, the server refuses to start.
+
 **Honest limits.**
 
-- The role is CALLER-ASSERTED. There is no authentication: anyone can send
-  `"role": "buyer"`. Production takes the role from a verified identity
-  (e.g. a signed token's claims), never from the request body. What IS real
-  here is the enforcement: the filter, and the tests that prove it.
+- The role is CALLER-ASSERTED. The service token proves the caller holds the
+  BFF's secret, not who the person behind it is: whoever holds the token can
+  still send `"role": "buyer"`. The public BFF never does (it fixes
+  "requester"), but this API cannot tell. Production takes the role from a
+  verified USER identity (e.g. a signed token's claims), never from the
+  request body. What IS real here is the enforcement: the filter, and the
+  tests that prove it.
+- The service token is one static, shared secret. It has no expiry, no
+  scopes, and no per-caller identity, and rotating it means changing both
+  ends (the BFF and this API) together, by hand. A leaked token works until
+  it is rotated.
 - Authorization is a POST-filter. Retrieval ranks every chunk and the filter
   then drops the ones this role may not see. So a requester's context can be
   smaller than `top_k`, and the ranking work for confidential chunks is
@@ -149,15 +181,28 @@ calls behind `--generate`.
 
 **Running it locally** (bound to 127.0.0.1: reachable from this machine only).
 The server answers once Uvicorn prints "Application startup complete", i.e.
-after the models have loaded (about 12 s on 2026-10-14):
+after the models have loaded (about 12 s on 2026-10-14).
+
+First, make a local service token and keep it in this shell only (never in
+a file inside the repository, never in a commit). Every client of the query
+endpoints (curl, the portfolio BFF) must send the same value:
+
+    export PROCURERAG_SERVICE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+Then start the server from that same shell:
 
     # retrieval only, no LLM (free)
-    LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \\
+    PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \\
         ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
 
     # with the live LLM (paid: one OpenRouter call per complete-evidence request)
     PROCURERAG_LIVE_LLM=1 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \\
         ./.venv/bin/python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+
+    # a query, from the same shell (the header carries the token)
+    curl -sS -X POST http://127.0.0.1:8000/query \\
+        -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \\
+        -d '{"query": "What does GRNI mean?", "role": "requester", "query_id": "Q090"}'
 
 If `.env` already has `PROCURERAG_LIVE_LLM="1"`, the first command ALSO
 calls the live LLM, because the file is the fallback for the switch. For a
@@ -178,12 +223,15 @@ switch `PROCURERAG_LIVE_LLM` and (when the switch is on)
 `OPENROUTER_API_KEY`, each only if the environment does not already have it
 (`read_setting`). LangSmith therefore stays off unless your shell itself
 exports the `LANGSMITH_*` variables. The two `=false` settings above make
-sure of that.
+sure of that. Two settings come from the process environment ONLY, never
+from `.env`: `PROCURERAG_SERVICE_TOKEN` (see `read_service_token`) and the
+public output cap `PROCURERAG_MAX_ANSWER_TOKENS` (see `read_max_answer_tokens`).
 """
 
 import math
 import os
 import re
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -195,7 +243,9 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from dotenv import dotenv_values
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field, model_validator
 
@@ -209,7 +259,7 @@ from agent_guardrails import (
     may_pause_for_approval,
 )
 from agent_observability import STATUS_GAP_REPORT, ContractModel, ReviewerDecision
-from generation import GeneratedAnswer, make_openrouter_client
+from generation import MAX_ANSWER_TOKENS, GeneratedAnswer, make_openrouter_client
 
 APP_TITLE = "ProcureRAG API"
 APP_VERSION = "0.1.0"  # the `[project] version` in pyproject.toml: change the two together
@@ -678,6 +728,46 @@ def live_llm_enabled():
     return read_setting(LIVE_LLM_ENV_VAR) == "1"
 
 
+# The public deployment's output cap (Day 28, ADR §8.3). Every answer token
+# costs money, and the output price per token is several times the input
+# price, so the output cap is the biggest lever on the WORST-CASE cost of one
+# request, the number the global daily cap is computed from.
+#
+# The code default (`generation.MAX_ANSWER_TOKENS`, 3000) stays as it is for
+# local evaluation runs. A public deployment sets a lower cap through this
+# environment variable (Day 28's worksheet: 800). Why 800 is enough: the
+# longest live answer recorded so far is 1,613 characters (Q092, a 19-source
+# context the public demo never builds), roughly 400 tokens of English.
+#
+# What a too-small cap does: the model's JSON answer is cut off, the
+# structured-output check fails, and the request ends in HTTP 500 (see "An
+# LLM failure is an HTTP 500" in the module docstring). Never a half answer.
+MAX_ANSWER_TOKENS_ENV_VAR = "PROCURERAG_MAX_ANSWER_TOKENS"
+
+
+def read_max_answer_tokens():
+    """The output cap for the live LLM: the environment's value if set, else the code default.
+
+    From the process environment only, never `.env`: like the service token,
+    it is a deployment setting, and a container platform sets it on the
+    container.
+
+    Fail closed: a value that is not a whole number between 1 and the code
+    default raises `RuntimeError` at startup. A typo (`80O`, `8000`) must
+    stop the server, not silently fall back to 3000 tokens or raise the cost
+    above what the daily cap was computed for.
+    """
+    raw = os.environ.get(MAX_ANSWER_TOKENS_ENV_VAR)
+    if raw is None:
+        return MAX_ANSWER_TOKENS
+    # `isdecimal` (not `isdigit`): "²" is a digit to Python, but `int("²")` raises.
+    if not raw.strip().isdecimal() or not 1 <= int(raw) <= MAX_ANSWER_TOKENS:
+        raise RuntimeError(
+            f"{MAX_ANSWER_TOKENS_ENV_VAR} must be a whole number from 1 to {MAX_ANSWER_TOKENS}, got {raw!r}"
+        )
+    return int(raw)
+
+
 def make_llm_client():
     """The structured LLM client the served app uses, or None when the live LLM is off.
 
@@ -685,8 +775,9 @@ def make_llm_client():
     `make_openrouter_client(response_model=GeneratedAnswer)`. The provider is
     asked for JSON in the `GeneratedAnswer` schema, and
     `structured_generate_node` validates it again. Same model
-    (`OPENROUTER_MODEL`, else `openai/gpt-4o`), same 60 s timeout, same
-    `MAX_ANSWER_TOKENS` budget as every `--generate` run.
+    (`OPENROUTER_MODEL`, else `openai/gpt-4o`) and same 60 s timeout as every
+    `--generate` run. The output cap is `MAX_ANSWER_TOKENS` unless the public
+    deployment sets a lower one (`read_max_answer_tokens`).
 
     The switch and the API key both come from `read_setting`: the process
     environment first, otherwise the local `.env` file. This server takes
@@ -702,7 +793,11 @@ def make_llm_client():
     if not live_llm_enabled():
         return None
 
-    return make_openrouter_client(api_key=read_setting("OPENROUTER_API_KEY"), response_model=GeneratedAnswer)
+    return make_openrouter_client(
+        api_key=read_setting("OPENROUTER_API_KEY"),
+        response_model=GeneratedAnswer,
+        max_tokens=read_max_answer_tokens(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +873,130 @@ class SlidingWindowRateLimiter:
                 return recent[0] + self.window_seconds - now
             recent.append(now)
             return None
+
+
+# ---------------------------------------------------------------------------
+# The service token (Day 28): only the portfolio BFF may call the query
+# endpoints.
+#
+# Three separate questions, and this section answers only the first:
+#
+#   service authentication  "did this request come through my BFF?"   the token, here
+#   role authorization      "which document labels may it see?"       ROLE_CLEARANCE
+#   visitor identity        "which person is asking?"                 NOT implemented
+#
+# The header is the standard HTTP one for a bearer credential:
+#
+#   Authorization: Bearer <token>
+#
+# "Bearer" means: whoever holds (bears) this value is let in. There is no
+# signature and no user behind it. That is why the value must stay secret,
+# and why it lives only in two server-side places: the BFF's environment and
+# this API's environment.
+# ---------------------------------------------------------------------------
+
+SERVICE_TOKEN_ENV_VAR = "PROCURERAG_SERVICE_TOKEN"
+
+# The routes that need the token. `/health` is deliberately not here: a
+# container platform probes it without any credential (Day 22/23), and it
+# returns no data and never calls a provider.
+PROTECTED_PATHS = frozenset({"/query", "/query/stream"})
+
+# The one refusal text for every bad credential: missing, malformed, blank,
+# or wrong. The same text for all four on purpose, so a caller who is
+# guessing learns nothing about how close a guess was. It never repeats the
+# value the caller sent.
+UNAUTHENTICATED_DETAIL = "missing or invalid service credential: send 'Authorization: Bearer <service token>'"
+
+# FastAPI's security helper for this header. It does two things:
+#
+# 1. PARSING: `await service_token_scheme(request)` reads the `Authorization`
+#    header and splits it into a scheme ("Bearer") and the credential after
+#    it, as `HTTPAuthorizationCredentials(scheme=..., credentials=...)`.
+# 2. DOCUMENTATION: used as a dependency, it puts a "Bearer" security scheme
+#    in the OpenAPI schema, so /docs shows a lock on the protected routes.
+#
+# What it does NOT do: check the value. It cannot know which token is right.
+# That comparison is this application's job (`service_token_matches`).
+#
+# `auto_error=False`: when the header is missing, or its scheme is not
+# "Bearer", the helper returns None instead of raising its own error. This
+# module then answers every bad credential in ONE place, with one status
+# (401), one text, and the `WWW-Authenticate: Bearer` header.
+#
+# `scheme_name` is the name OpenAPI shows for this scheme.
+service_token_scheme = HTTPBearer(
+    auto_error=False,
+    scheme_name="ServiceToken",
+    description=(
+        "The portfolio BFF's service credential. It proves a request came through the BFF; "
+        "it is not a user login and carries no role."
+    ),
+)
+
+
+def read_service_token():
+    """The service token this server accepts, read ONCE, at startup. Raises `RuntimeError` if missing or blank.
+
+    Fail closed, at startup (the lifespan calls this before anything else):
+
+    - a server with no token must never answer a query. The alternatives are
+      worse: accepting every request ("no token configured, so no check")
+      silently turns the protection off, and starting anyway would leave a
+      server whose `/health` says "ok" while every query is refused;
+    - refusing to START makes the mistake loud: Uvicorn exits, `/health`
+      never answers, and a container platform reports the revision as
+      failed. The same pattern as the missing OpenRouter key
+      (`make_llm_client`), and it fails in milliseconds, before the models
+      load.
+
+    "Blank" includes whitespace only: a value like " " is a copy-paste
+    accident, not a secret.
+
+    Read from the process ENVIRONMENT only, never `.env`. On a platform the
+    token is a secret injected as an environment variable. Locally it is
+    exported in the shell for one session (see "Running it locally"), so it
+    never sits in a file inside the repository.
+
+    The error names the variable, never a value.
+    """
+    token = os.environ.get(SERVICE_TOKEN_ENV_VAR, "")
+    if not token.strip():
+        raise RuntimeError(
+            f"{SERVICE_TOKEN_ENV_VAR} is not set (or is blank). The query endpoints need it, so the server will not "
+            "start without it. Export a long random value, e.g. "
+            "python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+        )
+    return token
+
+
+def service_token_matches(credentials, expected_token):
+    """True only if the request carried a Bearer credential equal to `expected_token`.
+
+    `credentials` is what `service_token_scheme` parsed (None when the header
+    was missing or not "Bearer"). `expected_token` is what startup read (None
+    when no startup ran, e.g. in a test that skipped the lifespan).
+
+    Fail closed: no credential, or no configured token, is always False. In
+    particular "nothing configured" never matches "nothing sent".
+
+    Why `secrets.compare_digest` and not `==`. Python's `==` on two strings
+    stops at the FIRST character that differs. A wrong guess that shares the
+    first 10 characters with the real token is therefore answered a tiny bit
+    later than one that shares none. Measured over many requests, that time
+    difference can leak the token one character at a time (a "timing
+    attack"). `compare_digest` takes the same time wherever the first
+    difference is. (It can still reveal whether the LENGTHS differ, which is
+    why the token is long and random.)
+
+    Why both sides are encoded to bytes first: `compare_digest` on two `str`
+    raises `TypeError` if either one holds a non-ASCII character. A caller
+    who sends `Bearer café` would then get an HTTP 500 instead of a 401.
+    Bytes always compare.
+    """
+    if credentials is None or expected_token is None:
+        return False
+    return secrets.compare_digest(credentials.credentials.encode("utf-8"), expected_token.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -905,11 +1124,20 @@ async def lifespan(app):
     event loop while it runs, which is harmless here: nothing is being served
     yet.
 
+    The service token is read FIRST: without one, startup stops in
+    milliseconds, before the LLM client is built and before 12 s of model
+    loading (`read_service_token`).
+
     In tests, `TestClient(app)` WITHOUT a `with` block never runs the
     lifespan, so no model is loaded, and most tests replace `get_service`
-    instead. The startup tests do use `with`, after replacing
-    `load_live_pipeline` with a fake.
+    instead (and set `app.state.service_token` themselves). The startup
+    tests do use `with`, after replacing `load_live_pipeline` with a fake.
+
+    The MCP server (`src/mcp_server.py`) never runs this lifespan: it builds
+    the same service directly and serves it over stdio, a local pipe with no
+    network listener, so it needs no service token.
     """
+    app.state.service_token = read_service_token()
     app.state.service = build_live_service()
     yield
 
@@ -920,6 +1148,43 @@ app = FastAPI(
     description="A typed, guarded HTTP boundary around the ProcureRAG agent graph (Day 21).",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def check_service_token_before_the_body_is_read(request: Request, call_next):
+    """Middleware: refuse a protected request with a bad credential before FastAPI reads its body.
+
+    Why a middleware, when `require_service_token` (below) is already a
+    dependency of the protected routes. FastAPI reads the whole request body
+    and decodes its JSON BEFORE it runs any dependency. Measured on Day 28
+    (FastAPI 0.143.1): with the token check as a dependency only, a request
+    with no token and a malformed JSON body got 422 ("invalid JSON"), and
+    the token check never ran. So an unauthenticated caller could make this
+    server read and parse a body of any size, and learn how it validates
+    input. A middleware runs earlier: it wraps the whole app, so it sees the
+    request when only the headers have arrived.
+
+    `call_next(request)` hands the request on to the rest of the app
+    (routing, body parsing, dependencies, the endpoint). Returning a
+    response instead ends the request right here.
+
+    The two checks use the same parser and the same comparison, so they
+    cannot disagree. The dependency still matters: it ties the rule to the
+    routes themselves, and it is what puts the lock in the OpenAPI schema.
+    A test checks that this path set and the routes that declare the
+    dependency are the same.
+
+    401 is HTTP's "you did not prove who you are". The `WWW-Authenticate:
+    Bearer` header is part of a 401 by definition: it names the scheme the
+    caller should use.
+    """
+    if request.url.path in PROTECTED_PATHS:
+        credentials = await service_token_scheme(request)
+        if not service_token_matches(credentials, getattr(request.app.state, "service_token", None)):
+            return JSONResponse(
+                status_code=401, content={"detail": UNAUTHENTICATED_DETAIL}, headers={"WWW-Authenticate": "Bearer"}
+            )
+    return await call_next(request)
 
 
 def get_service(request: Request):
@@ -937,6 +1202,30 @@ def get_service(request: Request):
 ServiceDep = Annotated[ProcureRAGService, Depends(get_service)]
 
 
+def require_service_token(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(service_token_scheme)],
+):
+    """Dependency: HTTP 401 unless the request carries the service token.
+
+    By the time this runs, `check_service_token_before_the_body_is_read` has
+    already refused every bad credential, so on a working server it never
+    refuses anything. It is here for two reasons:
+
+    - the rule belongs to the ROUTE. If the middleware's path set ever missed
+      a protected route, this check would still refuse;
+    - `Security(service_token_scheme)` is how FastAPI learns that this route
+      needs a Bearer credential, so the OpenAPI schema (and /docs) can say so.
+      (`Security` is `Depends` for security helpers: same mechanism, plus the
+      OpenAPI declaration.)
+
+    It is FIRST in each protected route's `dependencies`, so it also runs
+    before the rate limit and before the body's own checks.
+    """
+    if not service_token_matches(credentials, getattr(request.app.state, "service_token", None)):
+        raise HTTPException(status_code=401, detail=UNAUTHENTICATED_DETAIL, headers={"WWW-Authenticate": "Bearer"})
+
+
 def enforce_rate_limit(request: Request, service: ServiceDep):
     """Dependency: HTTP 429 when this client has used up its requests for now.
 
@@ -950,9 +1239,13 @@ def enforce_rate_limit(request: Request, service: ServiceDep):
     And, like `check_query_request`, it runs before a stream starts, so
     `/query/stream` can still answer 429.
 
+    It runs AFTER the service-token check (Day 28), so a request with a bad
+    credential is refused with 401 and never counts against any budget.
+
     "Client" here means the network address the request came from
-    (`request.client.host`). There is no authenticated identity to count by
-    (see "Honest limits"). `Retry-After` is the standard HTTP header that
+    (`request.client.host`). The service token says which SERVICE called,
+    not which visitor (see "Honest limits"), so there is still no per-person
+    identity to count by. `Retry-After` is the standard HTTP header that
     tells a client how long to wait. It takes whole seconds, so the wait is
     rounded UP: rounding down would invite a retry that is still too early.
     """
@@ -1265,28 +1558,38 @@ def health(request: Request) -> HealthResponse:
     client, so the answer is False.
 
     It is also never rate-limited: it has no `enforce_rate_limit`
-    dependency (see `RATE_LIMIT_MAX_REQUESTS` for why).
+    dependency (see `RATE_LIMIT_MAX_REQUESTS` for why). And it needs no
+    service token: it is not in `PROTECTED_PATHS`, and it has no
+    `require_service_token` dependency, because a platform's health probe
+    carries no credential and this route returns no data.
     """
     service = getattr(request.app.state, "service", None)
     live_llm = service is not None and service.client is not None
     return HealthResponse(status="ok", app=APP_TITLE, version=APP_VERSION, live_llm=live_llm)
 
 
-@app.post("/query", dependencies=[Depends(enforce_rate_limit)])
+# The dependencies run in list order, and each one can end the request: the
+# service token first (401), then the rate limit (429). Only then does
+# FastAPI validate the body's fields (`CheckedQuery`, 422).
+PROTECTED_ROUTE_DEPENDENCIES = [Depends(require_service_token), Depends(enforce_rate_limit)]
+
+
+@app.post("/query", dependencies=PROTECTED_ROUTE_DEPENDENCIES)
 def query(body: CheckedQuery, service: ServiceDep) -> QueryResponse:
     """Answer one question with one JSON `QueryResponse`.
 
-    By the time this line runs, FastAPI has already checked the rate limit
-    (or answered 429), validated `body` and checked its `query_id` (or
-    answered 422), and has the service ready. It runs the same events as the
-    stream, and keeps only the last one, the result.
+    By the time this line runs, FastAPI has already checked the service token
+    (or answered 401), checked the rate limit (or answered 429), validated
+    `body` and checked its `query_id` (or answered 422), and has the service
+    ready. It runs the same events as the stream, and keeps only the last
+    one, the result.
     """
     events = list(run_query_events(service, body))
     _, response = events[-1]  # always ("result", QueryResponse)
     return response
 
 
-@app.post("/query/stream", response_class=EventSourceResponse, dependencies=[Depends(enforce_rate_limit)])
+@app.post("/query/stream", response_class=EventSourceResponse, dependencies=PROTECTED_ROUTE_DEPENDENCIES)
 def query_stream(body: CheckedQuery, service: ServiceDep) -> Iterator[ServerSentEvent]:
     """The same request, answered as Server-Sent Events (SSE).
 

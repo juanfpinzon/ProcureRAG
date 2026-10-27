@@ -9265,3 +9265,1015 @@ Hermes re-reviewed portfolio `530dfe4` and ProcureRAG `5c25922`.
 7. ~~Give the three-minute walkthrough without notes.~~ Done: 3–4 minutes, no notes. Weakest answer #11, with a practice plan above.
 8. ~~Send the review prompt to Hermes.~~ Sent. Round 1 returned 2 findings, both fixed in portfolio `530dfe4` and ProcureRAG `5c25922`. Round 2 on those commits: technical gates passed, and its one finding (stale "pending" lines) is fixed in this log. **Remaining (Juan):** commit and push this reconciliation. HER-295 can then move to Done unless Hermes asks for another round.
 9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
+
+## 2026-10-27 — Day 28: Guarded HTTP procurement chat over the real ProcureRAG service
+
+Route: [`docs/day-28-guarded-http-chat.md`](day-28-guarded-http-chat.md)
+
+Linear: HER-296 — Day 28 loop: guarded HTTP procurement chat over the real ProcureRAG service.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns every Python, test, TypeScript, React, CSS, lockfile, secret, account, provider, deployment, and spending change. Hermes created only the route and this evidence scaffold, then reviews and quizzes. Day 28 is a **local** secured vertical slice; Azure/Vercel provisioning, persistent quota, the runtime kill switch, public launch, and cutover stay on Days 29–30.
+
+### Day 27 prerequisite
+
+- HER-295: **Done**.
+- Final accepted portfolio head: `day-27-preview` @ `530dfe41a51144cd1c01405884993bd84bca6728`.
+- Final accepted ProcureRAG Day 27 head: `day-27` @ `94f25f5`, merged to `main` as `dd8d098`.
+- Day 27's static preview does not make a request and still says `Live demo: in progress`.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Required sources and exact targets:
+
+- accepted portfolio architecture ADR §§3, 6, 7, 8.1–8.4, 10 and 11;
+- `scripts/portfolio_contract_probe.py`, full file, especially the browser/upstream/browser-view models, handler ordering, nineteen scenarios, and two contract checks;
+- Next.js `Route Handlers`: file convention, supported methods, request body, runtime/caching and CORS;
+- Next.js `Environment Variables`: loading, browser bundling via `NEXT_PUBLIC_`, runtime variables and test variables;
+- FastAPI `Security Tools`: `HTTPBearer`, `HTTPAuthorizationCredentials` and `auto_error`;
+- Python `secrets.compare_digest`;
+- OpenRouter authentication, API credit/rate limits, and provider logging/privacy;
+- Vercel Functions duration, region selection, and current Hobby terms.
+
+Record one applied decision or rejection per source before implementation:
+
+- [x] Accepted ADR read; applied/rejected decision recorded.
+  - Applied: §6 and §8.1–8.4 exactly (2 KB raw cap, fixed `requester`, exact-preset `query_id`, Bearer token checked before the rate limit, 75/100/105 s timeouts). Kept §8.6's kill switch as an injected, tested BFF branch whose storage stays a Day 29 decision, and added nothing to §8.3's quota.
+- [x] Contract probe read; applied/rejected decision recorded.
+  - Applied: `handle_browser_request`'s order and all scenarios are ported 1:1 to `lib/chat/bff.ts` and `tests/chat-bff.spec.ts`. One scenario added on both sides: "service token refused → API 401 → 503 unavailable", because the real API can now produce that row. The probe is 20 scenarios plus 2 contract checks.
+  - Rejected for TypeScript: the probe's "blank" means only empty (Pydantic `min_length=1`). The BFF also refuses whitespace-only questions with 422, as the Day 28 route asks.
+- [x] Next.js Route Handlers read; applied/rejected decision recorded (version-matched docs in `node_modules/next/dist/docs`, Next.js 16.4.3).
+  - Applied: `app/api/chat/route.ts` exports only `POST` (any other method is 405), plus `runtime = "nodejs"` and `maxDuration = 100`. A non-GET handler is never cached or prerendered (the build lists `ƒ /api/chat`).
+  - Rejected: the CORS example. The browser calls the same origin, so no CORS header is set, and the route requires `Content-Type: application/json`, so a cross-site page cannot send a preflight-free "simple" POST.
+- [x] Next.js environment-variable guide read; applied/rejected decision recorded.
+  - Applied: `PROCURERAG_API_URL` and `PROCURERAG_SERVICE_TOKEN` have no `NEXT_PUBLIC_` prefix and are read at request time inside the POST handler. So one build serves any environment, and the values never get inlined into browser JavaScript.
+  - Rejected: `.env*` files and `@next/env` for tests. Playwright passes the settings to `next start` through `webServer.env` (a dead port plus a placeholder token).
+- [x] FastAPI security reference read; applied/rejected decision recorded.
+  - Applied: `HTTPBearer(auto_error=False, scheme_name="ServiceToken")` parses the header and declares the OpenAPI scheme. The application compares the value itself.
+  - Rejected: `auto_error=True` (installed 0.143.1 raises its own 401 "Not authenticated"), so that every bad credential gets one 401 text from one place.
+  - Measured and corrected the route's assumption: FastAPI reads and JSON-decodes the body **before** it solves any dependency (`routing.py` lines 446–464, then 499). A dependency alone answered 422 to "no token + malformed JSON", so a middleware now checks the token before the body is read.
+- [x] `secrets.compare_digest` reference read; applied/rejected decision recorded.
+  - Applied: constant-time comparison on **bytes** (`.encode("utf-8")` on both sides). On `str`, a non-ASCII value raises `TypeError: comparing strings with non-ASCII characters is not supported` (measured), which would turn `Bearer café` into a 500. Different lengths can still be inferred, so the token is a long random `secrets.token_urlsafe(32)`.
+- [x] OpenRouter auth/limits/privacy sources read; applied/rejected decision recorded (checked 2026-10-27).
+  - Applied: per-key credit limits exist (`GET https://openrouter.ai/api/v1/key` returns `limit`, `limit_remaining`, `limit_reset`; an exhausted key gets 402 with `limit_source: "openrouter_key_limit"`), and OpenRouter recommends a limit on every key.
+  - Privacy: OpenRouter stores no prompts unless "prompt logging" is opted into. `provider.data_collection: "deny"` and `provider.zdr: true` exist per request, and the same controls exist account-wide at `openrouter.ai/settings/privacy`.
+  - Not applied today: no request settings change before Day 29 (see the worksheet).
+- [x] Vercel duration/region/Hobby terms read; applied/rejected decision recorded (read-only; no account was linked).
+  - Hobby duration is 300 s default and maximum (page updated 2026-08-24), so `maxDuration = 100` fits.
+  - Hobby gets a single function region, default `iad1`, changeable in project settings or `vercel.json` `regions`. `dub1` is listed (`eu-west-1`, Dublin; updated 2026-08-11).
+  - Hobby is "non-commercial personal use only" (fair-use guidelines, updated 2026-09-14). The listed commercial examples (payments, ads, being paid to build or host the site) do not describe this portfolio. Juan confirms the fit on Day 29 before linking the repository.
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-27:
+
+```text
+ProcureRAG branch: day-28
+ProcureRAG base/head: main @ dd8d0984a5e9cf75bb94d0fd5ff8eca0967a0e2d
+ProcureRAG origin/main divergence before branch: 0/0
+ProcureRAG working tree before scaffold: clean
+portfolio accepted branch/head: origin/day-27-preview @ 530dfe41a51144cd1c01405884993bd84bca6728
+portfolio audit-clone divergence: 0/0
+portfolio audit-clone working tree before npm install/build: clean
+Python: 3.11.15
+uv: 0.11.11
+Node: 22.22.2
+npm: 10.9.7
+```
+
+All ProcureRAG commands used `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1`, and `OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev: exit 0, 154 packages resolved, 146 checked
+uv lock --check: exit 0
+pytest: exit 0, 452 passed in 3.55s
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 as expected
+current retrieval verification: exit 0, 6/6 [OK]
+graph regression: exit 0, 6/6 contracts, 4 stand-in LLM calls
+no-paid portfolio contract probe: exit 0, 19/19 scenarios + 2/2 contract checks, 0 failures
+git diff --check: exit 0
+```
+
+No live provider call or trace upload ran. Q091 remains red for live-answer completeness and retains the deterministic `Band 3` term-level gap.
+
+Portfolio baseline, run from a fresh clone of `origin/day-27-preview`:
+
+```text
+npm ci: exit 0, 354 packages added, 0 vulnerabilities
+typecheck: exit 0
+lint: exit 0
+production build: exit 0; /, /about, /procurerag and /icon.svg are static
+Playwright: exit 0, 67 passed in 26.5s
+git diff --check: exit 0
+```
+
+### Current truth before implementation
+
+- ProcureRAG exposes unauthenticated `GET /health`, `POST /query`, and `POST /query/stream`.
+- `src/api.py` has no `PROCURERAG_SERVICE_TOKEN` setting/dependency and no CORS middleware.
+- The accepted architecture requires a dedicated Bearer service token on both query routes, checked before rate limiting, request validation, retrieval, or generation; `/health` stays open.
+- The portfolio has no BFF, route handler, chat Client Component, server credential, or `.env*` file.
+- The Day 27 demo section is intentionally static.
+- Approved presets remain exactly Q001, Q005, Q021 and Q090. Q091 and Q092 remain withheld.
+- Nothing is deployed. Legacy `master`/Pages is outside Day 28's mutation boundary.
+
+### Day 28 contract
+
+Browser → BFF:
+
+- body: exactly `{ "question": string }`, no extra key;
+- question: 1–500 characters;
+- raw body: at most 2,048 bytes, enforced while reading before parsing;
+- same-origin `POST /api/chat`; no browser-held secret and no direct browser→FastAPI request.
+
+BFF → FastAPI:
+
+- fixed role `requester`;
+- `query_id` only for exact approved preset text;
+- no `decision`;
+- one call, no automatic retry;
+- `Authorization: Bearer <service-token>` from a server-only setting;
+- 75 s upstream timeout and 100 s route `maxDuration`, unless an evidence-backed change is recorded.
+
+FastAPI → BFF → browser:
+
+- validate the complete `QueryResponse` at runtime, then reduce it;
+- preserve all six API states and the four transport states;
+- expose IDs-only sources plus `cited`;
+- drop `run_id`, `approval_request`, guard detail text, raw bodies and every secret;
+- `pending_approval` fails closed, with no public approval UI.
+
+### Block 0 — contract and branch discipline
+
+- [x] Create ProcureRAG `day-28` from `main` @ `dd8d098`.
+- [x] Create the portfolio implementation branch from `day-27-preview` @ `530dfe4`; suggested name `day-28-chat`.
+- [x] Record fetch/status/divergence evidence for both repositories.
+- [x] Complete the source checkpoint and applied-decision notes.
+- [x] Draw and explain the browser→BFF and BFF→API trust boundaries.
+- [x] Confirm `master`/Pages remains untouched.
+
+Branch evidence (after `git fetch`, before any commit):
+
+```text
+ProcureRAG day-28 @ 28262d3 (the Day 28 scaffold commit); merge-base with origin/main = dd8d098 = origin/main; origin/day-28...HEAD 0/0
+portfolio day-28-chat @ 2209393; origin/day-28-chat...HEAD 0/0
+  2209393 = "Merge pull request #1 from juanfpinzon/day-27-preview" (parents 76c719e, 530dfe4), on 0ct26-overhaul
+  git diff 530dfe4 HEAD: 0 lines, so the tree is exactly the accepted day-27-preview head
+portfolio origin/master @ 7526f0c "remove thumbnail image": untouched, Pages still serves legacy Jekyll
+```
+
+Reconciled drift: `day-28-chat` starts from the PR #1 merge commit rather than from `530dfe4` itself. Its tree is identical, so no reconciliation was needed. The ADR, the probe and the API contract had not drifted since kickoff.
+
+Two runtime trust boundaries:
+
+```text
+            TRUST BOUNDARY 1: anything can arrive here (the browser, curl, a script)
+browser ────────────────────────────────────────────────────────────────────────┐
+  POST /api/chat  {"question": "..."}      no credential; same origin, so no CORS │
+                                                                                 ▼
+Next.js BFF (server only)  kill switch → config → JSON content type → ≤2,048 raw bytes
+                           → exactly {"question": 1–500 chars} → role fixed "requester"
+                           → query_id only for an exact preset text → never a decision
+            TRUST BOUNDARY 2: the public API URL is reachable by anyone, BFF or not
+  POST {PROCURERAG_API_URL}/query   Authorization: Bearer <PROCURERAG_SERVICE_TOKEN>
+                                                                                 ▼
+FastAPI   token (middleware, before the body is read) → rate limit → schema → query_id
+          → input/scope guards → approval boundary → role filter → graph → typed status
+  QueryResponse ──▶ BFF validates the whole shape at runtime ──▶ BrowserView (7 fields)
+```
+
+Three different questions:
+
+| Question | Mechanism | Day 28 status |
+|---|---|---|
+| Service authentication: "did this request come through my BFF?" | one shared Bearer token, constant-time compare | built |
+| Role authorization: "which document labels may this request see?" | `ROLE_CLEARANCE`; the BFF always sends `requester` | built (Day 21); the API still trusts the role its one authenticated caller states |
+| Visitor identity: "which person is asking?" | none | **not implemented**; the demo is anonymous |
+
+### Block 1 — ProcureRAG service-token boundary
+
+- [x] Protect `/query` and `/query/stream` with the dedicated service token.
+- [x] Keep `/health` unauthenticated and provider-free.
+- [x] Use constant-time comparison.
+- [x] Fail closed when the configured token is missing/blank; record whether at startup or request time and why.
+- [x] Prove missing, malformed, blank and wrong credentials return 401.
+- [x] Prove auth wins over malformed-body validation and rate limiting.
+- [x] Prove refused credentials make zero retrieval and LLM calls and consume no rate-limit budget.
+- [x] Prove correct credentials preserve the existing response states.
+- [x] Verify OpenAPI marks only the protected routes with Bearer authentication.
+- [x] Reconcile every API/runbook/probe instruction made false by authentication.
+
+What was built (`src/api.py`):
+
+- `PROCURERAG_SERVICE_TOKEN` is read once, at **startup**, from the process environment only, never from `.env` (`read_service_token`). It is the first line of the lifespan.
+  - Missing, empty or whitespace-only raises `RuntimeError` naming the variable, before the LLM client and the models load. Uvicorn exits, so `/health` never goes green.
+  - Why startup and not request time: a server that cannot answer a query must not look healthy, and this is the same fail-fast pattern as the missing OpenRouter key.
+  - The MCP server never runs this lifespan (stdio, no listener), so it needs no token.
+- `service_token_scheme = HTTPBearer(auto_error=False, scheme_name="ServiceToken")` parses the header. `service_token_matches` compares with `secrets.compare_digest` on UTF-8 bytes, and returns False whenever no credential or no configured token exists.
+- Two checks, one function:
+  - the **middleware** `check_service_token_before_the_body_is_read` refuses `/query` and `/query/stream` before FastAPI reads the body;
+  - the **route dependency** `require_service_token` comes first in `PROTECTED_ROUTE_DEPENDENCIES`, before `enforce_rate_limit`. It ties the rule to the routes and declares the OpenAPI lock.
+  - A test proves the middleware's path set equals the routes that declare the dependency.
+- Every bad credential gets the same 401, `{"detail": UNAUTHENTICATED_DETAIL}`, with `WWW-Authenticate: Bearer`. The detail never echoes a value.
+
+Measured finding that changed the design: with the token check only as a route dependency, `no token + malformed JSON` returned **422** and the auth dependency never ran (FastAPI 0.143.1 reads and decodes the body before it solves dependencies). With the middleware, it returns 401.
+
+Focused tests (`tests/test_api.py`, plus the probe, MCP, generation and container-smoke suites):
+
+- 6 bad credentials × 2 paths: no header, `Basic`, `Bearer`, `Bearer ` (blank), wrong token, and a non-ASCII token. Each is a 401 with `WWW-Authenticate: Bearer`, zero retrieval calls, zero LLM prompts, and a budget of 1 that is still free afterwards.
+- No token or a wrong token plus a cut-off JSON body is 401. The same body with the right token is 422.
+- A server with no configured token refuses every query, while `/health` stays 200.
+- Startup with an unset, empty or whitespace token raises before the models load, and a token present only in `.env` does not count.
+- A requester with the right token still gets only Internal sources.
+- OpenAPI declares `ServiceToken` (`http`/`bearer`) on both query routes and nothing on `/health`.
+- The real and wrong token values are absent from every response, header, `caplog` record and captured stdout/stderr.
+- Every pre-existing API test now sends the token through `_http(...)` (documented, `send_token=True` by default). Negative tests opt out with `send_token=False`.
+
+Mutation checks (each made at least one test fail; the file was restored byte-for-byte):
+
+```text
+M1 middleware disabled                         -> 1 failed (auth vs malformed body)
+M2 compare str instead of bytes                -> 1 failed (non-ASCII token became 500)
+M3 "no configured token" means no check        -> 1 failed
+M4 route dependency removed                    -> 1 failed (OpenAPI/path-set tie)
+M5 whitespace-only token accepted              -> 1 failed
+M6 token read through read_setting (.env)      -> 1 failed
+M7 401 detail echoes the sent Authorization    -> 1 failed
+```
+
+Documents reconciled (only those whose instructions became false):
+
+- `src/api.py` docstring: endpoints, request order, "The service token", "Honest limits", running locally.
+- README: "Run the API", API surface, "No user authentication".
+- `docs/docker-runbook.md`: config table, runs 4/offline/paid, the 1b refusal probe, token headers.
+- `docs/test-queries.md`.
+- `docs/azure-container-apps-runbook.md`: a banner saying its historical commands predate the token, and what Day 29 must change.
+- Dockerfile secret comment.
+- `scripts/portfolio_contract_probe.py`: sends a per-run random token; new 401 scenario.
+- `scripts/container_smoke.py`:
+  - image mode makes a per-run token and passes it with `--env NAME` (value never on the command line);
+  - new "query without the service token → 401" probe;
+  - URL mode requires the deployment's token in the environment.
+
+Public output cap (ADR §8.3, for the paid-smoke gate): `PROCURERAG_MAX_ANSWER_TOKENS`, environment only, read when the live client is built. It must be a whole number from 1 to 3000, or startup fails. The code default stays 3000 for evaluation runs. `generation.make_openrouter_client(max_tokens=...)` sends it, and a recorded fake SDK proves the value reaches the request.
+
+### Block 2 — typed same-origin BFF
+
+- [x] Server-only `PROCURERAG_API_URL` and `PROCURERAG_SERVICE_TOKEN`; neither uses `NEXT_PUBLIC_`.
+- [x] Raw-body limit enforced before parsing and without trusting `Content-Length` alone.
+- [x] Exact browser schema; every extra field rejected before upstream.
+- [x] Fixed requester role and exact-preset mapping.
+- [x] Runtime upstream-response validation; compile-time types alone do not count.
+- [x] Exact ADR status/HTTP mapping.
+- [x] One upstream call and no automatic retry.
+- [x] Date-form/malformed `Retry-After` dropped safely.
+- [x] Missing configuration, malformed 200, upstream 401/500, network failure and kill switch map to `unavailable`.
+- [x] Port all nineteen probe scenarios and both contract checks to the TypeScript implementation (twenty: the 401 scenario was added on both sides).
+- [x] Mutation-check the role, extra-key, runtime-validation, hidden-field and secret-boundary assertions.
+
+Portfolio files (branch `day-28-chat`, committed as `51b5270`):
+
+| File | Role |
+|---|---|
+| `lib/chat/contract.ts` | Neutral contract shared by browser and server. 500-character and 2,048-byte caps, ten states, fixed messages, `transportView`. `countCharacters` counts code points like Python's `len()`, not UTF-16 units. `presetIdFor` does exact-text preset lookup |
+| `lib/chat/bff.ts` | Pure BFF logic, reads no environment. `readBodyWithLimit` checks `Content-Length` first, then counts while streaming and cancels past 2,048. Then `parseBrowserQuestion`, `buildUpstreamRequest`, the hand-written runtime validator `validateQueryResponse` (exact keys, closed vocabularies, UUID, the approval-request invariant), `toBrowserView` (fields copied by name), `parseRetryAfter`, and `handleChatRequest` (kill switch → config → JSON content type → 413 → 422 → one `fetch` with a 75 s `AbortSignal.timeout` and `redirect: "error"` → ADR mapping) |
+| `app/api/chat/route.ts` | `import "server-only"`, `runtime = "nodejs"`, `maxDuration = 100`. Reads both settings per request; the URL must be `https://`, or `http://` only on localhost/127.0.0.1. One JSON log line per request (state, status, latency, preset id or `free_text`), never the question, a body or the token |
+
+The validation library decision (Juan, 2026-10-27): a hand-written type guard, no new dependency and no lockfile change.
+
+Tests:
+
+- `tests/chat-bff.spec.ts` runs the real handler with a fake `fetch`, no browser: all 20 scenarios, plus the per-request upstream contract (URL, method, `Bearer`, JSON, `redirect: "error"`, signal, fixed role, no `decision`, exact `query_id`, exactly one call) and the per-response contract (7 keys, 4-key sources, fixed message, hidden API text, no token/`Bearer`/setting name/`run_id`/detail in body or headers).
+- It also covers:
+  - the parser edge cases (array, null, string, number, `{}`, a non-string question, blank, `__proto__`, invalid UTF-8);
+  - code-point counting: 500 emoji are accepted (1,000 UTF-16 units, 2,014 bytes) and 501 are refused;
+  - a non-JSON content type;
+  - a `Content-Length` of 999,999 refused without reading;
+  - a 1-byte-chunk stream with no length that stops after exactly 2,049 bytes;
+  - an exact 2,048-byte body accepted;
+  - the validator table, `Retry-After`, logs that never hold the question, token or URL, and missing configuration with the body never read.
+- `tests/chat-route.spec.ts` uses the built route over HTTP. The test server's upstream is `http://127.0.0.1:1` (nothing listens), with a placeholder token. It covers a GET 405, a valid question → real refused connection → 503 `unavailable`, escalation/broken/non-JSON bodies → 422, a padded body → 413, a **chunked body with no `Content-Length`** → 413, and the HTML, every script and an answer containing neither the placeholder token, the setting names nor the upstream URL.
+
+Mutation checks (`lib/chat/bff.ts` restored byte-for-byte after each):
+
+```text
+M1 role not fixed ("buyer")                      -> 16 failed
+M2 approval_request forwarded to the browser     ->  7 failed
+M3 extra key accepted                            ->  6 failed
+M4 runtime validation skipped                    ->  3 failed
+M5 token exposed in a response header            -> 20 failed
+M6 one automatic retry on failure                ->  2 failed
+M7 no byte cap while streaming                   ->  2 failed
+M8 a Client Component reads PROCURERAG_SERVICE_TOKEN -> build-artifacts scan fails, naming the chunk and the variable
+M9 a Client Component imports app/api/chat/route.ts  -> build fails ("You're importing a module that depends on \"server-only\"...")
+```
+
+### Block 3 — smallest chat Client Component
+
+- [x] Keep `/procurerag/page.tsx` a Server Component; add one leaf chat island.
+- [x] Labelled 1–500 character question input and four exact preset buttons.
+- [x] No role picker or approval controls.
+- [x] Distinct UI for ten result/transport states.
+- [x] IDs-only source rendering and free-text evidence caveat.
+- [x] Visible page-local history, explicitly not model memory.
+- [x] Synthetic-data, third-party-provider and no-personal/confidential-data disclosure.
+- [x] Accessible pending/result/error announcements and intentional focus management.
+- [x] 105 s browser abort and no automatic retry.
+- [x] Keyboard, focus, 320 px reflow, 400% zoom, screen-reader, reduced-motion and no-JavaScript checks. Automated parts pass (below). **Done, all good:** 400% browser zoom and a real screen reader (VoiceOver) reading the form name, the status, a result and its sources.
+- [x] Decide and record whether `/api/chat/status` is implemented today or explicitly deferred.
+
+`components/ChatPanel.tsx` is the only `"use client"` file, rendered inside the server-rendered demo section. It imports only `lib/chat/contract.ts`, `content/procurerag.ts` and `components/ExternalLink.tsx`.
+
+- Presets fill the text area (so they stay editable) and move focus to it.
+- A live hint says "example Q001: sent with its evaluation id..." or "free text: ... evidence is unchecked".
+- Enter sends and Shift+Enter adds a line.
+- Input errors are linked by `aria-describedby`, set `aria-invalid`, move focus to the box, and send nothing.
+- The button reads "Waiting for the service…" and is disabled while pending.
+- One stable `role="status"` region announces the waiting state, then "<label>. <message>".
+- Focus moves to the new result's heading (`tabIndex=-1`). History is component state only.
+- The controls sit in a `<fieldset disabled>` until React hydrates (`useSyncExternalStore`), so without JavaScript a native submit cannot put the question in the URL.
+
+`tests/chat-ui.spec.ts` (Chromium, production build, `page.route` for UI isolation) covers:
+
+- exactly 4 presets, with no Q091 or Q092;
+- a preset is an example until one edit makes it free text;
+- the request body is exactly `{question}`;
+- each of the 10 states shows its label and message, and no approve/edit/reject button ever appears;
+- answered: cited sources first, IDs only; busy: "about 40 seconds"; blocked: guard names; unavailable: repo link;
+- pending state, live region and focus; keyboard-only flow and Enter vs Shift+Enter;
+- input errors; history; 44 px targets and a focus ring;
+- 320 px with long IDs and no page overflow; no console error on a 200;
+- one **unmocked** run: browser → real `/api/chat` → refused upstream → "Demo offline".
+
+Updated Day 27 tests:
+
+- the content claims now require "The chat below is a local slice, not a hosted service." and "Do not enter personal or confidential information.";
+- the no-JS test checks the `<noscript>` text and that the presets, text box and Ask are disabled.
+
+Content honesty edits:
+
+- the limit "Roles are caller-asserted" now mentions the service token;
+- the "Not built yet" evidence now lists hosted service, quota, kill switch and URL, and says the chat, proxy and token check exist only locally;
+- the roadmap item "A secured local chat slice" was removed (built);
+- "Live demo: in progress" stays.
+
+`/api/chat/status` is **deferred to Day 29**. The ADR requires its own per-client and global limit so it cannot keep the replica warm, and that needs Day 29's persistent store. Locally there is no cold start. The chat does not pretend cold-start UX is solved: its waiting text says the service can take about a minute to wake up, and a slow answer ends in `timed_out`.
+
+Deliberate deviation from DESIGN §6: state icons are decorative (`aria-hidden`), because the visible label already names the state. An icon with its own accessible name would make screen readers say it twice.
+
+### Block 4 — local real-HTTP proof
+
+- [x] Run a separate real FastAPI process with a local token, live LLM off and tracing off.
+- [x] Run the portfolio production build with matching server-only runtime settings.
+- [x] Prove `/health` works without auth.
+- [x] Prove direct `/query` and `/query/stream` without auth return 401.
+- [x] Prove authenticated `/query` reaches the real guarded service and returns `not_generated` with the LLM off.
+- [x] Prove browser → BFF → FastAPI returns the corresponding typed state.
+- [x] Prove browser-supplied escalation fields cannot cross the BFF.
+- [x] Scan HTML, browser assets, source maps, logs, console and response bodies for secret names/values without printing a secret.
+- [x] Record what the smoke proves and what remains unproven.
+
+Setup (2026-10-27, Mac):
+
+- Local token: `secrets.token_urlsafe(32)` written to a mode-600 file outside both repositories, read into each process's environment, and never printed.
+- FastAPI on 127.0.0.1:8100: `PROCURERAG_LIVE_LLM=0`, both `LANGSMITH_TRACING*=false`, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`, with `OPENROUTER_API_KEY` and `LANGSMITH_API_KEY` removed from its environment.
+- Next.js production build on 127.0.0.1:3200, with `PROCURERAG_API_URL=http://127.0.0.1:8100` and the same token.
+- Port 3000 was already in use by another local process and was left alone.
+
+```text
+GET  /health (no credential)                           HTTP 200  {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}
+POST /query, no credential                             HTTP 401  www-authenticate: Bearer
+POST /query/stream, no credential                      HTTP 401
+POST /query, wrong token + malformed JSON              HTTP 401
+POST /query, authenticated, Q001 as requester          HTTP 200  0.33 s  status not_generated, query_id Q001, run_id set, 5 sources (FAQ-001, POL-001)
+POST /query/stream, authenticated, Q001                HTTP 200  events: request_validated retrieval_started result
+BFF: Q001 preset                                       HTTP 200  0.05 s  not_generated, text null, 5 IDs-only sources, 7 BrowserView keys
+BFF: free-text Q001 paraphrase                         HTTP 200  not_generated, 1 caveat (evidence unchecked)
+BFF: Q091 exact text                                   HTTP 200  not_generated (free text: never pauses)
+BFF: prompt injection                                  HTTP 200  blocked, guards [prompt_injection]
+BFF: off-topic                                         HTTP 200  blocked, guards [off_topic]
+BFF: + "role": "buyer" / + "query_id": "Q091" / + "decision"   HTTP 422 x3, invalid_question
+upstream "POST /query" lines in the API's access log: 5 before the BFF probes, 10 after five valid questions, still 10 after the three escalation attempts
+API access log totals: /health 200 x2; /query 200 x11, 401 x2; /query/stream 200 x1, 401 x1
+```
+
+Real browser (scripted Chromium against the production build):
+
+- preset Q001, then Ask, gave "Retrieval only" 867 ms after the click, with focus on the result heading;
+- the live region read "Retrieval only. Retrieval-only mode: ...";
+- five sources were shown as `[n] DOC-ID · chunk-id · not cited`;
+- the browser sent exactly `{"question":"What approval is required for a EUR 60,000 purchase order?"}` and contacted only `127.0.0.1:3200`;
+- 0 console errors and 0 failed requests;
+- screenshots at 1280 px and 320 px showed no page overflow (an injection question showed the "Refused" card with `prompt_injection`).
+
+Secret scan (counts only, the value is never printed):
+
+- token value in curl outputs: 0;
+- in 22 browser responses plus the DOM: 0, with 0 setting names;
+- in the FastAPI log: 0, with 0 tracebacks and 0 OpenRouter/LangSmith mentions;
+- in the Next.js log: 0;
+- `.next/static` scan: 0 names. The production build emits no browser source maps.
+
+No provider request or trace upload could occur: `/health` reported `live_llm:false`, no provider key was in the API's environment, and tracing was forced off.
+
+What this proves:
+
+- the real chain works over real HTTP on one machine: browser → same-origin route → service-token-protected FastAPI → typed state;
+- an unauthenticated direct call is refused before the body is read;
+- escalation fields never cross the BFF;
+- the token stays server-side.
+
+What it does not prove:
+
+- any hosted deployment, cold start, TLS or Vercel/Azure behaviour;
+- live generation (`answered` / `model_declined` were shown only with the fake upstream in tests; review round 1 later ran them live through this chain);
+- answer quality, durable quota, the kill-switch store, or behaviour under concurrent load.
+
+The optional fake-LLM HTTP proof was not run.
+
+### Model, cost and provisioning gate
+
+Fill with current sourced values and calculator output:
+
+```text
+model id:                          openai/gpt-4o-mini (Juan's choice, 2026-10-27; the code default stays openai/gpt-4o for local evals,
+                                   the public deployment sets OPENROUTER_MODEL)
+provider endpoint:                 POST https://openrouter.ai/api/v1/chat/completions (OpenAI-compatible; generation.OPENROUTER_BASE_URL),
+                                   structured output (response_format json_schema, strict), reasoning disabled,
+                                   provider {"zdr": true} (review round 1: only Zero Data Retention endpoints = Azure)
+pricing source and checked-at time: GET https://openrouter.ai/api/v1/models, 2026-10-27T01:03:34Z (462 models listed);
+                                   per-endpoint prices re-checked via /models/openai/gpt-4o-mini/endpoints, 2026-10-27T15:31:34Z
+input price per 1M tokens:         US$0.15 (Azure, OpenAI); US$0.165 (Azure Sweden Central). The worst case uses US$0.165
+output price per 1M tokens:        US$0.60 (Azure, OpenAI); US$0.66 (Azure Sweden Central). The worst case uses US$0.66
+maximum input/context tokens charged: 15,300 (upper bound; see the derivation below)
+public maximum output tokens:      800 (PROCURERAG_MAX_ANSWER_TOKENS=800; the code default stays 3000)
+worst-case input cost:             15,300 x 0.165 / 1e6 = US$0.0025245
+worst-case output cost:            800 x 0.66 / 1e6     = US$0.000528
+worst-case total cost/request:     US$0.0030525
+US$5 monthly ceiling / 30:         US$0.166667 per day
+global daily cap = floor(daily budget / worst-case cost/request): floor(0.166667 / 0.0030525) = floor(54.6) = 54 requests/day
+                                   (30 days at the cap, all worst case: US$4.94505)
+OpenRouter key limit = US$5, verified yes/no: YES by API, 2026-10-27T15:49:51Z: GET /api/v1/key -> limit 5, limit_remaining
+                                   3.9486, limit_reset None. Not dedicated: it is the .env key, shared with local evals
+                                   (US$1.05 already used). See review round 1 for the correction
+training/logging/retention setting: Zero Data Retention on every request, in code (generation.OPENROUTER_PROVIDER_PREFERENCES,
+                                   Juan's decision in review round 1). OpenRouter's own prompt logging must stay off (account setting)
+```
+
+Before review round 1 the worksheet used the cheapest price (US$0.002775, 60 a day). Zero Data Retention excludes OpenAI's own endpoint and allows Azure Sweden Central, which costs 10% more, so the worst case now uses that price.
+
+How the 15,300-token ceiling was derived (worst case, not an average trace):
+
+- The largest public context is Q005, which is `multi_doc`, so `top_k` is 10 (`reranking.MULTI_DOC_RETRIEVAL_CONFIG`). Free text uses 5. Public requests never take a second pass.
+- The ten longest of the 391 Internal chunks (1,268 … 872 bytes; mean 492) plus the longest valid question (500 emoji = 2,000 bytes), built with the real `generation.build_prompt`, come to 13,798 bytes.
+- The `GeneratedAnswer` `response_format` schema is 1,476 bytes, plus a 26-token chat-template margin.
+- A byte-level BPE token always covers at least one byte, so tokens ≤ bytes. 15,300 is therefore a proven ceiling for this prompt shape, about 4× a typical English token count. That is intended: the cap must hold for an adversarial question.
+
+Model trade-off (same ceiling, cap 800):
+
+| Model | Worst-case/request | Daily cap |
+|---|---|---|
+| openai/gpt-4o | US$0.04625 | 3 |
+| openai/gpt-4.1-mini | US$0.0074 | 22 |
+| openai/gpt-4o-mini | US$0.002775 | 60 |
+
+(These three use the cheapest endpoint price; with Zero Data Retention, gpt-4o-mini is US$0.0030525 and 54 a day.)
+
+gpt-4o-mini's answer quality on this corpus was **unmeasured** at this point: every recorded live answer was gpt-4o. Review round 1 measured it through the real chain (below).
+
+Why 800 output tokens: the longest recorded live answer is 1,613 characters (Q092, a 19-source, two-pass context that the public demo never builds). Q001's was about 271 characters. An answer cut off at the cap fails structured-output validation, so the API answers 500 and the BFF answers `unavailable`, never a half answer.
+
+Note: OpenRouter's fee on credit purchases is outside this per-token calculation. The key limit and the US$5 ceiling are counted in credits.
+
+- [x] Model and exact endpoint selected against the ceiling.
+- [x] Public output cap configured below the current 3,000-token default (`PROCURERAG_MAX_ANSWER_TOKENS`, validated at startup, tested).
+- [x] Worst-case cost and global daily cap calculated with a tool.
+- [x] Key's US$5 credit limit confirmed before any paid smoke. **Verified by API in review round 1** (`limit` 5 at 15:49:51Z). The first check, at 15:44:07Z, returned `limit: None`; Juan then set the limit. It is not a dedicated key: Day 29 creates one for the deployment (see the handoff).
+- [x] Privacy/training/retention settings and remaining disclosure recorded. **Done in review round 1:** Zero Data Retention in code, and the chat's disclosure names OpenRouter, Zero Data Retention and Azure. The controls that were available (checked 2026-10-27):
+  - OpenRouter itself retains no prompts unless "prompt logging" is opted into;
+  - providers that train on or store data can be excluded account-wide at openrouter.ai/settings/privacy, or per request with `provider.data_collection: "deny"`;
+  - Zero Data Retention per request is `provider.zdr: true`, or account-wide per model group. OpenRouter's ZDR page says first-party OpenAI endpoints are not ZDR by default, and Azure remains available when ZDR is enforced for OpenAI.
+  - **Chosen (Juan, review round 1):** `provider.zdr: true` on every request. Both Azure endpoints serving `openai/gpt-4o-mini` support strict structured outputs, and the live smoke ran through them.
+- [x] Vercel Hobby terms fit and `dub1` availability recorded read-only (Hobby is "non-commercial personal use only", which a personal portfolio with no payments, ads or paid work fits; `dub1` = `eu-west-1` Dublin is listed; Hobby gets one function region; 300 s max duration). Juan reconfirms the terms when linking the account on Day 29.
+- [x] Paid smoke explicitly approved by Juan, or recorded as blocked/not run. Blocked at first submission. **Approved by Juan in review round 1 (max US$0.10) and run: 8 paid calls, US$0.000844 in total** (review round 1, below).
+- [x] No Azure/Vercel/OpenRouter provisioning or spend implied by the local slice.
+
+### Day 29 handoff
+
+| Item | State after Day 28 | Day 29 must |
+|---|---|---|
+| Persistent atomic admission store | none; only the API's process-local rate limit exists | pick the Redis-compatible provider (Vercel Marketplace), verify the free tier and `EVAL`/Lua, implement ADR §8.3.1's one-script admission (lease sorted set + global + per-client counters) with tests; store unavailable → fail closed |
+| Global and per-client counters | computed only: global 54/day at gpt-4o-mini under Zero Data Retention, cap 800 (60/day before review round 1); per-client 10/day decided in the ADR | enforce both in the admission script; per-client key = salted hash of the platform-set client IP |
+| In-flight lease TTL | provisional 180 s, unmeasured | measure cold start + 75 s BFF timeout + provider 60 s + cleanup on the deployed chain; re-derive the TTL |
+| Runtime kill switch | `DEMO_ENABLED = true` constant in `app/api/chat/route.ts`; the BFF branch is tested (503, zero upstream calls) | choose the store read on every request (quota-store key or Edge Config), deploy it, measure flip-to-effect |
+| Status/warm-up route | deferred (needs its own limit, i.e. the store) | implement `GET /api/chat/status` (90 s upstream, 100 s `maxDuration`, its own limit), or record why not |
+| Azure | nothing exists; `deploy.yml` and `deploy/azure/containerapp-template.yaml` do not provide `PROCURERAG_SERVICE_TOKEN`, so a deploy today fails closed at startup | check the subscription (trial/credit/spending limit); add the token as a Container Apps secret plus `secretRef`, and pass it to `container_smoke.py --url` in `deploy.yml`; compute the worst-case 24/7 one-replica month against US$10 |
+| Vercel | not linked | reconfirm Hobby terms; set the function region to `dub1`; set `PROCURERAG_API_URL` (https) and `PROCURERAG_SERVICE_TOKEN` as server-side env vars (never `NEXT_PUBLIC_`) |
+| Provider settings | model chosen; Zero Data Retention in code; the only limited key is the `.env` key shared with evals (US$5 lifetime limit, no reset, US$3.95 left) | create a **dedicated** deployment key with a US$5 limit and a monthly reset (ADR §8.2 is per month), verify it via `/api/v1/key`, and set it as the container's `OPENROUTER_API_KEY` secret; `OPENROUTER_MODEL=openai/gpt-4o-mini` and `PROCURERAG_MAX_ANSWER_TOKENS=800` on the container; confirm OpenRouter prompt logging is off |
+| Deployed smoke and rollback | the live smoke set ran locally through the real chain (review round 1, `scripts/chat_smoke.py`) | run `scripts/chat_smoke.py <deployed URL>` through the deployed chain; record evidence; rollback per ADR §9 |
+| Disclosure text | names OpenRouter, Zero Data Retention and Azure (review round 1) | re-check that the named endpoint is still the only ZDR route for the model at launch |
+| Q090 preset | kept as the honest gap example (Juan, review round 1); always `gap_report`, because retrieval misses SOP-002 at `top_k=5` | nothing; the deployed smoke expects `gap_report` for it |
+| Q001 phrasing | left as it is for now (Juan, review round 1): right approver, but "not Category Manager approval" copied from FAQ-001 and no cumulative rule | revisit before "live demo" is claimed: fix FAQ-001's wording or add a prompt rule, then re-run the smoke |
+
+### Required verification
+
+ProcureRAG, with provider calls and tracing forced off:
+
+```text
+uv sync --locked --dev
+uv lock --check
+pytest -q
+python -m compileall -q src tests scripts
+python -m ruff check src tests scripts
+python src/regression_suite.py
+HF_HUB_OFFLINE=1 python src/regression_suite.py --verify-retrieval
+HF_HUB_OFFLINE=1 python src/graph_regression.py
+python scripts/portfolio_contract_probe.py
+git diff --check
+```
+
+Portfolio:
+
+```text
+npm ci
+npm run typecheck
+npm run lint
+npm run build
+npm test
+git diff --check
+```
+
+Record every command separately with exit code and meaningful output. Add focused service-auth, BFF-contract, secret-scan, accessibility, console/network and local real-HTTP results. Never record credentials.
+
+ProcureRAG, 2026-10-27, pre-commit run on the working tree (re-run on the pushed commit below), provider calls and tracing forced off, no `PROCURERAG_SERVICE_TOKEN` in the shell:
+
+```text
+uv sync --locked --dev                      exit 0  Checked 145 packages
+uv lock --check                             exit 0  Resolved 154 packages
+pytest -q                                   exit 0  480 passed in 3.34s   (452 at kickoff + 28 new)
+python -m compileall -q src tests scripts   exit 0
+ruff check src tests scripts                exit 0  All checks passed!
+src/regression_suite.py                     exit 0  all expectations hold
+--verify-retrieval (HF_HUB_OFFLINE=1)       exit 0  all expectations hold
+src/graph_regression.py (HF_HUB_OFFLINE=1)  exit 0  every graph contract holds (counted stand-in, no provider, 6 cases)
+scripts/portfolio_contract_probe.py         exit 0  20/20 scenarios + 2/2 contract checks, 0 failure(s)
+git diff --check                            exit 0
+```
+
+Portfolio, branch `day-28-chat`, pre-commit run on the working tree (re-run on the pushed commit below):
+
+```text
+npm ci              exit 0  found 0 vulnerabilities
+npm run typecheck   exit 0
+npm run lint        exit 0
+npm run build       exit 0  / /about /procurerag /icon.svg static (○); /api/chat dynamic (ƒ)
+npm test            exit 0  133 passed (67 at kickoff + 66 new: chat-bff 39, chat-route 6, chat-ui 21)
+git diff --check    exit 0
+```
+
+Both branches were committed and pushed on 2026-10-27:
+
+- ProcureRAG `day-28` @ `9e58ba0157d0ab42f5a7db8088a97cad55ff0478` (15:25 +0100). Same 15 files and the same +1,295/−183 as the tested working tree.
+- Portfolio `day-28-chat` @ `51b5270f1f7512b8885a833ff4f88130deaf890f` (15:26 +0100). 16 files.
+
+Every gate was re-run on those exact commits (2026-10-27, after the push):
+
+```text
+ProcureRAG 9e58ba0 (only this log modified on top), provider calls and tracing forced off, no token in the shell
+uv sync --locked --dev       exit 0  Checked 145 packages
+uv lock --check              exit 0  Resolved 154 packages
+pytest -q                    exit 0  480 passed in 5.45s
+compileall                   exit 0
+ruff                         exit 0  All checks passed!
+frozen regression            exit 0  all expectations hold
+verify-retrieval             exit 0  all expectations hold
+graph regression             exit 0  every graph contract holds
+contract probe               exit 0  0 failure(s)
+git diff --check             exit 0
+
+portfolio 51b5270 (clean tree before and after)
+npm ci                       exit 0  found 0 vulnerabilities
+npm run typecheck            exit 0
+npm run lint                 exit 0
+npm run build                exit 0  ○ / /_not-found /about /icon.svg /procurerag; ƒ /api/chat
+npm test                     exit 0  133 passed (8.2s)
+git diff --check             exit 0
+.env* files outside node_modules: 0
+```
+
+Docker image smoke, run locally instead of waiting for CI (2026-10-27):
+
+```text
+docker build -t procurerag-api:day28-9e58ba0 .     exit 0  linux/arm64 (this Mac), 2,006,352,281 bytes
+python3 scripts/container_smoke.py procurerag-api:day28-9e58ba0   exit 0
+  started with PROCURERAG_LIVE_LLM=0, tracing off, HF_HUB_OFFLINE=1, a per-run token passed by name only
+  [ok] /health answered after 26.5 s (live_llm false)   [ok] /health contract
+  [ok] query without the service token (401)            [ok] Q001 labeled, local retrieval
+  [ok] Q091 without a decision                          [ok] off-topic question
+  [ok] logs                                             cleanup: container removed
+```
+
+`docs/` is outside the build context (`.dockerignore`), so the uncommitted log does not change the image. CI builds `linux/amd64`, which this local run does not cover.
+
+Remote CI: none has run for Day 28 yet.
+
+- ProcureRAG's `ci.yml` runs only on a pull request to `main` and on a push to `main`. Pushing `day-28` started nothing, so CI (including its amd64 Docker smoke) runs when the `day-28` → `main` PR is opened.
+- The portfolio has no workflow (0 Actions runs ever), so its evidence is the local gates above.
+
+Required evidence table (the route's rows):
+
+| Evidence | Result |
+|---|---|
+| ProcureRAG branch/base/divergence | `day-28` @ `9e58ba0` = `origin/day-28`, 0/0; merge-base with `origin/main` = `dd8d098` = `origin/main` |
+| Portfolio branch/base/divergence | `day-28-chat` @ `51b5270` = `origin/day-28-chat`, 0/0; base `2209393`, whose tree equals `530dfe4` (Block 0) |
+| Service-token negative tests | pass: 6 bad credentials × 2 routes → 401 with `WWW-Authenticate`, zero retrieval/LLM calls, budget untouched; auth beats a malformed body; M1–M7 all caught (Block 1) |
+| Full ProcureRAG tests | 480 passed on `9e58ba0` |
+| ProcureRAG compile/lint | exit 0 / exit 0 |
+| Frozen/current retrieval | exit 0 / exit 0 |
+| Graph contracts | exit 0 |
+| Updated no-paid contract probe | exit 0, 20/20 scenarios + 2/2 contract checks |
+| Portfolio locked install/audit | `npm ci` exit 0, 0 vulnerabilities |
+| Portfolio typecheck/lint | exit 0 / exit 0 |
+| Portfolio production build | exit 0; `/api/chat` is the only dynamic route |
+| TypeScript BFF contract tests | `chat-bff.spec.ts` 39 passed; M1–M9 all caught (Block 2) |
+| Full browser tests | 133 passed on `51b5270` |
+| Runtime secret scan | built HTML, every script and an answer hold no token, setting name or upstream URL (`chat-route.spec.ts`); no browser source maps; Block 4 scan: token value 0 times everywhere |
+| Local unauthenticated direct API | `/query` 401 and `/query/stream` 401, `WWW-Authenticate: Bearer` (Block 4) |
+| Local authenticated API, LLM off | 200 `not_generated`, Q001, 5 IDs-only sources (Block 4) |
+| Local browser→BFF→API | "Retrieval only" 867 ms after the click, focus on the result heading (Block 4) |
+| Console/network failures | 0 console errors, 0 failed requests, only `127.0.0.1:3200` contacted (Block 4) |
+| Responsive/accessibility/no-JS | automated: pass (Block 3). Manual (Juan, 2026-10-27): 400% zoom and VoiceOver, no defect |
+| Model/cost/output/daily cap | `openai/gpt-4o-mini`, cap 800, Zero Data Retention: US$0.0030525 worst case, 54/day (worksheet, review round 1) |
+| Provider key credit cap | `GET /api/v1/key`: `limit` 5, `limit_remaining` 3.9486, no reset (15:49:51Z); shared with evals, not dedicated (review round 1) |
+| Vercel terms/region | recorded read-only: Hobby fits a non-commercial personal portfolio, `dub1` listed, 300 s max; nothing linked |
+| No deployment/public claim | portfolio `origin/master` = `7526f0c`, Pages `legacy` from `master /`, 0 Actions runs; last ProcureRAG deploy run 2026-10-21 (none on Day 28); the page still says "Live demo: in progress" |
+| `git diff --check` and clean-tree account | exit 0 in both; portfolio clean at `51b5270`; ProcureRAG = `9e58ba0` + this log update |
+
+### What failed or was confusing
+
+- **FastAPI parses before it authenticates.** The route assumed a dependency could run "before any parsing". Measured: a request with no token and a malformed JSON body got 422, and the token dependency never ran, because FastAPI reads and decodes the body before solving dependencies. Fixed with a middleware that checks the token before the body is read, keeping the dependency for OpenAPI and per-route defence. A test ties the two path sets together.
+- **`secrets.compare_digest` and non-ASCII.** On `str`, it raises `TypeError` for non-ASCII input, so a crafted header would have become a 500. Comparing UTF-8 bytes fixes it, and a mutation test guards it.
+- **Characters are not `.length`.** JavaScript counts UTF-16 units, Python counts code points. A BFF using `.length` would refuse a 300-emoji question the API accepts. `countCharacters` uses `Array.from`.
+- **"Stop after 2,049 bytes" depends on chunk size.** A stream arrives in chunks the runtime chooses, so the chunk that crosses 2,048 is already in memory. The BFF keeps at most 2,048 bytes and never requests another chunk. With 1-byte chunks it stops after exactly 2,049 (tested).
+- **No-JS form submission.** A server-rendered form would submit natively without JavaScript and put the question in the URL. The controls stay disabled until hydration.
+- **A `<fieldset>` widens the page.** It defaults to `min-width: min-content`, which can break 320 px reflow; it now has `min-width: 0`.
+- **The deploy path now fails closed.** `deploy.yml` and the Container Apps template do not supply the token yet, so a deploy today would never become ready. That is the intended behaviour, and the fix is in the Day 29 handoff.
+
+### What became clearer
+
+- The token authenticates the BFF service, not a public visitor and not a procurement role.
+- Same-origin BFF architecture avoids browser CORS, while service authentication protects the public API from non-browser callers; CORS could not do that.
+- A TypeScript type does not validate an untrusted HTTP response at runtime.
+- The first real proof is local HTTP with the LLM off; deployment and paid generation are separate gates.
+
+### What I can now explain in an interview
+
+Write concise answers without reading the route:
+
+1. **Why the browser calls a same-origin BFF instead of FastAPI directly:** a visitor can read anything a browser holds. A direct call would need the service token in browser JavaScript, which makes it public. It would also need a CORS policy on the API, and it would let the browser choose its own role, `query_id` and `decision`. `/api/chat` is on the page's own origin, so CORS never applies. The BFF keeps the token and the API URL server-side and accepts only `{question}`. It decides everything else itself, then validates the API's answer and returns a 7-field browser view.
+
+2. **Service authentication versus role authorization versus visitor identity:** three different questions.
+   - **Service authentication** asks "did this request come through my BFF?" One shared Bearer token, compared in constant time. Built today.
+   - **Role authorization** asks "which document labels may this request see?" That is `ROLE_CLEARANCE`. The BFF always sends `requester`, so the public sees Internal documents only. But the API still trusts whatever role its one authenticated caller states. The token grants no role, and a test proves it.
+   - **Visitor identity** asks "which person is asking?" Nothing answers it: the demo is anonymous. Day 29's per-client quota keys on a salted hash of the client IP, which is rate limiting, not identity.
+
+3. **Why auth must precede rate limiting and body validation:** the order decides who can make the server do work.
+   - Rate limit first: a stranger could spend the shared budget and lock out the real BFF.
+   - Validation first: a stranger gets free 422 details about the schema, and every body from anyone gets parsed.
+   - Auth first: a refused request costs nothing. Zero retrieval, zero LLM calls, budget untouched, tested for 6 bad credentials × 2 routes.
+   - I measured that FastAPI reads and decodes the body **before** it runs any dependency. A dependency alone answered "no token + malformed JSON" with 422, so the check had to become a middleware.
+
+4. **Why the raw 2 KB limit must run before JSON parsing:**
+   - `request.json()` buffers the whole body before I can look at it, so a 100 MB body costs 100 MB before any check.
+   - `Content-Length` is only the client's claim. It can be false, or missing entirely on a chunked request.
+   - So the BFF refuses an honest large `Content-Length` at once, then counts bytes as chunks arrive and cancels the stream once the total passes 2,048.
+   - Only then does it decode (strict UTF-8) and parse.
+   - 2,048 bytes still fits any valid question: 500 emoji are 2,000 bytes.
+
+5. **Why preset ids require exact text equality:**
+   - With a `query_id`, the API checks the retrieved evidence against that question's gold labels, so it can see an evidence gap. Without one, it treats the evidence as complete and adds the "unchecked" caveat.
+   - Q001's labels applied to an edited question would judge it against the wrong evidence, and they would drop the caveat that says nobody checked it. That would be a false "evaluated" claim.
+   - So the BFF derives the id itself, only for the exact preset text, and the browser can never send one. The API enforces the same rule: a mismatch is 422.
+   - One edit, even a space, makes it free text with the caveat.
+
+6. **Why Q091/Q092 stay out of the public presets:** a preset button is a promise that the example works for a public requester.
+   - **Q091** can pause for approval, and the public demo has no approver. It is also my known red case: the live answer cites real sources but drops the renewal usage-data step.
+   - **Q092**'s evidence includes a Confidential contract that a requester is not cleared to see.
+   - The probe checks that every preset's gold documents are Internal and that none can pause. Both questions stay on the page as evidence, and typed as free text they run unlabeled with the caveat.
+
+7. **Runtime validation versus TypeScript compile-time types:**
+   - TypeScript types are erased at build time. `await response.json()` is `any`, and `as QueryResponse` only tells the compiler to trust me.
+   - If the API, a proxy's error page or anything else returns another shape, a types-only BFF forwards it, possibly with `approval_request` inside.
+   - `validateQueryResponse` checks the real value:
+     - the exact keys at every level;
+     - closed vocabularies for status, guard names, layers and actions;
+     - the `run_id` UUID format;
+     - "`approval_request` if and only if `pending_approval`".
+   - Any mismatch is 503 `unavailable`, and the error names paths, never values.
+   - `toBrowserView` then copies fields by name. Skipping validation (mutation M4) failed 3 tests.
+
+8. **Why every status stays distinct in the UI:** each one tells the visitor something different, so merging any two would mislead.
+   - **Answered:** cited answer.
+   - **Model declined:** the model judged the sources insufficient.
+   - **Evidence missing (`gap_report`):** a required document is missing.
+   - **Retrieval only (`not_generated`):** the LLM is off.
+   - **Refused (`blocked`):** a guard stopped the input.
+   - **Needs a reviewer (`pending_approval`).**
+   - **Check your question:** fix the input.
+   - **Demo limit reached:** wait N seconds.
+   - **Took too long:** try later.
+   - **Demo offline:** the service is down; here is the code.
+
+   If "the sources do not say" looked like "the service is down", people would retry pointlessly or trust a silence. Ten states, ten labels, each tested.
+
+9. **Why public approval fails closed:** an approval is a decision by someone with authority, and the public demo knows nobody's identity. Any visitor clicking "approve" would be an anonymous person approving their own request, which is exactly what human-in-the-loop exists to stop. The API's approval state is not durable either. So:
+   - the BFF never forwards a `decision`; a browser that sends one gets 422;
+   - it drops `approval_request` and the API text that invites a decision;
+   - it shows "Needs a reviewer".
+
+   Approval walkthroughs stay local (curl or MCP).
+
+10. **What the local real-HTTP smoke proves and does not prove:**
+    - **Proves:**
+      - a real browser → the real Next.js production route → a separately running FastAPI, over HTTP, with a real token;
+      - the API refuses unauthenticated calls with 401 before reading the body;
+      - the authenticated chain returns typed states (`not_generated`, `blocked`);
+      - escalation fields never reach the API (its `/query` count stayed at 10);
+      - the token appears 0 times in responses, logs and page assets.
+    - **Does not prove:** anything hosted (TLS, cold start, Vercel/Azure settings), live generation (`answered`/`model_declined` were only shown with fakes), gpt-4o-mini's answer quality, durable quota, the kill-switch store, or behaviour under concurrent load.
+
+11. **How the three timeout layers relate:** they nest from the inside out, so the innermost layer gives up first and the layer outside it can still report that cleanly.
+    - The API gives the provider 60 s.
+    - The BFF gives the API 75 s. A late upstream still leaves 25 s of the function's 100 s `maxDuration` to return a typed 504 `timed_out`.
+    - The browser waits 105 s, longer than the function can live. So it normally receives the BFF's typed answer, and its own abort is only the backstop if the function is killed or the network drops.
+
+    In the reverse order, the browser would give up while the server still works and spends. Or the platform would kill the function mid-answer and the visitor would get a generic error.
+
+12. **How the US$5 ceiling becomes an output cap and global daily cap:**
+    1. Start from the worst allowed request, not an average.
+    2. gpt-4o-mini costs US$0.15 per million input tokens and US$0.60 per million output tokens on its cheapest endpoints. With Zero Data Retention it may run on Azure Sweden Central, which costs 10% more (US$0.165 and US$0.66), so the worst case uses that price.
+    3. The largest public prompt is Q005's 10 longest possible chunks plus a 500-emoji question plus the schema: at most 15,300 tokens, because a byte-level BPE token covers at least one byte.
+    4. Output is capped at 800 tokens by `PROCURERAG_MAX_ANSWER_TOKENS`.
+    5. Worst case per request: 15,300 × 0.165 / 1e6 + 800 × 0.66 / 1e6 = 0.0025245 + 0.000528 = **US$0.0030525**.
+    6. US$5 / 30 = US$0.1667 a day, so floor(0.1667 / 0.0030525) = **54 requests a day**. Thirty worst-case days cost US$4.95.
+
+    The US$5 limit on the OpenRouter key is the backstop if my counting fails.
+
+13. **What remains for Day 29 before the demo can be called live:**
+    - **Quota:** a persistent, atomic store (Redis-compatible with Lua): global 54/day, per-client 10/day and the in-flight lease. If the store is down, refuse.
+    - **Control:** a runtime kill switch read on every request, with its flip-to-effect time measured; the status/warm-up route, or a recorded reason not to build it.
+    - **Hosting:** check the Azure subscription and redeploy with the token as a secret in the template and `deploy.yml`, plus the model and the output cap. Link Vercel after reconfirming the Hobby terms, in `dub1`, with server-only settings.
+    - **Provider:** a dedicated deployment key with a US$5 monthly limit. Zero Data Retention is already in code and named in the disclosure.
+    - **Proof:** the deployed smoke set through the real chain, including gpt-4o-mini's actual answers, and a rehearsed rollback.
+
+    Only then do the words "live demo" become true. The public URL and cutover are Day 30.
+
+### Route review questions
+
+Answered in my own words before looking back at the route:
+
+1. **Why is the browser forbidden from calling FastAPI directly?** It would need the service token, which would then be public. It could also choose its own role, `query_id` and `decision`. Through the BFF, the browser holds no secret and can only ask a question.
+2. **What does the token authenticate, and what not?** It authenticates the calling service: "this came from my BFF, or from someone holding its secret". It does not identify the visitor, grant a role (a test proves the API still filters by the stated role), or authorize an approval.
+3. **Why is CORS irrelevant here, and insufficient as API authentication?** The browser calls its own origin, so CORS never applies, and BFF→API is server-to-server, where CORS does not exist. CORS is a browser rule about which pages may read a response; curl ignores it.
+4. **Why authentication before rate limiting and validation?** So a stranger cannot spend the BFF's budget, cannot learn the schema from 422 detail, and costs no parsing. In FastAPI that needs a middleware, because the body is decoded before dependencies run.
+5. **Why constant-time comparison?** `==` can stop at the first different byte, so the response time leaks how much of a guess is right, and a token can be recovered byte by byte. `compare_digest` takes the same time wherever the bytes differ. A difference in length can still leak, so the token is long and random. I compare bytes, because on a non-ASCII `str` it raises `TypeError` (a 500).
+6. **Why only question text?** Every other field is a privilege decision: the role sets visible documents, `query_id` claims an evaluated question, and `decision` approves a paused run. The BFF sets those itself, and any extra key is 422 before an upstream call.
+7. **Why exact text for `query_id`?** The id makes the API judge the evidence against that question's gold labels and drop the "unchecked" caveat. A near match would present an edited question as evaluated.
+8. **Why are Q091 and Q092 withheld?** Q091 can pause for approval (no public approver) and is the known red answer. Q092 needs a Confidential contract that a requester cannot see.
+9. **Why does an interface not validate at runtime?** Types are erased at build time, and `as T` checks nothing. Only code that inspects the value can catch a wrong shape.
+10. **Why remove `run_id`, `approval_request`, guard details and snippets?** Least exposure:
+    - `run_id` is an internal audit handle with no use to a visitor;
+    - `approval_request` invites a decision the public cannot make;
+    - guard detail text tells an attacker exactly what tripped, which helps them evade it;
+    - snippets would let anyone scrape document text through the demo. IDs plus `cited` show the grounding.
+11. **Why separate `gap_report`, `model_declined`, `blocked` and `unavailable`?** Different causes, different next steps:
+    - `gap_report`: the corpus lacks the evidence;
+    - `model_declined`: the model judged the sources insufficient;
+    - `blocked`: the input was refused;
+    - `unavailable`: the system is down.
+
+    Merged, an honest refusal would look like an outage, or an outage like an answer.
+12. **Why is `pending_approval` fail-closed?** Without identity there is no authority, so approval by an anonymous visitor would be self-approval, and the approval state is not durable. The request stops at "Needs a reviewer".
+13. **Why stop after 2,049 bytes rather than trust `Content-Length` or call `request.json()`?** The header is a claim and may be false or absent (chunked), and `request.json()` buffers everything first. Counting while streaming bounds memory whatever the client says. With 1-byte chunks it stops after exactly 2,049; with larger chunks, after the chunk that crosses 2,048.
+14. **Why no automatic retries?** A timeout does not mean the first call failed. It may still be running and billing, so a retry can double the cost, break the daily-cap arithmetic, and repeat a non-idempotent POST. One call, and the visitor decides whether to ask again.
+15. **What does the local smoke prove, and not?** It proves the real browser → route → FastAPI chain over HTTP, 401 for unauthenticated calls, typed states, no escalation reaching the API, and no token leak. It proves nothing hosted, no live generation, no answer quality, and no durable quota, kill switch or concurrency.
+16. **How do 75, 100 and 105 s relate?** They nest: the API's provider limit is 60 s, the BFF→API timeout 75 s, the function's `maxDuration` 100 s and the browser's abort 105 s. Each inner layer fails first, so the next one out can still return a typed `timed_out`.
+17. **Why worst case, not an average trace?** An average describes a normal visitor, but the cap must hold for the most expensive allowed request, which an abuser will send on purpose. Sized from a typical prompt (about 4× smaller), the daily cap would be about 4× too high.
+18. **Why a key limit if a daily quota is planned?** The quota is my code and my store, and code has bugs, stores fail and tokens leak. The key limit is enforced by OpenRouter, outside my system: past US$5 the key gets 402, whatever happens to my code.
+19. **What remains process-local or unbuilt after Day 28?**
+    - **Process-local:** the API rate limiter (in memory, per replica, reset on restart), the kill switch (a code constant) and the visible history (page only).
+    - **Unbuilt:**
+      - the persistent global and per-client quota and the in-flight lease;
+      - the status/warm-up route;
+      - the kill-switch store;
+      - visitor identity;
+      - token rotation;
+      - a dedicated deployment key with a monthly limit;
+      - all hosting.
+20. **What must happen on Day 29 before "live demo" is true?**
+    - The hosted chain exists: the Azure API with the token as a secret, and the Vercel BFF in `dub1` with server-only settings.
+    - The quota and the kill switch are enforced, and a dedicated, limited deployment key is in place (Zero Data Retention is already chosen and disclosed).
+    - The deployed smoke passes with gpt-4o-mini answers checked, and rollback is rehearsed.
+
+### Three-minute walkthrough
+
+- Duration: 4min 3sec.
+- Completed without notes: Done (Juan).
+- Script (about 3 minutes, with the local chain from Block 4 running):
+  1. **The problem (20 s):** a public chat must not become a free LLM proxy, a way around roles, or an anonymous approval button.
+  2. **The boundaries (40 s):** the Block 0 diagram and the three questions table. Service authentication is built, role is fixed by the BFF, and visitor identity does not exist.
+  3. **Live (60 s):**
+     - `curl` `/query` with no token: 401.
+     - On `/procurerag`, the Q001 preset: "Retrieval only" with IDs-only sources.
+     - An injection question: "Refused".
+     - A body with `"role": "buyer"`: 422, and the API's `/query` count does not move.
+  4. **What surprised me (40 s):**
+     - FastAPI parses before it authenticates, so the check became a middleware.
+     - `compare_digest` on non-ASCII `str`.
+     - UTF-16 `.length` versus code points.
+     - Runtime validation and the mutation results.
+  5. **Money and next (20 s):** US$0.0030525 worst case under Zero Data Retention, 54 a day, the US$5 key limit; the live smoke cost US$0.000844. Then Day 29: quota, kill switch, hosting, a dedicated key, deployed smoke.
+
+### Review prompt
+
+> “Day 28’s guarded local chat slice is ready. Review both implementation branches against the accepted ADR and Day 28 route. Verify service-token ordering and constant-time comparison, unauthenticated health, fixed requester role, exact preset mapping, 2 KB raw-body cap, runtime response validation and reduction, all typed UI states, secret/client-bundle boundaries, no retries, real local HTTP integration, accessibility/no-JS behavior, model/cost/output/daily-cap evidence, and that no Day 29 deployment/quota/kill-switch work is falsely presented as complete. Juan owns implementation.”
+
+Branches to review: ProcureRAG `day-28` @ `9e58ba0` plus the commit that adds this log update, and portfolio `day-28-chat` @ `51b5270`.
+
+Sent: yes, 2026-10-27 (Juan). Hermes reviewed ProcureRAG `24a1e66` and portfolio `51b5270` and returned 5 findings, addressed in the next section.
+
+### Hermes review round 1 (2026-10-27)
+
+Five findings: two P1, two P2, one P3.
+
+#### P1: the live-model acceptance gate was incomplete
+
+The finding: gpt-4o-mini's answer quality was unmeasured, the paid smoke had not run, and `answered`/`model_declined` had only come from fake upstreams. HER-296 needs the real chain with the public model and cap.
+
+Juan's decisions:
+- the privacy policy is Zero Data Retention, in code;
+- the paid smoke is approved, up to US$0.10;
+- the key is the one in ProcureRAG's `.env`.
+
+**Correction: the key limit.** The first `GET /api/v1/key` for that key (15:44:07Z) returned `limit: None`, with US$1.05 already used. That contradicted the "confirmed" line recorded earlier, so the smoke was stopped before any paid call. Juan then set a limit. The second check (15:49:51Z) returned `limit` 5, `limit_remaining` 3.9486 and `limit_reset` None. Only those fields were printed, never the key.
+- The key is shared with the local evals, so it is not the dedicated key the route asks for.
+- Its US$5 is a lifetime limit, not a monthly one.
+- The Day 29 handoff now asks for a dedicated deployment key with a monthly reset.
+
+**Privacy: Zero Data Retention in code.** Every live request now sends `provider: {"zdr": true}` (`generation.OPENROUTER_PROVIDER_PREFERENCES`), and `tests/test_generation.py` asserts it in the request.
+- OpenRouter's public endpoint lists (15:31Z) show three endpoints serving `openai/gpt-4o-mini`: Azure, OpenAI, and Azure Sweden Central (10% dearer). Only the two Azure endpoints are listed as ZDR. All three support strict structured outputs. `openai/gpt-4o` also has an Azure ZDR endpoint.
+- With `zdr: true`, OpenRouter routes only to ZDR endpoints. It does not count a provider's in-memory prompt cache as retention, and OpenRouter's own prompt logging is a separate account setting that must stay off.
+- The worksheet now uses the Azure Sweden price: US$0.0030525 worst case, 54 a day.
+- The chat's disclosure now reads: "...your question and the retrieved excerpts are sent through OpenRouter to a zero-data-retention model endpoint (today, Microsoft Azure), which does not store them." The case study's "What I did not build" line now names gpt-4o-mini for the chat and ZDR routing.
+
+**Cap probe (paid call 1).** The Azure endpoints list `max_completion_tokens`, not the `max_tokens` the client sends, so the cap was measured before the smoke. One request with `max_tokens=16`, ZDR on, asked for 300 words:
+
+```text
+{'provider': 'Azure', 'model': 'openai/gpt-4o-mini', 'finish_reason': 'length', 'completion_tokens': 16, 'prompt_tokens': 17, 'cost': 1.215e-05}
+```
+
+The cap holds on the ZDR route.
+
+**The chain**, all on 127.0.0.1:
+- FastAPI on port 8100:
+  - `PROCURERAG_LIVE_LLM=1`, `OPENROUTER_MODEL=openai/gpt-4o-mini`, `PROCURERAG_MAX_ANSWER_TOKENS=800`;
+  - both `LANGSMITH_TRACING*=false`, `HF_HUB_OFFLINE=1`;
+  - a new per-run service token from a mode-600 file, never printed;
+  - the OpenRouter key read from `.env` by `read_setting`.
+  - `/health` reported `live_llm: true`, and a direct `/query` without the token got 401.
+- The portfolio's production build of the working tree, with the P3–P5 fixes and the new disclosure, on port 3200.
+
+**The smoke:** `uv run python scripts/chat_smoke.py http://127.0.0.1:3200` (new). It sends ADR §10's set plus Q090, one question at a time, no retry, and posts exactly what the browser posts. Exit 1: 7/8 automatic checks passed, with Q090 as the one failure. After Juan's decision to keep Q090 as the gap example, the script expects `gap_report` for it. Re-judging the saved live results offline (no new call) gives 8/8.
+
+| Question | Sent as | State, time | Cited | Automatic checks | Verdict against the expected answer |
+|---|---|---|---|---|---|
+| Q001 preset | `Q001` | `answered`, 4.15 s | [4] FAQ-001 | pass | **Partly right.** Right approver (VP Procurement with a Finance review). It omits Band 3 and the cumulative rule. "Not Category Manager approval", taken from FAQ-001's own sentence, reads as if the Category Manager need not approve, which contradicts POL-001 ("Approvals are cumulative"). It also gives the €25,000 three-bid threshold as a reason |
+| Q005 preset | `Q005` | `answered`, 2.10 s | [1] FAQ-001, [4] POL-001 | pass | **Correct and complete** |
+| Q021 preset | `Q021` | `answered`, 2.83 s | [1] POL-005 | pass | **Correct and complete** (nearly verbatim) |
+| Q090 preset | `Q090` | `gap_report`, 0.71 s | none | fail at the time (expected `answered`); pass after the decision below | An honest gap, with no model call. Its gold labels need SOP-002, which retrieval misses at `top_k=5`. Q090 has been one of the 15 `report_gap` queries since Day 17, so **this preset can never answer** |
+| Q001 paraphrase | free text | `answered`, 1.50 s | [1] FAQ-001 | pass | Same as Q001: right approver, the same misleading phrase, no cumulative rule. Carries the "unchecked" caveat |
+| Company cars (unanswerable) | free text | `model_declined`, 2.97 s | none | pass | **Correct refusal:** the sources do not cover it, and nothing was invented |
+| Prompt injection | free text | `blocked`, 0.01 s | none | pass | **Correct:** `prompt_injection`, with no retrieval and no model call |
+| Q091 as free text | free text | `answered`, 3.03 s | [3] FAQ-001, [4] POL-003 | recorded | **The known failure, still red.** Right approver. The "security evidence" given is a risk-acceptance rule, not ISO 27001/SOC 2, a pen test or a DPA. No usage-data or HICP step. The caveat is present |
+
+Hermes's checklist, item by item:
+- **Answerable presets:** Q001, Q005 and Q021 were answered with honest citations; Q005 and Q021 are correct, Q001 is partly right.
+- **Paraphrase:** answered, with the caveat.
+- **Unanswerable:** `model_declined`.
+- **Injection:** `blocked`.
+- **Q091:** recorded.
+- **Gap:** honest (Q090).
+- **Citations:** in all five answers, every `[n]` is a returned source marked `cited`.
+
+**Real browser** (one more paid call): Q021's preset in Chromium on the production build.
+- "Answer" 2,816 ms after the click, with focus on the heading and the live region announcing it.
+- The cited source is listed first: `[1] POL-005 · POL-005::chunk-2 · cited`, then 4 not cited.
+- The browser sent exactly `{"question":"Are facilitation payments ever allowed?"}` and contacted only `127.0.0.1:3200`. 0 console errors.
+- Screenshot checked.
+
+**Spend.** By `GET /api/v1/key` before (15:53:17Z) and after (15:55:11Z): `usage` went from 1.05143835 to 1.05228255, so **US$0.000844 for 8 paid calls**. Those were the cap probe, 6 smoke answers and the browser answer; Q090 and the injection made no model call. The API access log shows 9 `POST /query` 200 and 1 401 (the direct check). An average live answer cost about US$0.00012, about 26× below the worst case, as expected: the worst case assumes an adversarial 15,300-token prompt.
+
+**Secret and tracing scan:** the token value appears 0 times in the API log, the Next.js log and the results file, with 0 `Bearer` and 0 LangSmith mentions.
+
+**What this proves:** the whole chain works with the public model, its cap and the ZDR route. `answered`, `model_declined`, `blocked` and `gap_report` came from the real upstream; citations are honest; and the cap holds on Azure.
+
+**What it does not prove:** quality beyond these eight questions, anything hosted, or behaviour under load.
+
+**Quality findings and Juan's decisions (2026-10-27):**
+1. **Q090 preset: kept, as the honest "Evidence missing" example.** The chat shows what is missing instead of answering from partial evidence.
+   - `scripts/chat_smoke.py` now expects `gap_report` for Q090, with a test, so a future smoke flags it if retrieval changes and Q090 starts answering.
+   - The page's claims about the presets stay true: Internal documents only, never a reviewer's approval, and the preset hint already says the evaluation id is sent "so missing evidence can be detected".
+2. **Q001's phrasing: left as it is for now.** The answer is faithful to FAQ-001, but without the cumulative rule the FAQ's sentence misleads. This is a known quality limit. Every answer already says "correctness is not guaranteed". Revisit it before "live demo" is claimed (fix the corpus wording or add a prompt rule). Q005 and Q021 need no change.
+
+#### P2: admission limits are not enforced
+
+Not built on Day 28. Juan's decision: move this acceptance criterion to the Day 29 ticket.
+- The Day 28 route's out-of-scope list and ADR §11 #5 and #7 put the persistent store, the admission script and the kill-switch store on Day 29.
+- No public traffic exists. The local smoke above sent one question at a time from one script.
+
+#### P3: the BFF read an unbounded upstream reply
+
+Fixed in `lib/chat/bff.ts`:
+- `MAX_UPSTREAM_BYTES` is 64 KiB. The largest reply in the live smoke was 1,376 bytes, and the API's own reply adds only ids and findings.
+- `readBodyWithLimit` now takes a `Request` or a `Response`. A reply whose declared `Content-Length` is over the cap is cancelled unread. Otherwise its bytes are counted while it streams, and reading is cancelled past the cap.
+- An oversized reply is 503 `unavailable`, with `validation_error: "response: over 65536 bytes"`. Decoding is strict UTF-8, and reading stays inside the 75 s timeout.
+- Tests:
+  - a valid-shaped reply with a 3 MB answer (Hermes's probe) → 503;
+  - a declared 3 MB `Content-Length` → 503, never read;
+  - a chunked reply in 1 KB chunks stops after 65,536 + 1,024 bytes;
+  - exactly 64 KiB is accepted.
+
+#### P4: the reply's `query_id` was not checked against the request
+
+Fixed: after validation, the reply's `query_id` must equal the one sent (the preset's id, or null for free text), or the answer is 503 `unavailable` (`response.query_id: does not match the request`).
+- Tests: Q001 sent and Q005 back, Q001 sent and null back, free text sent and Q001 back. All are 503.
+- One existing test was corrected: "What does GRNI mean?" is Q090's exact text, so its fake reply now echoes `Q090`.
+- The P3 and P4 checks make the TypeScript BFF stricter than the Python probe, which is unchanged.
+
+#### P5: a huge numeric `Retry-After` became `Infinity`
+
+Fixed: the value must be a safe integer of at most 86,400 seconds (one day, the longest a Day 29 daily cap can ask a visitor to wait); otherwise it is null.
+- Tests: 400 nines, 2^53 + 1 and 86,401 are null, and 86,400 is kept.
+- A 429 with 400 nines gives `busy` with no countdown and no "Infinity".
+
+Mutation checks (`lib/chat/bff.ts` restored byte-for-byte after each):
+
+```text
+M10 no upstream byte cap (Infinity)           -> 3 failed
+M11 query_id correlation removed              -> 1 failed
+M12 Retry-After back to "digits only"         -> 1 failed (the unit test; the end-to-end test still passes,
+                                                 because JSON turns Infinity into null: what Hermes observed)
+```
+
+Gates after round 1, on the working trees:
+
+```text
+ProcureRAG (provider calls and tracing forced off)
+uv lock --check     exit 0
+pytest -q           exit 0  486 passed (480 + 6 for scripts/chat_smoke.py)
+compileall          exit 0
+ruff                exit 0  All checks passed!
+frozen regression   exit 0  all expectations hold
+verify-retrieval    exit 0  all expectations hold
+graph regression    exit 0  every graph contract holds
+contract probe      exit 0  0 failure(s)
+git diff --check    exit 0
+
+portfolio
+npm ci              exit 0  found 0 vulnerabilities
+typecheck / lint    exit 0 / exit 0
+build               exit 0
+npm test            exit 0  139 passed (133 + 6)
+git diff --check    exit 0
+.env* files: 0
+```
+
+Changed in round 1:
+- **ProcureRAG:**
+  - `src/generation.py`: Zero Data Retention.
+  - `tests/test_generation.py`.
+  - `scripts/chat_smoke.py` (new; expects Q090 as a gap).
+  - `tests/test_chat_smoke.py` (new, 6 tests).
+  - this log.
+- **Portfolio:**
+  - `lib/chat/bff.ts`: P3, P4 and P5.
+  - `tests/chat-bff.spec.ts`.
+  - `components/ChatPanel.tsx`: the disclosure.
+  - `app/procurerag/page.tsx`: the model and ZDR sentence.
+
+### Next step
+
+1. ~~Juan reviews and runs both branches' changes.~~ Done.
+2. ~~Juan's manual checks: 400% browser zoom and a VoiceOver pass.~~ Done on 2026-10-27, no defect.
+3. ~~Commit and push both branches.~~ Done: ProcureRAG `9e58ba0`, portfolio `51b5270`. Every gate was re-run on both commits, and the Docker image smoke passed locally (7/7, arm64). Remote CI starts when the `day-28` → `main` PR is opened; the portfolio has no CI.
+4. ~~Answer the interview questions and the route's 20 review questions.~~ Done above.
+5. Give the three-minute walkthrough without notes, then fill its three fields. **Done (Juan).**
+6. Commit and push this log update, then send the review prompt above to Hermes. **Done (Juan).**
+7. Review round 1: P3, P4 and P5 fixed; P1's live smoke run (ZDR chosen, 8 paid calls, US$0.000844); P2 moved to the Day 29 ticket by Juan. **Done (Juan):**
+   - ~~decide the two quality findings~~ Done: Q090 kept as the gap example, Q001 left as it is for now;
+   - fill in the walkthrough's "without notes" field; Done
+   - commit and push both repositories, then ask Hermes for round 2.
+8. Keep HER-296 In Progress until Hermes accepts round 1. Then open the PRs: ProcureRAG `day-28` → `main`, where CI runs the amd64 Docker smoke; portfolio `day-28-chat` → `0ct26-overhaul`, as Day 27's PR #1 did.

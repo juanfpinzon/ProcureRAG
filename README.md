@@ -463,26 +463,35 @@ uv run python src/agent_guardrails.py --all-queries         # 93 queries, 0 fals
 
 ### Run the API
 
+The query endpoints need a service token (`PROCURERAG_SERVICE_TOKEN`), and the server
+refuses to start without one. Make a throwaway local token in your shell (never in a
+file in the repo), then start the server from that same shell:
+
 ```bash
-uv run python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
+export PROCURERAG_SERVICE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+PROCURERAG_LIVE_LLM=0 uv run python -m uvicorn api:app --app-dir src --host 127.0.0.1 --port 8000
 ```
 
 `--app-dir src` is required: the modules use flat sibling imports, so `uvicorn src.api:app`
 fails with `ModuleNotFoundError`. Interactive docs at `http://127.0.0.1:8000/docs`.
+`PROCURERAG_LIVE_LLM=0` keeps a free run free even if your `.env` switches the LLM on.
 
 ```bash
-curl -sS http://127.0.0.1:8000/health
+curl -sS http://127.0.0.1:8000/health                     # open: no token needed
 # {"status":"ok","app":"ProcureRAG API","version":"0.1.0","live_llm":false}
 
 curl -sS -X POST http://127.0.0.1:8000/query \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query": "What approval is required for a EUR 60,000 purchase order?", "role": "buyer", "query_id": "Q001"}'
 # {"status":"not_generated", ... 5 sources ..., "run_id":"..."}   ← retrieval ran, LLM is off
 
 curl -sS -X POST http://127.0.0.1:8000/query \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query": "What is the capital of France?", "role": "buyer"}'
 # {"status":"blocked", "findings":[{"guard":"off_topic","layer":"input","action":"block", ...}]}
+
+curl -sS -X POST http://127.0.0.1:8000/query -H 'Content-Type: application/json' -d '{}'
+# {"detail":"missing or invalid service credential: ..."}   ← HTTP 401, before the body is read
 ```
 
 ### Connect it to an MCP host
@@ -532,9 +541,9 @@ server, the switch must be in the server's launch environment; the key still com
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /health` | Liveness and the `live_llm` flag. Never rate-limited, so platform probes cannot be throttled into a false "down". Never calls the provider. |
-| `POST /query` | One question in, one user-safe `QueryResponse` out. |
-| `POST /query/stream` | The same run as Server-Sent Events: `request_validated` → `guard_finding`* → `retrieval_started` → `result`. Progress without hiding safety decisions. |
+| `GET /health` | Liveness and the `live_llm` flag. Open (no token). Never rate-limited, so platform probes cannot be throttled into a false "down". Never calls the provider. |
+| `POST /query` | One question in, one user-safe `QueryResponse` out. Needs `Authorization: Bearer <service token>`. |
+| `POST /query/stream` | The same run as Server-Sent Events: `request_validated` → `guard_finding`* → `retrieval_started` → `result`. Progress without hiding safety decisions. Same token as `/query`. |
 | MCP `answer_procurement_question` | The same run as an MCP tool over stdio, with the same `QueryResponse` as its output schema. The reviewer's decision comes by elicitation, not as an argument. |
 
 Request: `query` (≤ 500 chars), `role` (`requester` | `buyer`), optional `query_id` for a
@@ -648,9 +657,12 @@ the code:
 
 - **No persistent deployment.** The Azure deployments were real, evidenced and deleted the
   same day; nothing is live today.
-- **No authentication.** The role is caller-asserted over HTTP and model-asserted over
-  MCP. Locally the port is published on host loopback only, precisely because the service
-  is unauthenticated; the Azure endpoint was public only for the smoke window.
+- **No user authentication.** Since Day 28 the query endpoints require one shared
+  service token, so only the portfolio's server-side proxy (BFF) can call them. That
+  proves which *service* called, not which *person*: the role is still caller-asserted
+  over HTTP (the BFF fixes it to `requester`) and model-asserted over MCP. The token is
+  static, manually rotated and has no scopes. The Azure endpoint was public, and
+  unauthenticated, only for the Day 23–24 smoke windows.
 - **No remote MCP.** The server is stdio only — no Streamable HTTP transport, so no OAuth,
   TLS or ingress. The stdio smoke runs locally, not in CI.
 - **No automatic rollback.** The pipeline records the rollback digest but cannot apply
