@@ -9061,7 +9061,7 @@ git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untr
 - Mixed-content check: 0 `http://` subresources. The only `http://` URL is the SEPLN journal link, a navigation link.
 - Confirmation that no credential appears in browser assets/source maps: confirmed by the scan above. No browser source maps are emitted, and no credential exists on Day 27.
 - Preview URL: **not deployed.**
-- Preview commit SHA: no deployment exists, so the evidence commit is the one to build locally: implementation commit `1745cbb279f06090c02710eef5fe7d351eaedcaa` (2026-10-26 23:58 +0100), pushed to `origin/day-27-preview`. The review round 1 follow-up sits on top of it (see "Review round 1 follow-up").
+- Preview commit SHA: no deployment exists, so the evidence commit is the one to build locally: implementation commit `1745cbb279f06090c02710eef5fe7d351eaedcaa` (2026-10-26 23:58 +0100), pushed to `origin/day-27-preview`. The review round 1 follow-up is `530dfe4` on top of it (see "Review round 1 follow-up").
 - Preview access/account blocker if not deployed: on 2026-10-26 Juan chose a local production build only. ADR §5 and §11 #4 put the Vercel account, the Hobby-terms check, the `dub1` region and repository linking on Day 28.
 - Reproducible local production URL/command: `git switch day-27-preview && npm ci && npm run build && npm run start` → `http://localhost:3000`. Tests: `npx playwright install chromium && npm test`.
 - Evidence that live Jekyll `master`/Pages remained unchanged: `origin/master` is still `7526f0c`, and Pages is still built from `master` `/` (legacy) at `7526f0c`. See Block 0.
@@ -9198,7 +9198,7 @@ Three-minute walkthrough:
 
 > “Day 27 portfolio preview is ready. Please fetch both repos and review the implementation branch against the accepted Day 26 design/inventory/ADR. Check the recruiter path, production ML/procurement experience, preserved work/publications, scoped course awards, current CV/contact, ProcureRAG ownership/architecture/eval claims, Q091 and synthetic-data limitations, Server/Client boundary, responsive/accessibility/no-JS behavior, real build/test evidence, preview URL or blocker, and that no Day 28–30 chat/deployment work is falsely presented as live. Juan owns implementation.”
 
-Sent: yes, after both pushes on 2026-10-26 (portfolio `1745cbb`, ProcureRAG `cc8539f`). Hermes review round 1 returned 2 findings (1 Medium, 1 Low), addressed in the next section. HER-295 stays open until the follow-up is committed and re-reviewed.
+Sent: yes, after both pushes on 2026-10-26 (portfolio `1745cbb`, ProcureRAG `cc8539f`). Hermes review round 1 returned 2 findings (1 Medium, 1 Low), addressed in the next section. Round 2 is recorded after it.
 
 ### Review round 1 follow-up (2026-10-27)
 
@@ -9225,7 +9225,7 @@ Hermes reviewed portfolio `1745cbb` and ProcureRAG `cc8539f`.
      - The reason was measured: with an image and no `metadataBase`, `next build` printed `⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000"` and emitted `og:image` `http://localhost:3000/images/juan-pinzon-headshot.webp`.
      - Owner: Juan. It lands with the Day 30 public URL (ADR §11 #9), with a share image whose visible claims are true at that point.
 
-Portfolio gates after the follow-up (working tree on top of `1745cbb`, 2026-10-27):
+Portfolio gates after the follow-up (run on the working tree on 2026-10-27, then committed unchanged as `530dfe4`):
 
 ```text
 typecheck: npm run typecheck / exit 0
@@ -9239,7 +9239,20 @@ git diff --check: exit 0
   - `origin/master` = `7526f0c`;
   - Pages: `legacy` build from `master` `/`, latest build `7526f0c`;
   - 0 Actions runs ever on the repository (the deleted `ci.yaml` never ran).
-- Follow-up commit: pending (Juan). Add its SHA here after the push, then ask Hermes to re-review.
+- Follow-up commits, both pushed on 2026-10-27:
+  - portfolio `530dfe41a51144cd1c01405884993bd84bca6728` (00:44 +0100) on `origin/day-27-preview`: exactly the 7 files above, and the working tree was clean afterwards;
+  - ProcureRAG `5c25922c274ebb573bbe3f7fdd42d3e674d54adb` (00:44 +0100) on `origin/day-27`: this log reconciled.
+
+### Review round 2 (2026-10-27)
+
+Hermes re-reviewed portfolio `530dfe4` and ProcureRAG `5c25922`.
+
+- Technical gates: passed.
+- Walkthrough and preview-commit evidence: confirmed as properly recorded.
+- 1 finding: two lines in this log, the follow-up commit line above and Next step #8, still said the commit, push and re-review were pending after all three had happened.
+  - **Fixed in this log:** both lines now record `530dfe4`, `5c25922` and this round.
+  - The fix touches only this log. The portfolio is unchanged since `530dfe4`, so the round 2 gates still hold.
+  - This log does not record the SHA of the commit that adds this section, because a file cannot contain the SHA of its own commit. That commit is the one after `5c25922` on `origin/day-27`.
 
 ### Next step
 
@@ -9250,5 +9263,5 @@ git diff --check: exit 0
 5. ~~Record a preview URL + commit, or a reproducible local production command + explicit preview blocker.~~ Done. Not deployed: implementation commit `1745cbb`, the local command and the Vercel blocker are recorded.
 6. ~~Fill every Day 27 evidence field with real output or an explicit blocker.~~ Done, including the walkthrough, the review and the round 1 follow-up.
 7. ~~Give the three-minute walkthrough without notes.~~ Done: 3–4 minutes, no notes. Weakest answer #11, with a practice plan above.
-8. ~~Send the review prompt to Hermes.~~ Sent; round 1 returned 2 findings, both addressed. **Pending (Juan):** commit and push the follow-up, record its SHA, and ask Hermes to re-review. Do not move HER-295 to Done before the re-review passes.
+8. ~~Send the review prompt to Hermes.~~ Sent. Round 1 returned 2 findings, both fixed in portfolio `530dfe4` and ProcureRAG `5c25922`. Round 2 on those commits: technical gates passed, and its one finding (stale "pending" lines) is fixed in this log. **Remaining (Juan):** commit and push this reconciliation. HER-295 can then move to Done unless Hermes asks for another round.
 9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
