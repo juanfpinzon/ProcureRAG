@@ -9265,3 +9265,290 @@ Hermes re-reviewed portfolio `530dfe4` and ProcureRAG `5c25922`.
 7. ~~Give the three-minute walkthrough without notes.~~ Done: 3–4 minutes, no notes. Weakest answer #11, with a practice plan above.
 8. ~~Send the review prompt to Hermes.~~ Sent. Round 1 returned 2 findings, both fixed in portfolio `530dfe4` and ProcureRAG `5c25922`. Round 2 on those commits: technical gates passed, and its one finding (stale "pending" lines) is fixed in this log. **Remaining (Juan):** commit and push this reconciliation. HER-295 can then move to Done unless Hermes asks for another round.
 9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
+
+## 2026-10-27 — Day 28: Guarded HTTP procurement chat over the real ProcureRAG service
+
+Route: [`docs/day-28-guarded-http-chat.md`](day-28-guarded-http-chat.md)
+
+Linear: HER-296 — Day 28 loop: guarded HTTP procurement chat over the real ProcureRAG service.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns every Python, test, TypeScript, React, CSS, lockfile, secret, account, provider, deployment, and spending change. Hermes created only the route and this evidence scaffold, then reviews and quizzes. Day 28 is a **local** secured vertical slice; Azure/Vercel provisioning, persistent quota, the runtime kill switch, public launch, and cutover stay on Days 29–30.
+
+### Day 27 prerequisite
+
+- HER-295: **Done**.
+- Final accepted portfolio head: `day-27-preview` @ `530dfe41a51144cd1c01405884993bd84bca6728`.
+- Final accepted ProcureRAG Day 27 head: `day-27` @ `94f25f5`, merged to `main` as `dd8d098`.
+- Day 27's static preview does not make a request and still says `Live demo: in progress`.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Required sources and exact targets:
+
+- accepted portfolio architecture ADR §§3, 6, 7, 8.1–8.4, 10 and 11;
+- `scripts/portfolio_contract_probe.py`, full file, especially the browser/upstream/browser-view models, handler ordering, nineteen scenarios, and two contract checks;
+- Next.js `Route Handlers`: file convention, supported methods, request body, runtime/caching and CORS;
+- Next.js `Environment Variables`: loading, browser bundling via `NEXT_PUBLIC_`, runtime variables and test variables;
+- FastAPI `Security Tools`: `HTTPBearer`, `HTTPAuthorizationCredentials` and `auto_error`;
+- Python `secrets.compare_digest`;
+- OpenRouter authentication, API credit/rate limits, and provider logging/privacy;
+- Vercel Functions duration, region selection, and current Hobby terms.
+
+Record one applied decision or rejection per source before implementation:
+
+- [ ] Accepted ADR read; applied/rejected decision recorded.
+- [ ] Contract probe read; applied/rejected decision recorded.
+- [ ] Next.js Route Handlers read; applied/rejected decision recorded.
+- [ ] Next.js environment-variable guide read; applied/rejected decision recorded.
+- [ ] FastAPI security reference read; applied/rejected decision recorded.
+- [ ] `secrets.compare_digest` reference read; applied/rejected decision recorded.
+- [ ] OpenRouter auth/limits/privacy sources read; applied/rejected decision recorded.
+- [ ] Vercel duration/region/Hobby terms read; applied/rejected decision recorded.
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-27:
+
+```text
+ProcureRAG branch: day-28
+ProcureRAG base/head: main @ dd8d0984a5e9cf75bb94d0fd5ff8eca0967a0e2d
+ProcureRAG origin/main divergence before branch: 0/0
+ProcureRAG working tree before scaffold: clean
+portfolio accepted branch/head: origin/day-27-preview @ 530dfe41a51144cd1c01405884993bd84bca6728
+portfolio audit-clone divergence: 0/0
+portfolio audit-clone working tree before npm install/build: clean
+Python: 3.11.15
+uv: 0.11.11
+Node: 22.22.2
+npm: 10.9.7
+```
+
+All ProcureRAG commands used `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1`, and `OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev: exit 0, 154 packages resolved, 146 checked
+uv lock --check: exit 0
+pytest: exit 0, 452 passed in 3.55s
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 as expected
+current retrieval verification: exit 0, 6/6 [OK]
+graph regression: exit 0, 6/6 contracts, 4 stand-in LLM calls
+no-paid portfolio contract probe: exit 0, 19/19 scenarios + 2/2 contract checks, 0 failures
+git diff --check: exit 0
+```
+
+No live provider call or trace upload ran. Q091 remains red for live-answer completeness and retains the deterministic `Band 3` term-level gap.
+
+Portfolio baseline, run from a fresh clone of `origin/day-27-preview`:
+
+```text
+npm ci: exit 0, 354 packages added, 0 vulnerabilities
+typecheck: exit 0
+lint: exit 0
+production build: exit 0; /, /about, /procurerag and /icon.svg are static
+Playwright: exit 0, 67 passed in 26.5s
+git diff --check: exit 0
+```
+
+### Current truth before implementation
+
+- ProcureRAG exposes unauthenticated `GET /health`, `POST /query`, and `POST /query/stream`.
+- `src/api.py` has no `PROCURERAG_SERVICE_TOKEN` setting/dependency and no CORS middleware.
+- The accepted architecture requires a dedicated Bearer service token on both query routes, checked before rate limiting, request validation, retrieval, or generation; `/health` stays open.
+- The portfolio has no BFF, route handler, chat Client Component, server credential, or `.env*` file.
+- The Day 27 demo section is intentionally static.
+- Approved presets remain exactly Q001, Q005, Q021 and Q090. Q091 and Q092 remain withheld.
+- Nothing is deployed. Legacy `master`/Pages is outside Day 28's mutation boundary.
+
+### Day 28 contract
+
+Browser → BFF:
+
+- body: exactly `{ "question": string }`, no extra key;
+- question: 1–500 characters;
+- raw body: at most 2,048 bytes, enforced while reading before parsing;
+- same-origin `POST /api/chat`; no browser-held secret and no direct browser→FastAPI request.
+
+BFF → FastAPI:
+
+- fixed role `requester`;
+- `query_id` only for exact approved preset text;
+- no `decision`;
+- one call, no automatic retry;
+- `Authorization: Bearer <service-token>` from a server-only setting;
+- 75 s upstream timeout and 100 s route `maxDuration`, unless an evidence-backed change is recorded.
+
+FastAPI → BFF → browser:
+
+- validate the complete `QueryResponse` at runtime, then reduce it;
+- preserve all six API states and the four transport states;
+- expose IDs-only sources plus `cited`;
+- drop `run_id`, `approval_request`, guard detail text, raw bodies and every secret;
+- `pending_approval` fails closed, with no public approval UI.
+
+### Block 0 — contract and branch discipline
+
+- [x] Create ProcureRAG `day-28` from `main` @ `dd8d098`.
+- [ ] Create the portfolio implementation branch from `day-27-preview` @ `530dfe4`; suggested name `day-28-chat`.
+- [ ] Record fetch/status/divergence evidence for both repositories.
+- [ ] Complete the source checkpoint and applied-decision notes.
+- [ ] Draw and explain the browser→BFF and BFF→API trust boundaries.
+- [ ] Confirm `master`/Pages remains untouched.
+
+### Block 1 — ProcureRAG service-token boundary
+
+- [ ] Protect `/query` and `/query/stream` with the dedicated service token.
+- [ ] Keep `/health` unauthenticated and provider-free.
+- [ ] Use constant-time comparison.
+- [ ] Fail closed when the configured token is missing/blank; record whether at startup or request time and why.
+- [ ] Prove missing, malformed, blank and wrong credentials return 401.
+- [ ] Prove auth wins over malformed-body validation and rate limiting.
+- [ ] Prove refused credentials make zero retrieval and LLM calls and consume no rate-limit budget.
+- [ ] Prove correct credentials preserve the existing response states.
+- [ ] Verify OpenAPI marks only the protected routes with Bearer authentication.
+- [ ] Reconcile every API/runbook/probe instruction made false by authentication.
+
+### Block 2 — typed same-origin BFF
+
+- [ ] Server-only `PROCURERAG_API_URL` and `PROCURERAG_SERVICE_TOKEN`; neither uses `NEXT_PUBLIC_`.
+- [ ] Raw-body limit enforced before parsing and without trusting `Content-Length` alone.
+- [ ] Exact browser schema; every extra field rejected before upstream.
+- [ ] Fixed requester role and exact-preset mapping.
+- [ ] Runtime upstream-response validation; compile-time types alone do not count.
+- [ ] Exact ADR status/HTTP mapping.
+- [ ] One upstream call and no automatic retry.
+- [ ] Date-form/malformed `Retry-After` dropped safely.
+- [ ] Missing configuration, malformed 200, upstream 401/500, network failure and kill switch map to `unavailable`.
+- [ ] Port all nineteen probe scenarios and both contract checks to the TypeScript implementation.
+- [ ] Mutation-check the role, extra-key, runtime-validation, hidden-field and secret-boundary assertions.
+
+### Block 3 — smallest chat Client Component
+
+- [ ] Keep `/procurerag/page.tsx` a Server Component; add one leaf chat island.
+- [ ] Labelled 1–500 character question input and four exact preset buttons.
+- [ ] No role picker or approval controls.
+- [ ] Distinct UI for ten result/transport states.
+- [ ] IDs-only source rendering and free-text evidence caveat.
+- [ ] Visible page-local history, explicitly not model memory.
+- [ ] Synthetic-data, third-party-provider and no-personal/confidential-data disclosure.
+- [ ] Accessible pending/result/error announcements and intentional focus management.
+- [ ] 105 s browser abort and no automatic retry.
+- [ ] Keyboard, focus, 320 px reflow, 400% zoom, screen-reader, reduced-motion and no-JavaScript checks.
+- [ ] Decide and record whether `/api/chat/status` is implemented today or explicitly deferred.
+
+### Block 4 — local real-HTTP proof
+
+- [ ] Run a separate real FastAPI process with a local token, live LLM off and tracing off.
+- [ ] Run the portfolio production build with matching server-only runtime settings.
+- [ ] Prove `/health` works without auth.
+- [ ] Prove direct `/query` and `/query/stream` without auth return 401.
+- [ ] Prove authenticated `/query` reaches the real guarded service and returns `not_generated` with the LLM off.
+- [ ] Prove browser → BFF → FastAPI returns the corresponding typed state.
+- [ ] Prove browser-supplied escalation fields cannot cross the BFF.
+- [ ] Scan HTML, browser assets, source maps, logs, console and response bodies for secret names/values without printing a secret.
+- [ ] Record what the smoke proves and what remains unproven.
+
+### Model, cost and provisioning gate
+
+Fill with current sourced values and calculator output:
+
+```text
+model id:
+provider endpoint:
+pricing source and checked-at time:
+input price per 1M tokens:
+output price per 1M tokens:
+maximum input/context tokens charged:
+public maximum output tokens:
+worst-case input cost:
+worst-case output cost:
+worst-case total cost/request:
+US$5 monthly ceiling / 30:
+global daily cap = floor(daily budget / worst-case cost/request):
+dedicated OpenRouter key limit = US$5, verified yes/no:
+training/logging/retention setting:
+```
+
+- [ ] Model and exact endpoint selected against the ceiling.
+- [ ] Public output cap configured below the current 3,000-token default.
+- [ ] Worst-case cost and global daily cap calculated with a tool.
+- [ ] Dedicated key's US$5 credit limit confirmed before any paid smoke.
+- [ ] Privacy/training/retention settings and remaining disclosure recorded.
+- [ ] Vercel Hobby terms fit and `dub1` availability recorded read-only.
+- [ ] Paid smoke explicitly approved by Juan, or recorded as blocked/not run.
+- [ ] No Azure/Vercel/OpenRouter provisioning or spend implied by the local slice.
+
+### Required verification
+
+ProcureRAG, with provider calls and tracing forced off:
+
+```text
+uv sync --locked --dev
+uv lock --check
+pytest -q
+python -m compileall -q src tests scripts
+python -m ruff check src tests scripts
+python src/regression_suite.py
+HF_HUB_OFFLINE=1 python src/regression_suite.py --verify-retrieval
+HF_HUB_OFFLINE=1 python src/graph_regression.py
+python scripts/portfolio_contract_probe.py
+git diff --check
+```
+
+Portfolio:
+
+```text
+npm ci
+npm run typecheck
+npm run lint
+npm run build
+npm test
+git diff --check
+```
+
+Record every command separately with exit code and meaningful output. Add focused service-auth, BFF-contract, secret-scan, accessibility, console/network and local real-HTTP results. Never record credentials.
+
+### What failed or was confusing
+
+- Pending implementation.
+
+### What became clearer
+
+- The token authenticates the BFF service, not a public visitor and not a procurement role.
+- Same-origin BFF architecture avoids browser CORS, while service authentication protects the public API from non-browser callers; CORS could not do that.
+- A TypeScript type does not validate an untrusted HTTP response at runtime.
+- The first real proof is local HTTP with the LLM off; deployment and paid generation are separate gates.
+
+### What I can now explain in an interview
+
+Write concise answers without reading the route:
+
+1. Why the browser calls a same-origin BFF instead of FastAPI directly.
+2. Service authentication versus role authorization versus visitor identity.
+3. Why auth must precede rate limiting and body validation.
+4. Why the raw 2 KB limit must run before JSON parsing.
+5. Why preset ids require exact text equality.
+6. Why Q091/Q092 stay out of the public presets.
+7. Runtime validation versus TypeScript compile-time types.
+8. Why every status stays distinct in the UI.
+9. Why public approval fails closed.
+10. What the local real-HTTP smoke proves and does not prove.
+11. How the three timeout layers relate.
+12. How the US$5 ceiling becomes an output cap and global daily cap.
+13. What remains for Day 29 before the demo can be called live.
+
+### Next step
+
+1. Complete the exact readings and applied-decision record.
+2. Implement and test the ProcureRAG service-token boundary.
+3. Implement and test the typed Next.js BFF.
+4. Build and verify the smallest chat Client Component.
+5. Run the local production chain over real HTTP with the LLM off first.
+6. Complete the model/cost/provider/provisioning worksheet; do not make a paid call without approval.
+7. Run all gates and record real outputs or blockers.
+8. Give the three-minute walkthrough without notes.
+9. Send the Day 28 review prompt from the route to Hermes.
+10. Keep HER-296 In Progress until pushed evidence is reviewed and every finding is resolved.
