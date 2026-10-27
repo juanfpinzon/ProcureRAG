@@ -32,6 +32,30 @@ Q091_PENDING = {"status": "pending_approval", "approval_request": {"query_id": "
 OFF_TOPIC_BLOCKED = {"status": "blocked", "findings": [{"guard": "off_topic"}], "run_id": None}
 
 
+def test_a_query_without_the_service_token_must_be_refused_with_401():
+    smoke = _load_container_smoke_module()
+
+    assert smoke.check_unauthenticated_refused(401, {"detail": "missing or invalid service credential"}) == []
+    assert smoke.check_unauthenticated_refused(200, Q001_ANSWER) != []  # the image runs queries for anyone
+    assert smoke.check_unauthenticated_refused(None, {"_error": "ConnectionResetError"}) != []
+
+
+def test_image_mode_hands_the_token_to_docker_by_name_never_on_the_command_line(monkeypatch):
+    """`--env NAME` without `=value` makes Docker copy the value from the
+    `docker` process's own environment. So the token is in that environment,
+    and in no command-line argument."""
+    smoke = _load_container_smoke_module()
+    calls = []
+    monkeypatch.setattr(smoke, "docker", lambda *args, env=None: calls.append((args, env)) or "container-id")
+
+    smoke.start_container("procurerag-api:ci-abc", 8000, "token-for-this-run-only")
+
+    args, env = calls[0]
+    assert ("--env", "PROCURERAG_SERVICE_TOKEN") in zip(args, args[1:])
+    assert all("token-for-this-run-only" not in arg for arg in args)
+    assert env["PROCURERAG_SERVICE_TOKEN"] == "token-for-this-run-only"
+
+
 def test_health_requires_live_llm_false():
     smoke = _load_container_smoke_module()
 
@@ -87,19 +111,30 @@ def test_log_check_names_the_keyword_and_line_but_never_prints_the_line():
 # ---------------------------------------------------------------------------
 
 
+DEPLOYMENT_TOKEN = "url-mode-test-token"
+
+
 def _serve_measured_answers(monkeypatch, smoke, health=None):
-    """Make the script's two HTTP helpers return the measured answers, and forbid docker."""
+    """Make the script's two HTTP helpers return the measured answers, and forbid docker.
+
+    The fake API enforces the service token like the real one (Day 28): no
+    token, or the wrong one, is a 401. The deployment's token is set in the
+    environment, where URL mode reads it.
+    """
 
     def no_docker(*args, **kwargs):
         raise AssertionError("URL mode must not call docker")
 
-    def fake_post(url, body, timeout=60):
+    def fake_post(url, body, token, timeout=60):
+        if token != DEPLOYMENT_TOKEN:
+            return 401, {"detail": "missing or invalid service credential"}
         answers = {"Q001": (200, Q001_ANSWER), "Q091": (200, Q091_PENDING)}
         return answers.get(body.get("query_id"), (200, OFF_TOPIC_BLOCKED))
 
     monkeypatch.setattr(smoke.subprocess, "run", no_docker)
     monkeypatch.setattr(smoke, "http_get_json", lambda url, timeout=5: (200, health or {"status": "ok", "live_llm": False}))
     monkeypatch.setattr(smoke, "http_post_json", fake_post)
+    monkeypatch.setenv(smoke.SERVICE_TOKEN_ENV_VAR, DEPLOYMENT_TOKEN)
 
 
 def test_url_mode_passes_on_the_measured_answers_without_touching_docker(monkeypatch, capsys):
@@ -110,6 +145,23 @@ def test_url_mode_passes_on_the_measured_answers_without_touching_docker(monkeyp
     output = capsys.readouterr().out
     assert "[skip] logs" in output
     assert "example.invalid" not in output  # the deployment's URL is never printed
+    assert DEPLOYMENT_TOKEN not in output  # nor its token
+
+
+def test_url_mode_without_the_deployment_token_is_a_usage_error(monkeypatch, capsys):
+    """URL mode cannot invent a running deployment's token. Without it, the
+    script stops before any request, and names the variable it needs."""
+    smoke = _load_container_smoke_module()
+    _serve_measured_answers(monkeypatch, smoke)
+    monkeypatch.delenv(smoke.SERVICE_TOKEN_ENV_VAR)
+
+    try:
+        smoke.main(["--url", "https://procurerag-api.example.invalid"])
+    except SystemExit as error:
+        assert error.code == 2  # argparse's usage error
+    else:
+        raise AssertionError("URL mode ran without a token")
+    assert "PROCURERAG_SERVICE_TOKEN" in capsys.readouterr().err
 
 
 def test_url_mode_fails_when_the_deployed_revision_has_the_live_llm_on(monkeypatch):

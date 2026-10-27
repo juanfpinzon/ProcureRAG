@@ -38,6 +38,13 @@ those two the probe hands the BFF a `send` function that raises the same
 sends on purpose (a body cut off mid-JSON, a `Retry-After` in date form), it
 hands back a canned `httpx.Response` instead.
 
+**The service token (Day 28).** The real API now refuses any query without
+the BFF's service credential (`Authorization: Bearer <token>`). So every
+`send` that reaches the real app carries one, exactly as the real BFF will:
+a fresh random token for each run (`PROBE_SERVICE_TOKEN`), stored where the
+API's startup would have stored it. One scenario sends the WRONG token, to
+show what the BFF does when the API refuses its credential.
+
 **Run it** (from the repository root):
 
     PROCURERAG_LIVE_LLM=0 LANGSMITH_TRACING=false LANGSMITH_TRACING_V2=false \
@@ -52,14 +59,15 @@ failed (each failure is printed).
 SHAPES, the 2 KB body limit, the preset-versus-free-text rule, the fixed
 public role, the IDs-only sources, one UI state for each of the six API
 statuses plus the four transport outcomes (422, 429, timeout, unavailable),
-and that a malformed upstream reply becomes "unavailable" instead of a crash.
-It proves NOTHING
-about live generation or answer quality (the LLM is a fake), the real
-TypeScript BFF, browser rendering, authentication between the BFF and the
-API, durable quotas, cold starts, or any deployment.
+that a malformed upstream reply becomes "unavailable" instead of a crash, and
+that a refused service credential (the API's 401) becomes "unavailable" too.
+It proves NOTHING about live generation or answer quality (the LLM is a
+fake), the real TypeScript BFF (the portfolio repository tests that one),
+browser rendering, durable quotas, cold starts, or any deployment.
 """
 
 import json
+import secrets
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,6 +132,11 @@ MAX_BODY_BYTES = 2048
 # request (not a value baked in at build time), so an operator can switch the
 # demo off without shipping new code. Where it lives is a Day 29 decision.
 DEMO_ENABLED = True
+
+# The BFF's service credential for this run (Day 28). Random each time the
+# probe runs, so no file holds it. In the real BFF it is a server-only
+# environment variable, sent as `Authorization: Bearer <token>`.
+PROBE_SERVICE_TOKEN = secrets.token_urlsafe(32)
 
 
 def load_jsonl(path):
@@ -426,13 +439,18 @@ def failing_llm(prompt):
     raise RuntimeError("provider error (fake)")
 
 
-def make_api_sender(retrieval, llm=None, case_overrides=None, rate_limiter=None):
+def make_api_sender(retrieval, llm=None, case_overrides=None, rate_limiter=None, sent_token=None):
     """A `send` function that posts to the REAL `api.app`, with a fake service behind it.
 
     `app.dependency_overrides` is FastAPI's testing seam: every endpoint that
     asks for `api.get_service` gets this service instead of the live one, so
     the models never load. `raise_server_exceptions=False` makes a server
     error come back as the HTTP 500 a real caller would see.
+
+    The service token, on both sides (Day 28): the API side accepts
+    `PROBE_SERVICE_TOKEN` (stored on `app.state`, where the API's startup
+    would put it), and the client sends `sent_token`, which is that same
+    token unless a scenario passes a wrong one.
     """
     service = api.ProcureRAGService(
         retrieve_fn=retrieval,
@@ -444,7 +462,9 @@ def make_api_sender(retrieval, llm=None, case_overrides=None, rate_limiter=None)
     if rate_limiter is not None:
         service.rate_limiter = rate_limiter
     api.app.dependency_overrides[api.get_service] = lambda: service
-    client = TestClient(api.app, raise_server_exceptions=False)
+    api.app.state.service_token = PROBE_SERVICE_TOKEN
+    authorization = {"Authorization": f"Bearer {sent_token or PROBE_SERVICE_TOKEN}"}
+    client = TestClient(api.app, raise_server_exceptions=False, headers=authorization)
     return lambda upstream_body: client.post("/query", json=upstream_body)
 
 
@@ -665,6 +685,17 @@ def build_scenarios():
             expect_query_id="Q001",
         ),
         Scenario(
+            # The REAL API, with the BFF's credential wrong (e.g. rotated on
+            # one end only): the API answers 401 before it reads the body.
+            # The visitor gets "unavailable", never the API's 401 text.
+            name="service token refused -> API 401 -> 503 unavailable",
+            browser_body=browser_json({"question": Q001_TEXT}),
+            make_send=lambda: make_api_sender(FakeRetrieval([APPROVAL_POLICY]), sent_token="a-rotated-old-token"),
+            expect_http=503,
+            expect_state="unavailable",
+            expect_query_id="Q001",
+        ),
+        Scenario(
             # The REAL API, with an LLM that raises: the API answers HTTP 500.
             name="LLM provider fails -> API 500 -> 503 unavailable",
             browser_body=browser_json({"question": "Who approves a purchase order for office plants?"}),
@@ -825,8 +856,10 @@ def main():
     finally:
         # `api.app` is one shared object. Leave it as it was found, so
         # nothing that imports `api` after this probe (a test, for example)
-        # inherits the fake service.
+        # inherits the fake service or the probe's token.
         api.app.dependency_overrides.pop(api.get_service, None)
+        if hasattr(api.app.state, "service_token"):
+            del api.app.state.service_token
 
     print("\nContract checks")
     for name, failures in [

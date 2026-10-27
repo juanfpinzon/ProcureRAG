@@ -37,13 +37,32 @@ def test_every_scenario_and_contract_check_passes(capsys):
     assert "0 failure(s)." in capsys.readouterr().out
 
 
-def test_the_probe_leaves_the_shared_api_app_without_its_fake_service():
+def test_the_probe_leaves_the_shared_api_app_without_its_fake_service_or_token():
     """`api` is one shared module (`tests/test_mcp_server.py` uses it too), so the probe must clean up."""
     probe = _load_probe_module()
 
     probe.main()
 
     assert probe.api.get_service not in probe.api.app.dependency_overrides
+    assert not hasattr(probe.api.app.state, "service_token")
+
+
+def test_a_refused_service_token_reaches_the_real_api_and_becomes_unavailable():
+    """Day 28: the real API answers a wrong BFF credential with 401, and the
+    BFF must turn that into "unavailable", never into the API's own text."""
+    probe = _load_probe_module()
+    wrong_token_send = probe.make_api_sender(probe.FakeRetrieval([probe.APPROVAL_POLICY]), sent_token="wrong")
+    recorder = probe.RecordingSender(wrong_token_send)
+    try:
+        upstream = wrong_token_send({"query": "What does GRNI mean?", "role": "requester"})
+        http_status, view = probe.handle_browser_request(probe.browser_json({"question": "What does GRNI mean?"}), recorder)
+    finally:
+        probe.api.app.dependency_overrides.pop(probe.api.get_service, None)
+        del probe.api.app.state.service_token
+
+    assert upstream.status_code == 401  # the real API refused the credential
+    assert (http_status, view.state, view.text) == (503, "unavailable", None)
+    assert len(recorder.bodies) == 1  # one call, no retry with another credential
 
 
 def test_only_an_exact_preset_text_gets_its_query_id():

@@ -439,8 +439,13 @@ MAX_ANSWER_TOKENS = 3000
 GENERATION_TEMPERATURE = 0.0
 
 
-def make_openrouter_client(model=None, api_key=None, response_model=None):
+def make_openrouter_client(model=None, api_key=None, response_model=None, max_tokens=MAX_ANSWER_TOKENS):
     """Build a live `client(prompt) -> answer_text` callable backed by OpenRouter.
+
+    `max_tokens` (Day 28, optional): the output cap sent with every request.
+    It defaults to `MAX_ANSWER_TOKENS`, so every existing caller is unchanged.
+    The served API passes a lower, public cap when its deployment sets one
+    (`api.read_max_answer_tokens`).
 
     `response_model` (Day 19, optional): a Pydantic model class such as
     `GeneratedAnswer`. When given, the request asks for provider-native
@@ -523,7 +528,7 @@ def make_openrouter_client(model=None, api_key=None, response_model=None):
         response = openai_client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=MAX_ANSWER_TOKENS,
+            max_tokens=max_tokens,
             temperature=GENERATION_TEMPERATURE,
             extra_body=extra_body,
             **structured_output,  # empty unless `response_model` was given

@@ -13,20 +13,31 @@ Docker CI job needs no `uv sync` just to run it.
 
 **What it proves, and what it does not.** That THIS image starts with no key
 and no network access to the Hub, loads its baked models, answers `/health`,
-runs local retrieval for a labeled question, stops at the approval boundary,
-blocks an off-topic question, and logs no traceback or secret-like text. It
-says nothing about answer quality, and nothing about any other image: it must
-be run against the exact tag the workflow just built.
+refuses a query without the service token (Day 28), runs local retrieval for
+a labeled question, stops at the approval boundary, blocks an off-topic
+question, and logs no traceback or secret-like text. It says nothing about
+answer quality, and nothing about any other image: it must be run against the
+exact tag the workflow just built.
+
+**The service token (Day 28).** The API refuses to start without
+`PROCURERAG_SERVICE_TOKEN`, and refuses every query without it. In image mode
+the script makes a fresh random token for this one run and hands it to the
+container by NAME only (`--env PROCURERAG_SERVICE_TOKEN`, with the value in
+the `docker` command's own environment), so the value never appears on a
+command line, in `ps`, or in this script's output.
 
 **Second mode: a deployment that is already running** (the deploy workflow's
 last step, after Azure has switched to the new revision):
 
-    python3 scripts/container_smoke.py --url https://<app-fqdn>
+    PROCURERAG_SERVICE_TOKEN=<the deployment's token> python3 scripts/container_smoke.py --url https://<app-fqdn>
 
-The same HTTP probes, sent to that URL. Nothing is started or removed, so no
-`docker` is needed. There is no log probe in this mode: the logs live on the
-platform, not in a local container. The deploy workflow checks the logs of
-the same image in its local container smoke, before the image is pushed.
+The same HTTP probes, sent to that URL, with the token read from this
+process's environment (it must match the deployment's). Nothing is started
+or removed, so no `docker` is needed. There is no log probe in this mode:
+the logs live on the platform, not in a local container. The deploy workflow
+checks the logs of the same image in its local container smoke, before the
+image is pushed. (Day 29: the deploy workflow does not pass a token yet. See
+the Day 28 handoff in `docs/learning-log.md`.)
 
 **Exit codes** (both modes).
 
@@ -43,7 +54,9 @@ nothing behind.
 
 import argparse
 import json
+import os
 import re
+import secrets
 import subprocess
 import sys
 import time
@@ -51,6 +64,9 @@ import urllib.error
 import urllib.request
 
 CONTAINER_NAME = "procurerag-smoke"
+
+# The API's service-token setting (Day 28, `api.SERVICE_TOKEN_ENV_VAR`).
+SERVICE_TOKEN_ENV_VAR = "PROCURERAG_SERVICE_TOKEN"
 
 # The runtime contract from `docs/docker-runbook.md` ("Runtime configuration"),
 # passed explicitly even where the image already sets the same default, so the
@@ -103,17 +119,26 @@ class StartupFailure(Exception):
 # ---------------------------------------------------------------------------
 
 
-def docker(*args):
-    """Run one `docker` command and return its stdout. Raises if docker fails."""
-    completed = subprocess.run(["docker", *args], capture_output=True, text=True, check=True)
+def docker(*args, env=None):
+    """Run one `docker` command and return its stdout. Raises if docker fails.
+
+    `env`: the environment of the `docker` process itself (None: this
+    script's own). `start_container` uses it to hand over the token.
+    """
+    completed = subprocess.run(["docker", *args], capture_output=True, text=True, check=True, env=env)
     return completed.stdout.strip()
 
 
-def start_container(image, port):
+def start_container(image, port, service_token):
     """Start the image in the background, published on the host loopback only.
 
     No `--rm`: if the container crashes during startup, its logs must still be
     readable to explain why. `remove_container` deletes it at the end instead.
+
+    The service token goes in by NAME: `--env PROCURERAG_SERVICE_TOKEN` with
+    no `=value` tells Docker to copy the value from the `docker` command's
+    own environment. So the value is never part of the command line, which
+    other processes on the machine (`ps`) and error messages can show.
     """
     env_flags = [flag for name, value in RUN_ENV.items() for flag in ("--env", f"{name}={value}")]
     docker(
@@ -121,7 +146,9 @@ def start_container(image, port):
         "--publish", f"127.0.0.1:{port}:8000",
         "--cpus", CPU_LIMIT, "--memory", MEMORY_LIMIT,
         *env_flags,
+        "--env", SERVICE_TOKEN_ENV_VAR,
         image,
+        env={**os.environ, SERVICE_TOKEN_ENV_VAR: service_token},
     )
 
 
@@ -169,8 +196,11 @@ def _parse_body(raw_bytes):
         return {"_raw": text[:300]}
 
 
-def http_post_json(url, body, timeout=60):
+def http_post_json(url, body, token, timeout=60):
     """POST a JSON body and return `(status_code, body_dict)`. Never raises.
+
+    `token`: the service token, sent as `Authorization: Bearer <token>`.
+    None sends no credential at all (the refusal probe).
 
     - 2xx: the parsed answer.
     - 4xx/5xx: urllib raises `HTTPError`, which still carries the status and
@@ -180,9 +210,10 @@ def http_post_json(url, body, timeout=60):
       other than 200 as a failure, so this turns red instead of crashing the
       script before the logs are printed.
     """
-    request = urllib.request.Request(
-        url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"}, method="POST"
-    )
+    headers = {"Content-Type": "application/json"}
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, _parse_body(response.read())
@@ -235,6 +266,13 @@ def check_health(health):
     if health.get("live_llm") is not False:
         failures.append(f"/health live_llm is {health.get('live_llm')!r}, expected false: no provider may be wired in")
     return failures
+
+
+def check_unauthenticated_refused(status_code, body):
+    """A query with no service token: the API must refuse it with 401 (Day 28), before running anything."""
+    if status_code != 401:
+        return [f"a query without the service token returned HTTP {status_code}, expected 401: {body}"]
+    return []
 
 
 def check_q001(status_code, body):
@@ -319,13 +357,18 @@ def check_logs(logs):
 # ---------------------------------------------------------------------------
 
 
-def http_probes(base_url, health):
-    """The HTTP contract, identical for a local container and a deployed revision."""
+def http_probes(base_url, health, token):
+    """The HTTP contract, identical for a local container and a deployed revision.
+
+    The refusal probe sends no token; every other query sends `token`.
+    """
+    query_url = f"{base_url}/query"
     return [
         ("/health contract", check_health(health)),
-        ("Q001 labeled, local retrieval", check_q001(*http_post_json(f"{base_url}/query", Q001_REQUEST))),
-        ("Q091 without a decision", check_q091_pending(*http_post_json(f"{base_url}/query", Q091_REQUEST))),
-        ("off-topic question", check_off_topic_blocked(*http_post_json(f"{base_url}/query", OFF_TOPIC_REQUEST))),
+        ("query without the service token", check_unauthenticated_refused(*http_post_json(query_url, Q001_REQUEST, None))),
+        ("Q001 labeled, local retrieval", check_q001(*http_post_json(query_url, Q001_REQUEST, token))),
+        ("Q091 without a decision", check_q091_pending(*http_post_json(query_url, Q091_REQUEST, token))),
+        ("off-topic question", check_off_topic_blocked(*http_post_json(query_url, OFF_TOPIC_REQUEST, token))),
     ]
 
 
@@ -340,11 +383,13 @@ def print_probes(probes):
     return failed
 
 
-def smoke_running_service(base_url, health_budget):
+def smoke_running_service(base_url, health_budget, token):
     """URL mode: the HTTP probes against a service someone else started (e.g. an Azure revision).
 
     The URL itself is never printed: in a public CI log it would advertise
-    an unauthenticated endpoint. (The deploy workflow also masks it.)
+    the endpoint, which wakes (and bills) a scaled-to-zero replica even when
+    it refuses the request. (The deploy workflow also masks it.) The token
+    is never printed either.
     """
     try:
         seconds, health = wait_for_health(base_url, health_budget, local_container=False)
@@ -354,7 +399,7 @@ def smoke_running_service(base_url, health_budget):
         return EXIT_STARTUP_FAILED
     print(f"[ok] /health answered after {seconds:.1f} s: {health}")
 
-    failed = print_probes(http_probes(base_url, health))
+    failed = print_probes(http_probes(base_url, health, token))
     print("[skip] logs: not readable over HTTP (the image's own logs are checked in image mode)")
 
     print(f"\nexit code: {EXIT_CONTRACT_FAILED if failed else EXIT_PASSED}")
@@ -375,8 +420,15 @@ def main(argv=None) -> int:
     if (args.image is None) == (args.url is None):
         parser.error("give either an IMAGE to start, or --url of a running deployment (not both)")
     if args.url:
-        return smoke_running_service(args.url.rstrip("/"), args.health_budget)
+        # A running deployment has its own token; this script cannot invent
+        # it. The error names the variable, never a value.
+        token = os.environ.get(SERVICE_TOKEN_ENV_VAR, "")
+        if not token.strip():
+            parser.error(f"--url needs the deployment's service token in the environment variable {SERVICE_TOKEN_ENV_VAR}")
+        return smoke_running_service(args.url.rstrip("/"), args.health_budget, token)
 
+    # Image mode: a fresh token for this one container, never printed.
+    token = secrets.token_urlsafe(32)
     base_url = f"http://127.0.0.1:{args.port}"
     remove_container()  # a leftover container from an interrupted run would block the name/port
     try:
@@ -384,7 +436,7 @@ def main(argv=None) -> int:
         # built), or the server can die or hang while loading. All of these
         # are packaging/startup failures, reported with the log tail.
         try:
-            start_container(args.image, args.port)
+            start_container(args.image, args.port, token)
             print(f"started {args.image} as {CONTAINER_NAME} ({CPU_LIMIT} CPU, {MEMORY_LIMIT} memory, {RUN_ENV})")
             seconds, health = wait_for_health(base_url, args.health_budget)
         except (StartupFailure, subprocess.CalledProcessError) as error:
@@ -397,7 +449,7 @@ def main(argv=None) -> int:
             return EXIT_STARTUP_FAILED
         print(f"[ok] /health answered after {seconds:.1f} s: {health}")
 
-        probes = http_probes(base_url, health)
+        probes = http_probes(base_url, health, token)
         # The logs are read AFTER the requests, so they include every request's handling.
         probes.append(("logs", check_logs(container_logs())))
 

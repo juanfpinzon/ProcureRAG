@@ -4,6 +4,8 @@ How to deploy the ProcureRAG API container to Azure Container Apps, smoke-test i
 
 Day 23 (HER-291). It continues the local [`docker-runbook.md`](docker-runbook.md): same image, same `/health`, same environment contract, now on a cloud host.
 
+> **Day 28 change, not yet reflected below.** Since Day 28 the API requires a service token: it refuses to start without `PROCURERAG_SERVICE_TOKEN`, and `/query` and `/query/stream` answer HTTP 401 without `Authorization: Bearer <token>`. The commands in this runbook are the historical Day 23–24 ones and predate that. Followed as written today, the new revision would never become ready (no token in its environment), which is the intended fail-closed behaviour. Before any redeployment, Day 29 must store the token as a Container Apps **secret**, reference it from the container's environment (`secretRef`), add the header to every `curl` below, and give the deploy workflow's URL smoke the same token. Rotation means changing it on both ends (Azure and the portfolio BFF) together.
+
 **What you get:** one temporary, scale-to-zero replica of the API, behind an Azure-managed HTTPS endpoint, answering with local retrieval only. No LLM call, no LangSmith trace, and no provider key.
 
 **What you do not get:** authentication, a production rate limit, answer-quality evaluation, or a deployment meant to stay up. The service trusts the caller's `role`. Delete the resource group at the end (step 11).

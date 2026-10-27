@@ -43,6 +43,7 @@ The [`Dockerfile`](../Dockerfile) explains each instruction in its comments, and
 | `PROCURERAG_LIVE_LLM` | `0` | No | `1` only for an explicit, paid live-LLM run | `docker run --env PROCURERAG_LIVE_LLM=1` |
 | `LANGSMITH_TRACING` | `false` | No | Keep `false` for every run in this runbook | `--env` |
 | `LANGSMITH_TRACING_V2` | `false` | No | Same. LangSmith reads this name first | `--env` |
+| `PROCURERAG_SERVICE_TOKEN` | not set | **Yes** | Always (Day 28): the server refuses to start without it, and every `/query` and `/query/stream` must send it as `Authorization: Bearer <token>` | `--env PROCURERAG_SERVICE_TOKEN` (name only: Docker copies the value from your shell, so it never appears in the command). Never in `ARG`, `ENV`, a copied `.env`, or a committed file. The app reads it from the environment only, never from `.env` |
 | `OPENROUTER_API_KEY` | not set | **Yes** | Only together with `PROCURERAG_LIVE_LLM=1` | At run time only (see "Optional: a paid live-LLM run"). Never in `ARG`, `ENV`, a copied `.env`, or a committed file |
 | `HF_HOME` | `/home/procurerag/.cache/huggingface` | No | Never: the cache volume is mounted at this path | n/a |
 | `HF_HUB_OFFLINE` | `1` | No | `0` for the warm-up run only | `--env HF_HUB_OFFLINE=0` |
@@ -124,9 +125,16 @@ What this does:
 
 ## 4. Run the service (no key, host loopback only)
 
+Since Day 28 the API needs a service token. Make a throwaway one in this shell only; every query below sends it, and the container gets it by name:
+
+```bash
+export PROCURERAG_SERVICE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+```
+
 ```bash
 docker run --detach --rm --name procurerag-day22 \
   --publish 127.0.0.1:8000:8000 \
+  --env PROCURERAG_SERVICE_TOKEN \
   --env PROCURERAG_LIVE_LLM=0 \
   --env LANGSMITH_TRACING=false \
   --env LANGSMITH_TRACING_V2=false \
@@ -135,7 +143,7 @@ docker run --detach --rm --name procurerag-day22 \
 ```
 
 - `--detach` runs it in the background. `--rm` deletes the container when it stops.
-- `--publish 127.0.0.1:8000:8000` reads as `HOST_IP:HOST_PORT:CONTAINER_PORT`. Inside the container, Uvicorn listens on `0.0.0.0:8000` (every container interface), because Docker's forwarded traffic arrives on the container's network interface, not on its loopback. On the host, the port opens on `127.0.0.1` only, so other machines on the LAN cannot reach this unauthenticated service. A bare `--publish 8000:8000` would open it on every host interface.
+- `--publish 127.0.0.1:8000:8000` reads as `HOST_IP:HOST_PORT:CONTAINER_PORT`. Inside the container, Uvicorn listens on `0.0.0.0:8000` (every container interface), because Docker's forwarded traffic arrives on the container's network interface, not on its loopback. On the host, the port opens on `127.0.0.1` only, so other machines on the LAN cannot reach this service at all, token or not. A bare `--publish 8000:8000` would open it on every host interface.
 - `:ro` mounts the model cache read-only. The running service only reads the models, so it cannot modify a cache that other containers share.
 
 Wait until Docker reports the health check result:
@@ -153,6 +161,7 @@ Expected: `healthy after 9 s` or so. If it prints only ` after N s` with no stat
 | # | Probe | Expected result | What runs |
 |---|---|---|---|
 | 1 | `GET /health` | HTTP 200, `"status":"ok"`, `"live_llm":false` | Nothing: liveness only |
+| 1b | Q001 with **no** token | HTTP 401, `WWW-Authenticate: Bearer` | Nothing: the token check refuses it before the body is read (Day 28) |
 | 2 | Q001, labeled, `buyer` | `"status":"not_generated"`, 5 sources, a `run_id` | Local retrieval only; the live LLM is off |
 | 3 | Q091, labeled, no `decision` | `"status":"pending_approval"`, `"run_id":null`, no sources, an `approval_request` | Nothing: the approval boundary stops it before retrieval |
 | 4 | Off-topic free text | `"status":"blocked"`, an `off_topic` finding, `"run_id":null` | Nothing: the scope guard stops it before retrieval |
@@ -161,19 +170,24 @@ Expected: `healthy after 9 s` or so. If it prints only ` after N s` with no stat
 # 1. Liveness
 curl -sS -w '\nHTTP %{http_code} in %{time_total} s\n' http://127.0.0.1:8000/health
 
-# 2. A labeled question, local retrieval only
+# 1b. The same query with no service token: refused (expect HTTP 401)
 curl -sS -w '\nHTTP %{http_code} in %{time_total} s\n' -X POST http://127.0.0.1:8000/query \
   -H 'Content-Type: application/json' \
   -d '{"query": "What approval is required for a EUR 60,000 purchase order?", "role": "buyer", "query_id": "Q001"}'
 
+# 2. A labeled question, local retrieval only
+curl -sS -w '\nHTTP %{http_code} in %{time_total} s\n' -X POST http://127.0.0.1:8000/query \
+  -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"query": "What approval is required for a EUR 60,000 purchase order?", "role": "buyer", "query_id": "Q001"}'
+
 # 3. A question that may need the approval-gated second pass, sent without a decision
 curl -sS -w '\nHTTP %{http_code} in %{time_total} s\n' -X POST http://127.0.0.1:8000/query \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query": "What approvals and security evidence do I need for a EUR 120,000 SaaS renewal?", "role": "buyer", "query_id": "Q091"}'
 
 # 4. An off-topic question
 curl -sS -w '\nHTTP %{http_code} in %{time_total} s\n' -X POST http://127.0.0.1:8000/query \
-  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $PROCURERAG_SERVICE_TOKEN" -H 'Content-Type: application/json' \
   -d '{"query": "What is the capital of France?", "role": "buyer"}'
 ```
 
@@ -228,6 +242,7 @@ With the cache warmed, the service needs no network at all. `--network none` giv
 ```bash
 docker run --detach --rm --name procurerag-offline \
   --network none \
+  --env PROCURERAG_SERVICE_TOKEN \
   --env PROCURERAG_LIVE_LLM=0 \
   --env LANGSMITH_TRACING=false \
   --env LANGSMITH_TRACING_V2=false \
@@ -239,7 +254,7 @@ until [ "$(docker inspect --format '{{.State.Health.Status}}' procurerag-offline
 echo "$(docker inspect --format '{{.State.Health.Status}}' procurerag-offline 2>/dev/null) after $(( $(date +%s) - start )) s"
 
 # With no network, the host cannot reach the container, so the query is sent from INSIDE it
-docker exec procurerag-offline python -c "import json, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/query', data=json.dumps({'query': 'What approval is required for a EUR 60,000 purchase order?', 'role': 'buyer', 'query_id': 'Q001'}).encode(), headers={'Content-Type': 'application/json'}); r = json.load(urllib.request.urlopen(req)); print(r['status'], [s['chunk_id'] for s in r['sources']])"
+docker exec procurerag-offline python -c "import json, os, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/query', data=json.dumps({'query': 'What approval is required for a EUR 60,000 purchase order?', 'role': 'buyer', 'query_id': 'Q001'}).encode(), headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + os.environ['PROCURERAG_SERVICE_TOKEN']}); r = json.load(urllib.request.urlopen(req)); print(r['status'], [s['chunk_id'] for s in r['sources']])"
 
 # And the container really has no way out
 docker exec procurerag-offline python -c "import urllib.request; urllib.request.urlopen('https://huggingface.co', timeout=3)"   # expect: URLError ... name resolution
@@ -260,6 +275,7 @@ read -rs OPENROUTER_API_KEY && export OPENROUTER_API_KEY
 # `--env NAME` with no `=value` copies the value from this shell, so the key never appears in the command
 docker run --detach --rm --name procurerag-live \
   --publish 127.0.0.1:8000:8000 \
+  --env PROCURERAG_SERVICE_TOKEN \
   --env PROCURERAG_LIVE_LLM=1 \
   --env OPENROUTER_API_KEY \
   --env LANGSMITH_TRACING=false \
@@ -303,7 +319,7 @@ What Day 23 must decide:
 
 ## Honest limits
 
-- Every Day 21 limit still applies inside the container: the role is caller-asserted (no authentication); approval is a stateless re-submission; free-text evidence is unchecked; trace rows are not persisted.
+- Every Day 21 limit still applies inside the container: the role is caller-asserted (the Day 28 service token proves the caller holds the BFF's secret, not who the person is or what role they have); approval is a stateless re-submission; free-text evidence is unchecked; trace rows are not persisted.
 - The rate limit lives in the one Uvicorn process. It resets whenever the container restarts. Behind Docker's port forwarding, every client on the host arrives from the same gateway address, so they all share one 30-requests-per-minute budget.
 - Trace rows built inside the container have no code version: `git describe` finds no `git` and no `.git` in the image, and the code records `None`, as designed. The image tag is not yet recorded anywhere in the trace.
 - `linux/arm64` was built and run on the Mac, and `linux/amd64` on the Hermes VM. The two machines differ a lot, so their timings measure the machines as much as the architectures. No vulnerability scan of the image was run.

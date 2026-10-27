@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import logging
 import os
+import secrets
 import sys
 from pathlib import Path
 
@@ -43,6 +45,18 @@ def _load_api_module():
     module = _load_module("api")
     module.DOTENV_PATH = Path(__file__).resolve().parent / "no-such-dotenv-file.env"
     return module
+
+
+# ---------------------------------------------------------------------------
+# The service token (Day 28). The query endpoints refuse every request that
+# does not carry it. The value is a fresh random one for each test run: no
+# file in the repository ever holds a credential, and the test that searches
+# logs and responses for the token searches for a value nobody could have
+# written there by accident.
+# ---------------------------------------------------------------------------
+
+SERVICE_TOKEN = secrets.token_urlsafe(32)
+AUTHORIZED = {"Authorization": f"Bearer {SERVICE_TOKEN}"}
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +156,23 @@ def _http(
     case_overrides=None,
     rate_limiter=None,
     raise_server_exceptions=True,
+    send_token=True,
 ):
     """An HTTP client for the app, with a fake service swapped in for the real one.
 
     `dependency_overrides` is FastAPI's testing seam: every endpoint that
     asks for `get_service` now gets this fake service instead.
+
+    The service token, on both sides:
+    - the SERVER side: these tests skip startup, so nothing reads
+      `PROCURERAG_SERVICE_TOKEN`. The helper stores `SERVICE_TOKEN` on
+      `app.state` itself, exactly where startup would have put it;
+    - the CLIENT side: by default every request this client sends carries
+      `Authorization: Bearer <SERVICE_TOKEN>` (`AUTHORIZED`), the way the
+      portfolio BFF will. So a test that is about something else (guards,
+      roles, streaming) is an intentional, authorized caller. A test that is
+      ABOUT a bad credential passes `send_token=False` and sets its own
+      header on each request.
 
     Each call builds a new service, and so a new rate limiter with the real
     budget (30 a minute), which no test here comes near, except the rate
@@ -166,7 +192,9 @@ def _http(
     if rate_limiter is not None:
         service.rate_limiter = rate_limiter
     module.app.dependency_overrides[module.get_service] = lambda: service
-    return TestClient(module.app, raise_server_exceptions=raise_server_exceptions)
+    module.app.state.service_token = SERVICE_TOKEN
+    headers = AUTHORIZED if send_token else None
+    return TestClient(module.app, raise_server_exceptions=raise_server_exceptions, headers=headers)
 
 
 def _fired(body):
@@ -200,7 +228,10 @@ def test_health_answers_without_building_the_pipeline_or_calling_a_provider(monk
 
     The switch is ON here, yet `live_llm` is False: no startup ran, so no
     client was built. Health reports what the server HAS, not what its
-    configuration says. (The startup test below checks the True case.)"""
+    configuration says. (The startup test below checks the True case.)
+
+    It also sends no credential at all (Day 28): `/health` stays open, so a
+    platform's probe needs no secret."""
     module = _load_api_module()
 
     def explode(*args, **kwargs):
@@ -260,12 +291,15 @@ def test_the_switch_and_the_key_come_from_dotenv_and_nothing_else_does(monkeypat
 
     monkeypatch.setattr(module, "make_openrouter_client", recording_factory)
     monkeypatch.setattr(module, "DOTENV_PATH", dotenv_file)
-    for name in (module.LIVE_LLM_ENV_VAR, "OPENROUTER_API_KEY", "LANGSMITH_TRACING_V2"):
+    for name in (module.LIVE_LLM_ENV_VAR, "OPENROUTER_API_KEY", "LANGSMITH_TRACING_V2", module.MAX_ANSWER_TOKENS_ENV_VAR):
         monkeypatch.delenv(name, raising=False)
 
-    # The switch and the key both come from the file...
+    # The switch and the key both come from the file. With no public cap set,
+    # the output cap is the code default.
     assert module.make_llm_client() == "the-live-client"
-    assert calls == [{"api_key": "key-from-file", "response_model": module.GeneratedAnswer}]
+    assert calls == [
+        {"api_key": "key-from-file", "response_model": module.GeneratedAnswer, "max_tokens": module.MAX_ANSWER_TOKENS}
+    ]
     # ...and nothing from the file was copied into the process environment.
     assert module.LIVE_LLM_ENV_VAR not in os.environ
     assert "LANGSMITH_TRACING_V2" not in os.environ
@@ -345,12 +379,13 @@ def test_the_real_startup_path_wires_the_llm_into_every_query_only_when_switched
     monkeypatch.setattr(module, "load_live_pipeline", load_live_pipeline)
     monkeypatch.setattr(module, "make_openrouter_client", lambda **kwargs: llm)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv(module.SERVICE_TOKEN_ENV_VAR, SERVICE_TOKEN)  # startup reads it from the environment
     if switch is None:
         monkeypatch.delenv(module.LIVE_LLM_ENV_VAR, raising=False)
     else:
         monkeypatch.setenv(module.LIVE_LLM_ENV_VAR, switch)
 
-    with TestClient(module.app) as http:  # `with` runs the lifespan: startup happens here
+    with TestClient(module.app, headers=AUTHORIZED) as http:  # `with` runs the lifespan: startup happens here
         health = http.get("/health").json()
         body = http.post("/query", json={"query": QUESTION, "role": "buyer", "query_id": "Q900"}).json()
 
@@ -372,12 +407,219 @@ def test_the_live_llm_switched_on_without_a_key_stops_startup_before_the_models_
     monkeypatch.setattr(module, "DOTENV_PATH", tmp_path / "no-such.env")
     monkeypatch.setenv(module.LIVE_LLM_ENV_VAR, "1")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    # A token IS configured, so startup gets past the token check and fails
+    # on the thing this test is about: the missing key.
+    monkeypatch.setenv(module.SERVICE_TOKEN_ENV_VAR, SERVICE_TOKEN)
 
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY is not set"):
         with TestClient(module.app):
             pass
 
     assert loads == []  # the models were never loaded
+
+
+def test_the_public_output_cap_comes_from_the_environment_and_a_bad_value_stops_startup(monkeypatch):
+    """Day 28: the public deployment sets a lower output cap
+    (`PROCURERAG_MAX_ANSWER_TOKENS`). Unset, the code default applies. A
+    value that is not a whole number from 1 to the default fails closed: the
+    worst-case cost per request is computed from this cap, so a typo must
+    stop the server, not silently allow 3000 tokens (or more)."""
+    module = _load_api_module()
+    calls = []
+    monkeypatch.setattr(module, "make_openrouter_client", lambda **kwargs: calls.append(kwargs) or "the-live-client")
+    monkeypatch.setenv(module.LIVE_LLM_ENV_VAR, "1")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    monkeypatch.delenv(module.MAX_ANSWER_TOKENS_ENV_VAR, raising=False)
+    assert module.read_max_answer_tokens() == module.MAX_ANSWER_TOKENS == 3000
+
+    monkeypatch.setenv(module.MAX_ANSWER_TOKENS_ENV_VAR, "800")
+    module.make_llm_client()
+    assert calls[-1]["max_tokens"] == 800  # the cap reaches the client factory
+
+    for bad_value in ["0", "3001", "-5", "80O", "", "8.5", "²"]:
+        monkeypatch.setenv(module.MAX_ANSWER_TOKENS_ENV_VAR, bad_value)
+        with pytest.raises(RuntimeError, match=module.MAX_ANSWER_TOKENS_ENV_VAR):
+            module.make_llm_client()
+    assert len(calls) == 1  # no client was built from a bad value
+
+
+# ---------------------------------------------------------------------------
+# The service token (Day 28): only the portfolio BFF may call the query
+# endpoints. Every bad credential gets the same 401, before the body is read,
+# before the rate limit, and before any retrieval or LLM call.
+# ---------------------------------------------------------------------------
+
+# Every way a credential can be wrong. None of them is derived from
+# `SERVICE_TOKEN`, so no part of the real test token ever shows up in a test
+# id or a failure message.
+BAD_CREDENTIALS = [
+    pytest.param(None, id="no header"),
+    pytest.param("Basic dXNlcjpwYXNzd29yZA==", id="wrong scheme"),
+    pytest.param("Bearer", id="scheme only"),
+    pytest.param("Bearer ", id="blank token"),
+    pytest.param("Bearer not-the-service-token", id="wrong token"),
+    # Not ASCII: `secrets.compare_digest` on two `str` would raise TypeError
+    # here (an HTTP 500). The API compares bytes, so it is a plain 401.
+    pytest.param("Bearer café".encode("utf-8"), id="non-ASCII token"),
+]
+
+
+@pytest.mark.parametrize("path", ["/query", "/query/stream"])
+@pytest.mark.parametrize("authorization", BAD_CREDENTIALS)
+def test_a_bad_service_credential_is_a_401_that_runs_nothing_and_costs_no_budget(path, authorization):
+    module = _load_api_module()
+    retrieve_fn, llm = _RecordingRetrieveFn([BAND_3]), _RecordingLLM()
+    # A budget of ONE request. If the refused request had been counted, the
+    # authorized one at the end would get 429 instead of 200.
+    limiter = module.SlidingWindowRateLimiter(max_requests=1, window_seconds=60)
+    http = _http(module, retrieve_fn, llm, rate_limiter=limiter, send_token=False)
+    request = {"query": QUESTION, "role": "buyer", "query_id": "Q900"}
+    headers = {} if authorization is None else {"Authorization": authorization}
+
+    refused = http.post(path, json=request, headers=headers)
+
+    assert refused.status_code == 401
+    assert refused.headers["www-authenticate"] == "Bearer"
+    assert refused.json() == {"detail": module.UNAUTHENTICATED_DETAIL}  # one text for every bad credential
+    assert retrieve_fn.queries_received == []
+    assert llm.prompts == []
+    assert http.post(path, json=request, headers=AUTHORIZED).status_code == 200  # the budget is untouched
+
+
+@pytest.mark.parametrize("path", ["/query", "/query/stream"])
+def test_a_bad_credential_is_refused_before_the_body_is_even_parsed(path):
+    """The order the ADR asks for: the token before ANY parsing. FastAPI
+    decodes a JSON body before it runs a single dependency, so this holds
+    only because of the middleware (`check_service_token_before_the_body_is_read`).
+
+    The same broken body with the RIGHT token is a 422: proof that the 401s
+    were the token check, not some other refusal of a bad body."""
+    module = _load_api_module()
+    http = _http(module, _RecordingRetrieveFn([BAND_3]), send_token=False)
+    cut_off_json = b'{"query": "What does GRNI'
+    json_header = {"Content-Type": "application/json"}
+
+    no_header = http.post(path, content=cut_off_json, headers=json_header)
+    wrong_token = http.post(path, content=cut_off_json, headers={**json_header, "Authorization": "Bearer wrong"})
+    right_token = http.post(path, content=cut_off_json, headers={**json_header, **AUTHORIZED})
+
+    assert (no_header.status_code, wrong_token.status_code) == (401, 401)
+    assert right_token.status_code == 422
+
+
+def test_a_server_with_no_configured_token_refuses_every_query():
+    """Fail closed: if startup never stored a token (here: it is removed
+    after the helper set it), "no token configured" must never mean "no
+    check". Every query is refused, whatever the caller sends."""
+    module = _load_api_module()
+    retrieve_fn = _RecordingRetrieveFn([BAND_3])
+    http = _http(module, retrieve_fn)  # sends AUTHORIZED on every request
+    del module.app.state.service_token
+
+    assert http.post("/query", json={"query": QUESTION, "role": "buyer"}).status_code == 401
+    assert http.get("/health").status_code == 200  # health never needed a token
+    assert retrieve_fn.queries_received == []
+
+
+@pytest.mark.parametrize("configured", [None, "", "   "], ids=["unset", "empty", "whitespace"])
+def test_startup_refuses_to_run_without_a_service_token_and_never_reads_it_from_dotenv(
+    monkeypatch, tmp_path, configured
+):
+    """Fail closed at STARTUP, before the LLM client and the models: the
+    server never accepts a request it would have to refuse. A token in
+    `.env` does not count: the token comes from the process environment
+    only. The error names the variable and holds no value."""
+    module = _load_api_module()
+    dotenv_file = tmp_path / ".env"
+    dotenv_file.write_text("PROCURERAG_SERVICE_TOKEN=token-from-dotenv\n", encoding="utf-8")
+    monkeypatch.setattr(module, "DOTENV_PATH", dotenv_file)
+    load_live_pipeline, loads = _fake_live_pipeline(_RecordingRetrieveFn([BAND_3]))
+    monkeypatch.setattr(module, "load_live_pipeline", load_live_pipeline)
+
+    def explode(**kwargs):
+        raise AssertionError("the LLM client must not be built before the token check")
+
+    monkeypatch.setattr(module, "make_openrouter_client", explode)
+    monkeypatch.setenv(module.LIVE_LLM_ENV_VAR, "1")  # even with the paid LLM on, the token check comes first
+    if configured is None:
+        monkeypatch.delenv(module.SERVICE_TOKEN_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(module.SERVICE_TOKEN_ENV_VAR, configured)
+
+    with pytest.raises(RuntimeError, match="PROCURERAG_SERVICE_TOKEN is not set") as error:
+        with TestClient(module.app):
+            pass
+
+    assert loads == []  # the models were never loaded
+    assert "token-from-dotenv" not in str(error.value)
+
+
+def test_the_right_token_proves_the_service_not_a_role():
+    """The token answers "did this come through the BFF?", nothing more. A
+    requester with the right token still never sees a Confidential chunk:
+    authentication did not change authorization."""
+    module = _load_api_module()
+
+    body = _http(module, _RecordingRetrieveFn([CLEANING_CONTRACT, BAND_3]), _RecordingLLM()).post(
+        "/query", json={"query": QUESTION, "role": "requester", "query_id": "Q900"}
+    ).json()
+
+    assert body["status"] == "answered"
+    assert [source["doc_id"] for source in body["sources"]] == ["POL-001"]
+
+
+def test_openapi_declares_the_bearer_scheme_on_the_query_routes_only():
+    module = _load_api_module()
+
+    schema = module.app.openapi()
+
+    scheme = schema["components"]["securitySchemes"]["ServiceToken"]
+    assert (scheme["type"], scheme["scheme"]) == ("http", "bearer")
+    assert schema["paths"]["/query"]["post"]["security"] == [{"ServiceToken": []}]
+    assert schema["paths"]["/query/stream"]["post"]["security"] == [{"ServiceToken": []}]
+    assert "security" not in schema["paths"]["/health"]["get"]
+
+
+def test_the_middleware_and_the_route_dependencies_protect_exactly_the_same_paths():
+    """The two checks are written in two places: a path set (the middleware)
+    and a dependency on each route. If they drift apart, one route is
+    either unprotected before its body is parsed, or not documented. This
+    test ties them together."""
+    module = _load_api_module()
+
+    declared = {
+        route.path
+        for route in module.app.routes
+        if any(dependency.dependency is module.require_service_token for dependency in getattr(route, "dependencies", []))
+    }
+
+    assert declared == module.PROTECTED_PATHS == {"/query", "/query/stream"}
+
+
+def test_the_token_never_appears_in_a_response_or_a_log(caplog, capsys):
+    """Accepted, refused, malformed, streamed: across every kind of answer,
+    neither the real token nor a caller's wrong guess is echoed back or
+    logged."""
+    module = _load_api_module()
+    caplog.set_level(logging.DEBUG)
+    http = _http(module, _RecordingRetrieveFn([BAND_3]), _RecordingLLM(), send_token=False)
+    request = {"query": QUESTION, "role": "buyer", "query_id": "Q900"}
+
+    responses = [
+        http.post("/query", json=request, headers=AUTHORIZED),
+        http.post("/query/stream", json=request, headers=AUTHORIZED),
+        http.post("/query", json={**request, "role": "admin"}, headers=AUTHORIZED),  # 422
+        http.post("/query", json=request, headers={"Authorization": "Bearer guess-1234"}),  # 401
+        http.post("/query", json=request),  # 401
+    ]
+    captured = capsys.readouterr()
+
+    assert [response.status_code for response in responses] == [200, 200, 422, 401, 401]
+    everything = "".join(response.text + str(response.headers) for response in responses)
+    everything += caplog.text + captured.out + captured.err
+    assert SERVICE_TOKEN not in everything
+    assert "guess-1234" not in everything
 
 
 # ---------------------------------------------------------------------------
@@ -976,7 +1218,7 @@ def test_the_rate_limit_refuses_with_429_before_anything_runs_and_lets_the_clien
     assert retrieve_fn.queries_received == [QUESTION, QUESTION]  # the refused requests ran nothing
 
     # Another client (another address) has its own budget.
-    other_client = TestClient(module.app, client=("10.0.0.2", 50000))
+    other_client = TestClient(module.app, client=("10.0.0.2", 50000), headers=AUTHORIZED)
     assert other_client.post("/query", json=request).status_code == 200
 
     # At t = 60 s the first request slides out of the window, so one slot is

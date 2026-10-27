@@ -753,11 +753,18 @@ async def test_mcp_and_http_return_the_same_response_for_the_same_request(
     _serve(monkeypatch, module, service)
     # The Day 21 app, given the same service through its own testing seam.
     monkeypatch.setitem(module.api.app.dependency_overrides, module.api.get_service, lambda: service)
+    # Day 28: HTTP callers need the service token (MCP over stdio does not).
+    # The app is the shared one, so monkeypatch puts its state back afterwards.
+    monkeypatch.setattr(module.api.app.state, "service_token", "mcp-parity-test-token", raising=False)
     reviewer = _RecordingReviewer(users_answer, retrieve_fn) if users_answer is not None else None
 
     async with _connect(module, reviewer) as client:
         mcp_body = (await client.call_tool(TOOL, arguments)).structured_content
-    http_body = TestClient(module.api.app).post("/query", json={**arguments, "decision": http_decision}).json()
+    http_body = (
+        TestClient(module.api.app, headers={"Authorization": "Bearer mcp-parity-test-token"})
+        .post("/query", json={**arguments, "decision": http_decision})
+        .json()
+    )
 
     assert {**mcp_body, "run_id": None} == {**http_body, "run_id": None}
 
@@ -806,7 +813,9 @@ def test_build_mcp_service_ignores_the_dotenv_switch_and_obeys_the_launch_enviro
 
     if expect_live_client:
         assert service.client == "the-live-client"
-        assert factory_calls == [{"api_key": "key-from-file", "response_model": api.GeneratedAnswer}]
+        assert factory_calls == [
+            {"api_key": "key-from-file", "response_model": api.GeneratedAnswer, "max_tokens": api.MAX_ANSWER_TOKENS}
+        ]
     else:
         assert service.client is None  # `.env`'s "1" was not enough
         assert factory_calls == []

@@ -131,6 +131,12 @@ ENV PATH="/app/.venv/bin:$PATH"
 # ENV and ARG values are saved in the image's config and history: anyone who
 # can pull the image can read them (`docker inspect`, `docker history`). The
 # free path needs no key. A live run passes it at `docker run` time.
+#
+# The same rule, and a stricter one, for PROCURERAG_SERVICE_TOKEN (Day 28):
+# it is never baked in, yet EVERY run needs it, because the API refuses to
+# start without it. It arrives at run time only, from the platform's secret
+# store or as `docker run --env PROCURERAG_SERVICE_TOKEN` (name only, value
+# copied from the shell). See docs/docker-runbook.md.
 # ---------------------------------------------------------------------------
 ENV PROCURERAG_LIVE_LLM=0 \
     LANGSMITH_TRACING=false \
