@@ -438,6 +438,29 @@ OPENROUTER_TIMEOUT_SECONDS = 60.0
 MAX_ANSWER_TOKENS = 3000
 GENERATION_TEMPERATURE = 0.0
 
+# Day 28 (Juan's decision): Zero Data Retention on every live request.
+#
+# A live request carries the question AND the retrieved document chunks.
+# OpenRouter does not run the model itself: it forwards the request to one of
+# the companies serving that model ("endpoints"), and their data policies
+# differ. With `provider={"zdr": True}`, OpenRouter routes the request ONLY to
+# endpoints with a Zero Data Retention policy: the provider keeps nothing after
+# answering, so it cannot train on it either (OpenRouter's ZDR docs).
+#
+# What that means today (OpenRouter's public endpoint lists, 2026-10-27):
+# - `openai/gpt-4o-mini` (the public demo) is served by OpenAI, Azure and
+#   Azure Sweden Central. Only the two Azure endpoints are ZDR, so with this
+#   setting the demo's questions go to Azure. Azure Sweden costs 10% more
+#   (US$0.165/US$0.66 per 1M tokens), so the worst-case cost per request is
+#   computed at that price;
+# - `openai/gpt-4o` (local evals) also has an Azure ZDR endpoint.
+#
+# It is in the code, not only in the account's privacy settings, so the
+# policy is reviewable and tested, and it holds whichever key is used. It
+# does not cover OpenRouter's own account settings (its optional prompt
+# logging must stay off) or a provider's short-lived in-memory prompt cache.
+OPENROUTER_PROVIDER_PREFERENCES = {"zdr": True}
+
 
 def make_openrouter_client(model=None, api_key=None, response_model=None, max_tokens=MAX_ANSWER_TOKENS):
     """Build a live `client(prompt) -> answer_text` callable backed by OpenRouter.
@@ -496,8 +519,9 @@ def make_openrouter_client(model=None, api_key=None, response_model=None, max_to
     # reasoning from the response: the model still reasoned, and those
     # hidden tokens still counted against `max_tokens`, which emptied the
     # answer on hard prompts (see `DEFAULT_OPENROUTER_MODEL`'s 2026-10-02
-    # update above).
-    extra_body = {"reasoning": {"enabled": False}}
+    # update above). `provider` is OpenRouter's routing extension too: only
+    # Zero Data Retention endpoints (`OPENROUTER_PROVIDER_PREFERENCES` above).
+    extra_body = {"reasoning": {"enabled": False}, "provider": OPENROUTER_PROVIDER_PREFERENCES}
     structured_output = {}
 
     if response_model is not None:

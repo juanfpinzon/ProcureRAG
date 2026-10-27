@@ -461,7 +461,8 @@ def test_make_openrouter_client_sends_a_strict_json_schema_only_when_asked():
 
     plain, structured = sent_requests
     assert "response_format" not in plain
-    assert plain["extra_body"] == {"reasoning": {"enabled": False}}
+    # Day 28: every request, plain or structured, asks for Zero Data Retention endpoints only.
+    assert plain["extra_body"] == {"reasoning": {"enabled": False}, "provider": {"zdr": True}}
 
     json_schema = structured["response_format"]["json_schema"]
     assert structured["response_format"]["type"] == "json_schema"

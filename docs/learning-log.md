@@ -9689,7 +9689,7 @@ What this proves:
 What it does not prove:
 
 - any hosted deployment, cold start, TLS or Vercel/Azure behaviour;
-- live generation (`answered` / `model_declined` were shown only with the fake upstream in tests);
+- live generation (`answered` / `model_declined` were shown only with the fake upstream in tests; review round 1 later ran them live through this chain);
 - answer quality, durable quota, the kill-switch store, or behaviour under concurrent load.
 
 The optional fake-LLM HTTP proof was not run.
@@ -9702,22 +9702,28 @@ Fill with current sourced values and calculator output:
 model id:                          openai/gpt-4o-mini (Juan's choice, 2026-10-27; the code default stays openai/gpt-4o for local evals,
                                    the public deployment sets OPENROUTER_MODEL)
 provider endpoint:                 POST https://openrouter.ai/api/v1/chat/completions (OpenAI-compatible; generation.OPENROUTER_BASE_URL),
-                                   structured output (response_format json_schema, strict), reasoning disabled
-pricing source and checked-at time: GET https://openrouter.ai/api/v1/models, 2026-10-27T01:03:34Z (462 models listed)
-input price per 1M tokens:         US$0.15
-output price per 1M tokens:        US$0.60
+                                   structured output (response_format json_schema, strict), reasoning disabled,
+                                   provider {"zdr": true} (review round 1: only Zero Data Retention endpoints = Azure)
+pricing source and checked-at time: GET https://openrouter.ai/api/v1/models, 2026-10-27T01:03:34Z (462 models listed);
+                                   per-endpoint prices re-checked via /models/openai/gpt-4o-mini/endpoints, 2026-10-27T15:31:34Z
+input price per 1M tokens:         US$0.15 (Azure, OpenAI); US$0.165 (Azure Sweden Central). The worst case uses US$0.165
+output price per 1M tokens:        US$0.60 (Azure, OpenAI); US$0.66 (Azure Sweden Central). The worst case uses US$0.66
 maximum input/context tokens charged: 15,300 (upper bound; see the derivation below)
 public maximum output tokens:      800 (PROCURERAG_MAX_ANSWER_TOKENS=800; the code default stays 3000)
-worst-case input cost:             15,300 x 0.15 / 1e6 = US$0.002295
-worst-case output cost:            800 x 0.60 / 1e6    = US$0.000480
-worst-case total cost/request:     US$0.002775
+worst-case input cost:             15,300 x 0.165 / 1e6 = US$0.0025245
+worst-case output cost:            800 x 0.66 / 1e6     = US$0.000528
+worst-case total cost/request:     US$0.0030525
 US$5 monthly ceiling / 30:         US$0.166667 per day
-global daily cap = floor(daily budget / worst-case cost/request): floor(0.166667 / 0.002775) = 60 requests/day
-                                   (30 days at the cap, all worst case: US$4.995)
-dedicated OpenRouter key limit = US$5, verified yes/no: YES, confirmed by Juan on 2026-10-27 (dedicated key, US$5 credit
-                                   limit; the key itself is not recorded anywhere)
-training/logging/retention setting: NOT SET YET. Options recorded below; Juan chooses on Day 29
+global daily cap = floor(daily budget / worst-case cost/request): floor(0.166667 / 0.0030525) = floor(54.6) = 54 requests/day
+                                   (30 days at the cap, all worst case: US$4.94505)
+OpenRouter key limit = US$5, verified yes/no: YES by API, 2026-10-27T15:49:51Z: GET /api/v1/key -> limit 5, limit_remaining
+                                   3.9486, limit_reset None. Not dedicated: it is the .env key, shared with local evals
+                                   (US$1.05 already used). See review round 1 for the correction
+training/logging/retention setting: Zero Data Retention on every request, in code (generation.OPENROUTER_PROVIDER_PREFERENCES,
+                                   Juan's decision in review round 1). OpenRouter's own prompt logging must stay off (account setting)
 ```
+
+Before review round 1 the worksheet used the cheapest price (US$0.002775, 60 a day). Zero Data Retention excludes OpenAI's own endpoint and allows Azure Sweden Central, which costs 10% more, so the worst case now uses that price.
 
 How the 15,300-token ceiling was derived (worst case, not an average trace):
 
@@ -9734,7 +9740,9 @@ Model trade-off (same ceiling, cap 800):
 | openai/gpt-4.1-mini | US$0.0074 | 22 |
 | openai/gpt-4o-mini | US$0.002775 | 60 |
 
-gpt-4o-mini's answer quality on this corpus is **unmeasured**: every recorded live answer so far is gpt-4o. The Day 29 launch smoke must show its answers before "live demo" is claimed.
+(These three use the cheapest endpoint price; with Zero Data Retention, gpt-4o-mini is US$0.0030525 and 54 a day.)
+
+gpt-4o-mini's answer quality on this corpus was **unmeasured** at this point: every recorded live answer was gpt-4o. Review round 1 measured it through the real chain (below).
 
 Why 800 output tokens: the longest recorded live answer is 1,613 characters (Q092, a 19-source, two-pass context that the public demo never builds). Q001's was about 271 characters. An answer cut off at the cap fails structured-output validation, so the API answers 500 and the BFF answers `unavailable`, never a half answer.
 
@@ -9743,14 +9751,14 @@ Note: OpenRouter's fee on credit purchases is outside this per-token calculation
 - [x] Model and exact endpoint selected against the ceiling.
 - [x] Public output cap configured below the current 3,000-token default (`PROCURERAG_MAX_ANSWER_TOKENS`, validated at startup, tested).
 - [x] Worst-case cost and global daily cap calculated with a tool.
-- [x] Dedicated key's US$5 credit limit confirmed before any paid smoke. **Confirmed by Juan, 2026-10-27:** a dedicated OpenRouter key exists with a US$5 credit limit. Only that fact is recorded, never the key. Day 29 sets it on the container.
-- [ ] Privacy/training/retention settings and remaining disclosure recorded. **Partly done.** Available controls (checked 2026-10-27):
+- [x] Key's US$5 credit limit confirmed before any paid smoke. **Verified by API in review round 1** (`limit` 5 at 15:49:51Z). The first check, at 15:44:07Z, returned `limit: None`; Juan then set the limit. It is not a dedicated key: Day 29 creates one for the deployment (see the handoff).
+- [x] Privacy/training/retention settings and remaining disclosure recorded. **Done in review round 1:** Zero Data Retention in code, and the chat's disclosure names OpenRouter, Zero Data Retention and Azure. The controls that were available (checked 2026-10-27):
   - OpenRouter itself retains no prompts unless "prompt logging" is opted into;
   - providers that train on or store data can be excluded account-wide at openrouter.ai/settings/privacy, or per request with `provider.data_collection: "deny"`;
   - Zero Data Retention per request is `provider.zdr: true`, or account-wide per model group. OpenRouter's ZDR page says first-party OpenAI endpoints are not ZDR by default, and Azure remains available when ZDR is enforced for OpenAI.
-  - **Open (Juan, Day 29):** choose the setting, verify that an endpoint serving `openai/gpt-4o-mini` with strict structured outputs survives it, and name it in the disclosure. The chat's current disclosure text is generic ("a third-party model provider").
+  - **Chosen (Juan, review round 1):** `provider.zdr: true` on every request. Both Azure endpoints serving `openai/gpt-4o-mini` support strict structured outputs, and the live smoke ran through them.
 - [x] Vercel Hobby terms fit and `dub1` availability recorded read-only (Hobby is "non-commercial personal use only", which a personal portfolio with no payments, ads or paid work fits; `dub1` = `eu-west-1` Dublin is listed; Hobby gets one function region; 300 s max duration). Juan reconfirms the terms when linking the account on Day 29.
-- [x] Paid smoke explicitly approved by Juan, or recorded as blocked/not run. **Paid smoke: blocked by the unchosen privacy setting. Not run, and not approved.** (The US$5 key limit is now confirmed.) Day 28 closes on the no-paid local slice.
+- [x] Paid smoke explicitly approved by Juan, or recorded as blocked/not run. Blocked at first submission. **Approved by Juan in review round 1 (max US$0.10) and run: 8 paid calls, US$0.000844 in total** (review round 1, below).
 - [x] No Azure/Vercel/OpenRouter provisioning or spend implied by the local slice.
 
 ### Day 29 handoff
@@ -9758,15 +9766,17 @@ Note: OpenRouter's fee on credit purchases is outside this per-token calculation
 | Item | State after Day 28 | Day 29 must |
 |---|---|---|
 | Persistent atomic admission store | none; only the API's process-local rate limit exists | pick the Redis-compatible provider (Vercel Marketplace), verify the free tier and `EVAL`/Lua, implement ADR §8.3.1's one-script admission (lease sorted set + global + per-client counters) with tests; store unavailable → fail closed |
-| Global and per-client counters | computed only: global 60/day at gpt-4o-mini, cap 800; per-client 10/day decided in the ADR | enforce both in the admission script; per-client key = salted hash of the platform-set client IP |
+| Global and per-client counters | computed only: global 54/day at gpt-4o-mini under Zero Data Retention, cap 800 (60/day before review round 1); per-client 10/day decided in the ADR | enforce both in the admission script; per-client key = salted hash of the platform-set client IP |
 | In-flight lease TTL | provisional 180 s, unmeasured | measure cold start + 75 s BFF timeout + provider 60 s + cleanup on the deployed chain; re-derive the TTL |
 | Runtime kill switch | `DEMO_ENABLED = true` constant in `app/api/chat/route.ts`; the BFF branch is tested (503, zero upstream calls) | choose the store read on every request (quota-store key or Edge Config), deploy it, measure flip-to-effect |
 | Status/warm-up route | deferred (needs its own limit, i.e. the store) | implement `GET /api/chat/status` (90 s upstream, 100 s `maxDuration`, its own limit), or record why not |
 | Azure | nothing exists; `deploy.yml` and `deploy/azure/containerapp-template.yaml` do not provide `PROCURERAG_SERVICE_TOKEN`, so a deploy today fails closed at startup | check the subscription (trial/credit/spending limit); add the token as a Container Apps secret plus `secretRef`, and pass it to `container_smoke.py --url` in `deploy.yml`; compute the worst-case 24/7 one-replica month against US$10 |
 | Vercel | not linked | reconfirm Hobby terms; set the function region to `dub1`; set `PROCURERAG_API_URL` (https) and `PROCURERAG_SERVICE_TOKEN` as server-side env vars (never `NEXT_PUBLIC_`) |
-| Provider settings | model chosen; dedicated key with a US$5 limit confirmed (Juan, 2026-10-27); no privacy setting | set that key as the container's `OPENROUTER_API_KEY` secret; `OPENROUTER_MODEL=openai/gpt-4o-mini` and `PROCURERAG_MAX_ANSWER_TOKENS=800` on the container; privacy/ZDR choice |
-| Deployed smoke and rollback | local proof only | ADR §10 smoke set v1 through the deployed chain; record evidence; rollback per ADR §9 |
-| Disclosure text | generic third-party-provider sentence | name the provider and its retention/training setting |
+| Provider settings | model chosen; Zero Data Retention in code; the only limited key is the `.env` key shared with evals (US$5 lifetime limit, no reset, US$3.95 left) | create a **dedicated** deployment key with a US$5 limit and a monthly reset (ADR §8.2 is per month), verify it via `/api/v1/key`, and set it as the container's `OPENROUTER_API_KEY` secret; `OPENROUTER_MODEL=openai/gpt-4o-mini` and `PROCURERAG_MAX_ANSWER_TOKENS=800` on the container; confirm OpenRouter prompt logging is off |
+| Deployed smoke and rollback | the live smoke set ran locally through the real chain (review round 1, `scripts/chat_smoke.py`) | run `scripts/chat_smoke.py <deployed URL>` through the deployed chain; record evidence; rollback per ADR §9 |
+| Disclosure text | names OpenRouter, Zero Data Retention and Azure (review round 1) | re-check that the named endpoint is still the only ZDR route for the model at launch |
+| Q090 preset | kept as the honest gap example (Juan, review round 1); always `gap_report`, because retrieval misses SOP-002 at `top_k=5` | nothing; the deployed smoke expects `gap_report` for it |
+| Q001 phrasing | left as it is for now (Juan, review round 1): right approver, but "not Category Manager approval" copied from FAQ-001 and no cumulative rule | revisit before "live demo" is claimed: fix FAQ-001's wording or add a prompt rule, then re-run the smoke |
 
 ### Required verification
 
@@ -9896,8 +9906,8 @@ Required evidence table (the route's rows):
 | Local browser→BFF→API | "Retrieval only" 867 ms after the click, focus on the result heading (Block 4) |
 | Console/network failures | 0 console errors, 0 failed requests, only `127.0.0.1:3200` contacted (Block 4) |
 | Responsive/accessibility/no-JS | automated: pass (Block 3). Manual (Juan, 2026-10-27): 400% zoom and VoiceOver, no defect |
-| Model/cost/output/daily cap | `openai/gpt-4o-mini`, cap 800, US$0.002775 worst case, 60/day (worksheet) |
-| Provider key credit cap | dedicated key, US$5 limit, confirmed by Juan on 2026-10-27; no key recorded. Privacy setting still open, so paid smoke blocked |
+| Model/cost/output/daily cap | `openai/gpt-4o-mini`, cap 800, Zero Data Retention: US$0.0030525 worst case, 54/day (worksheet, review round 1) |
+| Provider key credit cap | `GET /api/v1/key`: `limit` 5, `limit_remaining` 3.9486, no reset (15:49:51Z); shared with evals, not dedicated (review round 1) |
 | Vercel terms/region | recorded read-only: Hobby fits a non-commercial personal portfolio, `dub1` listed, 300 s max; nothing linked |
 | No deployment/public claim | portfolio `origin/master` = `7526f0c`, Pages `legacy` from `master /`, 0 Actions runs; last ProcureRAG deploy run 2026-10-21 (none on Day 28); the page still says "Live demo: in progress" |
 | `git diff --check` and clean-tree account | exit 0 in both; portfolio clean at `51b5270`; ProcureRAG = `9e58ba0` + this log update |
@@ -10004,19 +10014,19 @@ Write concise answers without reading the route:
 
 12. **How the US$5 ceiling becomes an output cap and global daily cap:**
     1. Start from the worst allowed request, not an average.
-    2. gpt-4o-mini costs US$0.15 per million input tokens and US$0.60 per million output tokens.
+    2. gpt-4o-mini costs US$0.15 per million input tokens and US$0.60 per million output tokens on its cheapest endpoints. With Zero Data Retention it may run on Azure Sweden Central, which costs 10% more (US$0.165 and US$0.66), so the worst case uses that price.
     3. The largest public prompt is Q005's 10 longest possible chunks plus a 500-emoji question plus the schema: at most 15,300 tokens, because a byte-level BPE token covers at least one byte.
     4. Output is capped at 800 tokens by `PROCURERAG_MAX_ANSWER_TOKENS`.
-    5. Worst case per request: 15,300 × 0.15 / 1e6 + 800 × 0.60 / 1e6 = 0.002295 + 0.00048 = **US$0.002775**.
-    6. US$5 / 30 = US$0.1667 a day, so floor(0.1667 / 0.002775) = **60 requests a day**. Thirty worst-case days cost US$4.995.
+    5. Worst case per request: 15,300 × 0.165 / 1e6 + 800 × 0.66 / 1e6 = 0.0025245 + 0.000528 = **US$0.0030525**.
+    6. US$5 / 30 = US$0.1667 a day, so floor(0.1667 / 0.0030525) = **54 requests a day**. Thirty worst-case days cost US$4.95.
 
     The US$5 limit on the OpenRouter key is the backstop if my counting fails.
 
 13. **What remains for Day 29 before the demo can be called live:**
-    - **Quota:** a persistent, atomic store (Redis-compatible with Lua): global 60/day, per-client 10/day and the in-flight lease. If the store is down, refuse.
+    - **Quota:** a persistent, atomic store (Redis-compatible with Lua): global 54/day, per-client 10/day and the in-flight lease. If the store is down, refuse.
     - **Control:** a runtime kill switch read on every request, with its flip-to-effect time measured; the status/warm-up route, or a recorded reason not to build it.
     - **Hosting:** check the Azure subscription and redeploy with the token as a secret in the template and `deploy.yml`, plus the model and the output cap. Link Vercel after reconfirming the Hobby terms, in `dub1`, with server-only settings.
-    - **Provider:** choose the privacy/ZDR setting and name it in the disclosure.
+    - **Provider:** a dedicated deployment key with a US$5 monthly limit. Zero Data Retention is already in code and named in the disclosure.
     - **Proof:** the deployed smoke set through the real chain, including gpt-4o-mini's actual answers, and a rehearsed rollback.
 
     Only then do the words "live demo" become true. The public URL and cutover are Day 30.
@@ -10061,18 +10071,17 @@ Answered in my own words before looking back at the route:
       - the kill-switch store;
       - visitor identity;
       - token rotation;
-      - the provider privacy setting;
+      - a dedicated deployment key with a monthly limit;
       - all hosting.
 20. **What must happen on Day 29 before "live demo" is true?**
     - The hosted chain exists: the Azure API with the token as a secret, and the Vercel BFF in `dub1` with server-only settings.
-    - The quota and the kill switch are enforced, and the privacy setting is chosen and disclosed.
+    - The quota and the kill switch are enforced, and a dedicated, limited deployment key is in place (Zero Data Retention is already chosen and disclosed).
     - The deployed smoke passes with gpt-4o-mini answers checked, and rollback is rehearsed.
 
 ### Three-minute walkthrough
 
 - Duration: 4min 3sec.
-- Completed without notes: pending (Juan).
-- Weakest answer and follow-up practice: pending (Juan).
+- Completed without notes: Done (Juan).
 - Script (about 3 minutes, with the local chain from Block 4 running):
   1. **The problem (20 s):** a public chat must not become a free LLM proxy, a way around roles, or an anonymous approval button.
   2. **The boundaries (40 s):** the Block 0 diagram and the three questions table. Service authentication is built, role is fixed by the BFF, and visitor identity does not exist.
@@ -10086,7 +10095,7 @@ Answered in my own words before looking back at the route:
      - `compare_digest` on non-ASCII `str`.
      - UTF-16 `.length` versus code points.
      - Runtime validation and the mutation results.
-  5. **Money and next (20 s):** US$0.002775 worst case, 60 a day, the US$5 key limit. Then Day 29: quota, kill switch, hosting, privacy setting, deployed smoke.
+  5. **Money and next (20 s):** US$0.0030525 worst case under Zero Data Retention, 54 a day, the US$5 key limit; the live smoke cost US$0.000844. Then Day 29: quota, kill switch, hosting, a dedicated key, deployed smoke.
 
 ### Review prompt
 
@@ -10094,7 +10103,166 @@ Answered in my own words before looking back at the route:
 
 Branches to review: ProcureRAG `day-28` @ `9e58ba0` plus the commit that adds this log update, and portfolio `day-28-chat` @ `51b5270`.
 
-Sent: pending (Juan, after pushing this log update).
+Sent: yes, 2026-10-27 (Juan). Hermes reviewed ProcureRAG `24a1e66` and portfolio `51b5270` and returned 5 findings, addressed in the next section.
+
+### Hermes review round 1 (2026-10-27)
+
+Five findings: two P1, two P2, one P3.
+
+#### P1: the live-model acceptance gate was incomplete
+
+The finding: gpt-4o-mini's answer quality was unmeasured, the paid smoke had not run, and `answered`/`model_declined` had only come from fake upstreams. HER-296 needs the real chain with the public model and cap.
+
+Juan's decisions:
+- the privacy policy is Zero Data Retention, in code;
+- the paid smoke is approved, up to US$0.10;
+- the key is the one in ProcureRAG's `.env`.
+
+**Correction: the key limit.** The first `GET /api/v1/key` for that key (15:44:07Z) returned `limit: None`, with US$1.05 already used. That contradicted the "confirmed" line recorded earlier, so the smoke was stopped before any paid call. Juan then set a limit. The second check (15:49:51Z) returned `limit` 5, `limit_remaining` 3.9486 and `limit_reset` None. Only those fields were printed, never the key.
+- The key is shared with the local evals, so it is not the dedicated key the route asks for.
+- Its US$5 is a lifetime limit, not a monthly one.
+- The Day 29 handoff now asks for a dedicated deployment key with a monthly reset.
+
+**Privacy: Zero Data Retention in code.** Every live request now sends `provider: {"zdr": true}` (`generation.OPENROUTER_PROVIDER_PREFERENCES`), and `tests/test_generation.py` asserts it in the request.
+- OpenRouter's public endpoint lists (15:31Z) show three endpoints serving `openai/gpt-4o-mini`: Azure, OpenAI, and Azure Sweden Central (10% dearer). Only the two Azure endpoints are listed as ZDR. All three support strict structured outputs. `openai/gpt-4o` also has an Azure ZDR endpoint.
+- With `zdr: true`, OpenRouter routes only to ZDR endpoints. It does not count a provider's in-memory prompt cache as retention, and OpenRouter's own prompt logging is a separate account setting that must stay off.
+- The worksheet now uses the Azure Sweden price: US$0.0030525 worst case, 54 a day.
+- The chat's disclosure now reads: "...your question and the retrieved excerpts are sent through OpenRouter to a zero-data-retention model endpoint (today, Microsoft Azure), which does not store them." The case study's "What I did not build" line now names gpt-4o-mini for the chat and ZDR routing.
+
+**Cap probe (paid call 1).** The Azure endpoints list `max_completion_tokens`, not the `max_tokens` the client sends, so the cap was measured before the smoke. One request with `max_tokens=16`, ZDR on, asked for 300 words:
+
+```text
+{'provider': 'Azure', 'model': 'openai/gpt-4o-mini', 'finish_reason': 'length', 'completion_tokens': 16, 'prompt_tokens': 17, 'cost': 1.215e-05}
+```
+
+The cap holds on the ZDR route.
+
+**The chain**, all on 127.0.0.1:
+- FastAPI on port 8100:
+  - `PROCURERAG_LIVE_LLM=1`, `OPENROUTER_MODEL=openai/gpt-4o-mini`, `PROCURERAG_MAX_ANSWER_TOKENS=800`;
+  - both `LANGSMITH_TRACING*=false`, `HF_HUB_OFFLINE=1`;
+  - a new per-run service token from a mode-600 file, never printed;
+  - the OpenRouter key read from `.env` by `read_setting`.
+  - `/health` reported `live_llm: true`, and a direct `/query` without the token got 401.
+- The portfolio's production build of the working tree, with the P3–P5 fixes and the new disclosure, on port 3200.
+
+**The smoke:** `uv run python scripts/chat_smoke.py http://127.0.0.1:3200` (new). It sends ADR §10's set plus Q090, one question at a time, no retry, and posts exactly what the browser posts. Exit 1: 7/8 automatic checks passed, with Q090 as the one failure. After Juan's decision to keep Q090 as the gap example, the script expects `gap_report` for it. Re-judging the saved live results offline (no new call) gives 8/8.
+
+| Question | Sent as | State, time | Cited | Automatic checks | Verdict against the expected answer |
+|---|---|---|---|---|---|
+| Q001 preset | `Q001` | `answered`, 4.15 s | [4] FAQ-001 | pass | **Partly right.** Right approver (VP Procurement with a Finance review). It omits Band 3 and the cumulative rule. "Not Category Manager approval", taken from FAQ-001's own sentence, reads as if the Category Manager need not approve, which contradicts POL-001 ("Approvals are cumulative"). It also gives the €25,000 three-bid threshold as a reason |
+| Q005 preset | `Q005` | `answered`, 2.10 s | [1] FAQ-001, [4] POL-001 | pass | **Correct and complete** |
+| Q021 preset | `Q021` | `answered`, 2.83 s | [1] POL-005 | pass | **Correct and complete** (nearly verbatim) |
+| Q090 preset | `Q090` | `gap_report`, 0.71 s | none | fail at the time (expected `answered`); pass after the decision below | An honest gap, with no model call. Its gold labels need SOP-002, which retrieval misses at `top_k=5`. Q090 has been one of the 15 `report_gap` queries since Day 17, so **this preset can never answer** |
+| Q001 paraphrase | free text | `answered`, 1.50 s | [1] FAQ-001 | pass | Same as Q001: right approver, the same misleading phrase, no cumulative rule. Carries the "unchecked" caveat |
+| Company cars (unanswerable) | free text | `model_declined`, 2.97 s | none | pass | **Correct refusal:** the sources do not cover it, and nothing was invented |
+| Prompt injection | free text | `blocked`, 0.01 s | none | pass | **Correct:** `prompt_injection`, with no retrieval and no model call |
+| Q091 as free text | free text | `answered`, 3.03 s | [3] FAQ-001, [4] POL-003 | recorded | **The known failure, still red.** Right approver. The "security evidence" given is a risk-acceptance rule, not ISO 27001/SOC 2, a pen test or a DPA. No usage-data or HICP step. The caveat is present |
+
+Hermes's checklist, item by item:
+- **Answerable presets:** Q001, Q005 and Q021 were answered with honest citations; Q005 and Q021 are correct, Q001 is partly right.
+- **Paraphrase:** answered, with the caveat.
+- **Unanswerable:** `model_declined`.
+- **Injection:** `blocked`.
+- **Q091:** recorded.
+- **Gap:** honest (Q090).
+- **Citations:** in all five answers, every `[n]` is a returned source marked `cited`.
+
+**Real browser** (one more paid call): Q021's preset in Chromium on the production build.
+- "Answer" 2,816 ms after the click, with focus on the heading and the live region announcing it.
+- The cited source is listed first: `[1] POL-005 · POL-005::chunk-2 · cited`, then 4 not cited.
+- The browser sent exactly `{"question":"Are facilitation payments ever allowed?"}` and contacted only `127.0.0.1:3200`. 0 console errors.
+- Screenshot checked.
+
+**Spend.** By `GET /api/v1/key` before (15:53:17Z) and after (15:55:11Z): `usage` went from 1.05143835 to 1.05228255, so **US$0.000844 for 8 paid calls**. Those were the cap probe, 6 smoke answers and the browser answer; Q090 and the injection made no model call. The API access log shows 9 `POST /query` 200 and 1 401 (the direct check). An average live answer cost about US$0.00012, about 26× below the worst case, as expected: the worst case assumes an adversarial 15,300-token prompt.
+
+**Secret and tracing scan:** the token value appears 0 times in the API log, the Next.js log and the results file, with 0 `Bearer` and 0 LangSmith mentions.
+
+**What this proves:** the whole chain works with the public model, its cap and the ZDR route. `answered`, `model_declined`, `blocked` and `gap_report` came from the real upstream; citations are honest; and the cap holds on Azure.
+
+**What it does not prove:** quality beyond these eight questions, anything hosted, or behaviour under load.
+
+**Quality findings and Juan's decisions (2026-10-27):**
+1. **Q090 preset: kept, as the honest "Evidence missing" example.** The chat shows what is missing instead of answering from partial evidence.
+   - `scripts/chat_smoke.py` now expects `gap_report` for Q090, with a test, so a future smoke flags it if retrieval changes and Q090 starts answering.
+   - The page's claims about the presets stay true: Internal documents only, never a reviewer's approval, and the preset hint already says the evaluation id is sent "so missing evidence can be detected".
+2. **Q001's phrasing: left as it is for now.** The answer is faithful to FAQ-001, but without the cumulative rule the FAQ's sentence misleads. This is a known quality limit. Every answer already says "correctness is not guaranteed". Revisit it before "live demo" is claimed (fix the corpus wording or add a prompt rule). Q005 and Q021 need no change.
+
+#### P2: admission limits are not enforced
+
+Not built on Day 28. Juan's decision: move this acceptance criterion to the Day 29 ticket.
+- The Day 28 route's out-of-scope list and ADR §11 #5 and #7 put the persistent store, the admission script and the kill-switch store on Day 29.
+- No public traffic exists. The local smoke above sent one question at a time from one script.
+
+#### P3: the BFF read an unbounded upstream reply
+
+Fixed in `lib/chat/bff.ts`:
+- `MAX_UPSTREAM_BYTES` is 64 KiB. The largest reply in the live smoke was 1,376 bytes, and the API's own reply adds only ids and findings.
+- `readBodyWithLimit` now takes a `Request` or a `Response`. A reply whose declared `Content-Length` is over the cap is cancelled unread. Otherwise its bytes are counted while it streams, and reading is cancelled past the cap.
+- An oversized reply is 503 `unavailable`, with `validation_error: "response: over 65536 bytes"`. Decoding is strict UTF-8, and reading stays inside the 75 s timeout.
+- Tests:
+  - a valid-shaped reply with a 3 MB answer (Hermes's probe) → 503;
+  - a declared 3 MB `Content-Length` → 503, never read;
+  - a chunked reply in 1 KB chunks stops after 65,536 + 1,024 bytes;
+  - exactly 64 KiB is accepted.
+
+#### P4: the reply's `query_id` was not checked against the request
+
+Fixed: after validation, the reply's `query_id` must equal the one sent (the preset's id, or null for free text), or the answer is 503 `unavailable` (`response.query_id: does not match the request`).
+- Tests: Q001 sent and Q005 back, Q001 sent and null back, free text sent and Q001 back. All are 503.
+- One existing test was corrected: "What does GRNI mean?" is Q090's exact text, so its fake reply now echoes `Q090`.
+- The P3 and P4 checks make the TypeScript BFF stricter than the Python probe, which is unchanged.
+
+#### P5: a huge numeric `Retry-After` became `Infinity`
+
+Fixed: the value must be a safe integer of at most 86,400 seconds (one day, the longest a Day 29 daily cap can ask a visitor to wait); otherwise it is null.
+- Tests: 400 nines, 2^53 + 1 and 86,401 are null, and 86,400 is kept.
+- A 429 with 400 nines gives `busy` with no countdown and no "Infinity".
+
+Mutation checks (`lib/chat/bff.ts` restored byte-for-byte after each):
+
+```text
+M10 no upstream byte cap (Infinity)           -> 3 failed
+M11 query_id correlation removed              -> 1 failed
+M12 Retry-After back to "digits only"         -> 1 failed (the unit test; the end-to-end test still passes,
+                                                 because JSON turns Infinity into null: what Hermes observed)
+```
+
+Gates after round 1, on the working trees:
+
+```text
+ProcureRAG (provider calls and tracing forced off)
+uv lock --check     exit 0
+pytest -q           exit 0  486 passed (480 + 6 for scripts/chat_smoke.py)
+compileall          exit 0
+ruff                exit 0  All checks passed!
+frozen regression   exit 0  all expectations hold
+verify-retrieval    exit 0  all expectations hold
+graph regression    exit 0  every graph contract holds
+contract probe      exit 0  0 failure(s)
+git diff --check    exit 0
+
+portfolio
+npm ci              exit 0  found 0 vulnerabilities
+typecheck / lint    exit 0 / exit 0
+build               exit 0
+npm test            exit 0  139 passed (133 + 6)
+git diff --check    exit 0
+.env* files: 0
+```
+
+Changed in round 1:
+- **ProcureRAG:**
+  - `src/generation.py`: Zero Data Retention.
+  - `tests/test_generation.py`.
+  - `scripts/chat_smoke.py` (new; expects Q090 as a gap).
+  - `tests/test_chat_smoke.py` (new, 6 tests).
+  - this log.
+- **Portfolio:**
+  - `lib/chat/bff.ts`: P3, P4 and P5.
+  - `tests/chat-bff.spec.ts`.
+  - `components/ChatPanel.tsx`: the disclosure.
+  - `app/procurerag/page.tsx`: the model and ZDR sentence.
 
 ### Next step
 
@@ -10102,7 +10270,10 @@ Sent: pending (Juan, after pushing this log update).
 2. ~~Juan's manual checks: 400% browser zoom and a VoiceOver pass.~~ Done on 2026-10-27, no defect.
 3. ~~Commit and push both branches.~~ Done: ProcureRAG `9e58ba0`, portfolio `51b5270`. Every gate was re-run on both commits, and the Docker image smoke passed locally (7/7, arm64). Remote CI starts when the `day-28` → `main` PR is opened; the portfolio has no CI.
 4. ~~Answer the interview questions and the route's 20 review questions.~~ Done above.
-5. Give the three-minute walkthrough without notes, then fill its three fields. **Closed (Juan).**
+5. Give the three-minute walkthrough without notes, then fill its three fields. **Done (Juan).**
 6. Commit and push this log update, then send the review prompt above to Hermes. **Done (Juan).**
-7. Keep HER-296 In Progress until every review finding is resolved. After the review, open the PRs: ProcureRAG `day-28` → `main`, where CI runs the amd64 Docker smoke; portfolio `day-28-chat` → `0ct26-overhaul`, as Day 27's PR #1 did.
-8. Carried to Day 29: the privacy/ZDR choice. The paid smoke stays blocked until it is chosen and Juan approves the call.
+7. Review round 1: P3, P4 and P5 fixed; P1's live smoke run (ZDR chosen, 8 paid calls, US$0.000844); P2 moved to the Day 29 ticket by Juan. **Done (Juan):**
+   - ~~decide the two quality findings~~ Done: Q090 kept as the gap example, Q001 left as it is for now;
+   - fill in the walkthrough's "without notes" field; Done
+   - commit and push both repositories, then ask Hermes for round 2.
+8. Keep HER-296 In Progress until Hermes accepts round 1. Then open the PRs: ProcureRAG `day-28` → `main`, where CI runs the amd64 Docker smoke; portfolio `day-28-chat` → `0ct26-overhaul`, as Day 27's PR #1 did.
