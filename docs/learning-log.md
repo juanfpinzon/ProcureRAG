@@ -8548,3 +8548,720 @@ git diff --check (both repositories)                  clean
 ```
 
 **Verdict:** Day 26 satisfies the HER-294 acceptance gate. No paid provider call, live deployment or implementation beyond the submitted work was performed. HER-294 is ready for `Done`; Day 27 may begin with the remaining launch-blocking ADR items still explicitly assigned to Days 28–29.
+
+## 2026-10-26 — Day 27: Responsive TypeScript Portfolio Preview and ProcureRAG Case Study
+
+Route: [`docs/day-27-portfolio-case-study.md`](day-27-portfolio-case-study.md)
+
+Linear: HER-295 — Day 27 loop: responsive portfolio preview and ProcureRAG case study.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns every portfolio implementation decision and every code, test, asset, deployment, account, and spending change in both repositories. Hermes wrote only the route and this evidence scaffold, then reviews and quizzes. Day 27 does not implement the BFF, live chat, authenticated upstream, persistent quota, production deployment, or legacy-site cutover.
+
+### Course/source checkpoint
+
+No new Boot.dev chapter today. Required sources:
+
+- portfolio `DESIGN.md`, full document;
+- portfolio `docs/portfolio-content-inventory.md`, full document;
+- portfolio `docs/adr/portfolio-demo-architecture.md`, full document;
+- Next.js `Server and Client Components`, especially `When to use Server and Client Components?`, the `use client` boundary, and reducing client JavaScript;
+- Next.js `Metadata and OG images`: `Static metadata`, `Generated metadata`, and `File-based metadata`;
+- W3C WCAG 2.2 Quick Reference: 1.1.1 Non-text Content, 1.4.3 Contrast (Minimum), 1.4.10 Reflow, 2.1.1 Keyboard, 2.4.7 Focus Visible, and 2.5.8 Target Size (Minimum).
+
+Record one applied decision or rejection per source:
+
+- [x] Day 26 design contract read.
+  - Applied takeaway: the preview implements the DESIGN §2 tokens one-to-one as CSS custom properties in `app/globals.css` (light, plus a dark swap driven only by `prefers-color-scheme`; no toggle). It follows the §3 three-route IA and section order, and the §5 contract: skip link, a 3 px focus ring drawn outside the element, 44 px nav/CTA targets, a labelled focusable scroll region for the metrics table, one `h1`, landmarks, and `lang="en"`. **One deliberate deviation (Juan's decision):** the mobile wireframe's `[Menu]` button became always-visible text links that wrap under the name. A toggle would have been Day 27's only Client Component, and three links fit at 320 px.
+- [x] Day 26 content/evidence inventory read.
+  - Applied takeaway: every public string is copied from the inventory and the corrected CV into typed modules (`content/site.ts`, `experience.ts`, `work.ts`, `procurerag.ts`), and the pages render from those modules.
+    - `tests/content.spec.ts` asserts the high-risk wording at the point of use: the 2020 NER journal article, `545 CVs with NER annotations (as documented in the dataset README)`, `AGI 2022 proceedings (published 2023)`, the David T. Chen (NIAID) credit, the U-NET client PoC, MCP `Unit 1` only.
+    - The same file asserts the known over-claims are absent: `Senior AI Engineer`, any Azure credential, `SEPLN 2021`, `500 CVs`, `7 years`, `try the demo`, and unqualified `answer accuracy`.
+- [x] Day 26 architecture ADR read.
+  - Applied takeaway: Day 27 stays inside the ADR boundary:
+    - Next.js App Router + TypeScript on a new branch from the accepted contract head;
+    - `master`/Pages untouched;
+    - no BFF, route handler, environment variable or upstream call;
+    - a static demo section that says `Live demo: in progress`;
+    - exactly the Q001/Q005/Q021/Q090 presets, with Q091/Q092 withheld.
+
+    The canonical link, `og:url`, the share image and the sitemap are deliberately absent because the public URL is still ADR §11 #9. Text-only share tags were added in review round 1.
+- [x] Next.js Server and Client Components sections read (page `lastUpdated` 2026-10-05; applied to Next.js 16.4.3).
+  - Server-first decision and every required `use client` boundary:
+    - every layout, page and component is a Server Component, and `grep -rn "^['\"]use client['\"]" app components` finds none;
+    - the interactivity that exists (skip link, in-page anchors, the `<details>` table of contents, links) is native HTML;
+    - Client Component islands on Day 27: **none**.
+  - Why no larger client boundary is needed: the page says Client Components are for state, event handlers, lifecycle effects, browser-only APIs and custom hooks. It also says that once a file has `"use client"`, "all of its imports and the components it directly renders are included in the client bundle". Nothing on Day 27 needs any of those.
+    - Measured consequence: the browser still loads Next's framework runtime, 7 scripts and 467 KB raw / about 140 KB gzip on each route. There is no app-authored client module. "No Client Components" does not mean "no JavaScript".
+    - Day 28's chat form can be the first, smallest island, imported into the server-rendered `/procurerag` page.
+- [x] Next.js Metadata and OG images sections read (page `lastUpdated` 2026-08-25).
+  - Static metadata and file-based metadata decision by route:
+    - static `metadata` objects only, since nothing is fetched. `generateMetadata` is for metadata that "depends on data", which none here does;
+    - the root layout sets `title.default`, `title.template` and the description, and `/procurerag` and `/about` export their own title and description;
+    - file-based: `app/icon.svg` (a JP monogram, accent `#0F5E5A` with white text, 7.6:1). The scaffold's framework-logo `favicon.ico` was not taken.
+  - Deferred metadata/share artifacts and why: `metadataBase`, canonical URLs, `og:url`, Open Graph/Twitter **images**, `robots.txt` and `sitemap.xml` are deferred to Day 30. Each needs the public URL, which is still ADR §11 #9 (open). A share image is also a public claim, so none exists that could imply a live demo, answer accuracy or an employer link. Text-only Open Graph and Twitter card tags, which need no URL, were added in review round 1 (see "Review round 1 follow-up").
+- [x] WCAG 2.2 criteria read.
+  - Concrete checks adopted (each maps to a test or a recorded manual check):
+    - **1.1.1:**
+      - the photo's alt is `Portrait of Juan F. Pinzon`;
+      - the X-ray's alt describes the overlays;
+      - the diagram has `role="img"` with a `<title>` plus a visible ordered-list text description;
+      - a test fails on any `<img>` without `alt`.
+    - **1.4.3:** DESIGN tokens only. The ratio of every colour pair in use was recomputed (lowest text pair: `--color-warn` on bg, 5.6:1 light).
+    - **1.4.10:**
+      - no page-level horizontal scroll at 320/375/768/1024/1280/1440 px (18 tests);
+      - the metrics table scrolls inside a labelled, focusable region;
+      - code blocks wrap.
+    - **2.1.1:** every function is a link or a native `<summary>`. Skip-link and Tab-order checks exist; there are no custom widgets that could trap focus.
+    - **2.4.7:** a `:focus-visible` 3 px outline, offset 3 px, asserted on the skip link. A test fails if the stylesheet ever removes the outline.
+    - **2.5.8:**
+      - header/footer link boxes are ≥ 44 px tall and ≥ 24 px wide (test);
+      - the CTA has `min-height: 44px`;
+      - in-sentence links use the inline exception.
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-26:
+
+```text
+ProcureRAG branch/head: day-26 @ b2ca157
+ProcureRAG remote sync: origin/day-26, divergence 0/0
+ProcureRAG working tree before scaffold: clean
+portfolio accepted branch/head: day-26-contract @ 76c719e
+portfolio audit-clone remote sync: divergence 0/0
+portfolio audit-clone working tree: clean
+portfolio live branch: master, legacy Jekyll site
+portfolio Node manifest/lockfile: none
+```
+
+All ProcureRAG commands below used `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1`, and `OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev: exit 0, 154 packages resolved, 146 checked
+uv lock --check: exit 0
+pytest: exit 0, 452 passed in 14.78s
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 as expected
+current retrieval verification: exit 0, 6/6 [OK]
+graph regression: exit 0, 6/6 contracts, 4 stand-in LLM calls
+no-paid portfolio contract probe: exit 0, 19/19 scenarios + 2/2 checks, 0 failures
+git diff --check: exit 0
+```
+
+No provider call or trace upload ran. Q091 remains red for live-answer completeness and retains the deterministic `Band 3` term-level gap. Nothing is currently deployed.
+
+### Block 0 — contract reactivation and branch discipline
+
+- Recruiter's first-minute question: is this an experienced ML practitioner in Barcelona with production forecasting and procurement depth, what is the flagship project, and where are the current CV and contact links?
+- Technical interviewer's evidence question: what exactly did Juan build in ProcureRAG, how was each number measured (method, corpus, query count, cut-off, commit), where does it still fail, and can I reproduce it?
+- Most dangerous false-live or metric overclaim to prevent: presenting `P@1 0.978` as answer accuracy, or any "try the demo" or live wording. Retrieval ranking on a synthetic benchmark is what was measured, and no public demo or hosted service exists.
+- Portfolio implementation branch name: `day-27-preview`. Implementation commit `1745cbb` (2026-10-26), pushed to `origin/day-27-preview`.
+- Branch base and exact starting SHA: `0ct26-overhaul` @ `76c719ee8284d0a571cf050a96adddae64960f1d`. `day-26-contract` and both remote branches point to the same SHA.
+- Fetch/status/divergence evidence before implementation (`git fetch --all --prune`, 2026-10-26):
+  - portfolio `0ct26-overhaul...origin/0ct26-overhaul` 0/0, working tree clean;
+  - ProcureRAG `day-27` @ `8c4b64e` equal to `origin/day-27`, working tree clean; `origin/main` @ `edf76f5`.
+- Confirmation that `master`/Pages publishing remained untouched:
+  - `origin/master` = `7526f0c7dbaa0b3e67ad2c57b1f577c82f9f815b`;
+  - `gh api repos/juanfpinzon/juanfpinzon.github.io/pages`: source `master` `/`, `build_type` `legacy`, `status` `built`;
+  - latest Pages build commit `7526f0c` (2021-09-13);
+  - no commit, push or setting change in either repository.
+- Accepted Day 26 files present before scaffolding, all unchanged by Day 27 (`git status` shows only `.gitignore` and `README.md` modified and the legacy `.github/workflows/ci.yaml` deleted among tracked files):
+  - `DESIGN.md`, `docs/portfolio-content-inventory.md`, `docs/adr/portfolio-demo-architecture.md`;
+  - `docs/JuanFernandoPinzon_CV_Oct2026.pdf` (132,799 bytes, sha256 `d82ed44e…fea0bd`) and `docs/JuanFernandoPinzon_CV_Oct2026.html`;
+  - `assets/img/pic-juan.png` (917 × 1417, 1,927,847 bytes).
+
+### Application scaffold and component-boundary evidence
+
+- Exact scaffold command, run in an empty scratch directory because the repository is not empty (create-next-app refuses directories with conflicting files):
+  `npx --yes create-next-app@16.4.3 portfolio --ts --eslint --app --no-src-dir --no-tailwind --no-react-compiler --import-alias "@/*" --use-npm --skip-install --disable-git --no-agent-feedback --yes`
+- Framework and exact version:
+  - Next.js 16.4.3 (Turbopack production builds);
+  - React and React DOM 19.3.0;
+  - TypeScript 5.9.3;
+  - ESLint 9.39.5 with `eslint-config-next` 16.4.3;
+  - `@playwright/test` 1.64.1, with Chrome for Testing 156.0.8078.4 (Playwright Chromium build 1248).
+- Node runtime/version policy: `.nvmrc` = `22`, and `package.json` `engines.node` = `22.x` (Next.js 16.4.3 requires ≥ 20.9.0). Measured with Node v22.22.3.
+- Package manager and exact version: npm 10.9.8.
+- Lockfile: `package-lock.json` is the only lockfile (no `yarn.lock`, `pnpm-lock.yaml` or `bun.lockb`).
+- Actual manifest scripts:
+  - development: `next dev`
+  - typecheck: `next typegen && tsc --noEmit`
+  - lint: `eslint`
+  - test: `playwright test`. Its `webServer` starts `next start` on `127.0.0.1:3100` against the existing build, with `reuseExistingServer: false`, so a dev server can never stand in for the build.
+  - production build: `next build`
+  - built-artifact preview/start: `next start`
+- Files the scaffold proposed to overwrite and how the accepted contracts/CV/assets were preserved:
+  - **Collisions:** only `.gitignore` and `README.md`.
+    - `.gitignore` was merged: the legacy Jekyll lines were kept, and the Next.js, Playwright, `.env*` and `.vercel` lines appended.
+    - `README.md` was kept and extended with a preview section.
+  - **Taken:**
+    - `tsconfig.json`;
+    - `AGENTS.md` (`next dev` re-creates it anyway);
+    - `eslint.config.mjs`, plus ignores for the legacy `assets/**`;
+    - `next.config.ts`, rewritten: the scaffold's default `cacheComponents: true` and `partialPrefetching: true` were removed because every route is static, and `poweredByHeader: false` was added;
+    - `package.json`, with scripts, engines and Playwright added.
+  - **Not taken:** `app/page.module.css`, the `public/*.svg` framework logos, and `app/favicon.ico`.
+  - **Untouched:** DESIGN, inventory, ADR, CV, the Jekyll files and `assets/`.
+- ESLint version note:
+  - npm warns `eslint@9.39.5` is deprecated;
+  - ESLint 10.13.0 was tried and reverted: `npm ls` marks it invalid against the peer ranges of `eslint-plugin-react` 7.37.5, `eslint-plugin-jsx-a11y` 6.10.2 and `eslint-plugin-import` 2.32.0, which `eslint-config-next` 16.4.3 bundles;
+  - it stays on ESLint 9 until the Next.js config supports 10.
+- Server Component routes/sections:
+  - routes: `app/layout.tsx`, `app/page.tsx`, `app/procurerag/page.tsx`, `app/about/page.tsx`;
+  - components: `SiteHeader`, `SiteFooter`, `ExternalLink`, `WorkCard`, `LaneLabel`, `ArchitectureDiagram`;
+  - build output: `/`, `/about`, `/procurerag`, `/icon.svg` and `/_not-found` are all `○ (Static) prerendered as static content`.
+- Client Component islands, with one reason each: **none on Day 27.**
+- How the `use client` boundary was kept below the page/layout root: there is no `use client` at all. The header has no menu toggle (the links wrap), the table of contents is a native `<details>`, and the demo section is text.
+- No-JavaScript behavior: with JavaScript disabled (Playwright `javaScriptEnabled: false`, 4 tests), all three routes still render the `h1`, the header nav (ProcureRAG / About / CV), the content and the footer. The narrow table of contents still opens, because `<details>` is native, and the demo's `<noscript>` paragraph renders.
+- Secret boundary: Day 27 holds no server credential:
+  - no `.env*` file;
+  - no `process.env` read in `app/`, `components/` or `content/`;
+  - no route handler (0 `route.ts`);
+  - no browser source maps emitted (0 `.map` files under `.next/static`).
+
+  `tests/build-artifacts.spec.ts` scans every text asset under `.next/static` for `PROCURERAG_API_URL`, `PROCURERAG_SERVICE_TOKEN`, `OPENROUTER_API_KEY`, `LANGSMITH_API_KEY`, `AZURE_CLIENT_SECRET` and `NEXT_PUBLIC_`, and for `sk-`/Bearer/JWT-shaped values: 0 findings. It prints only the file and the name, never a matched value.
+
+### Recruiter-path evidence (`/`)
+
+- Hero/value proposition used (the `h1`, inventory §7 main): "ML/AI engineer with production forecasting and procurement experience, building evidence-driven RAG and agentic applications."
+- Supporting continuity line (`since 2019`, production since 2022, procurement roots): "Working in ML and data science since 2019. Production forecasting at PepsiCo since 2022, procurement roots since 2014, and now hands-on RAG, evaluation and agent engineering."
+- Barcelona/location treatment: "Based in Barcelona, Spain", muted, under the supporting line. Also in the home meta description.
+- Experience hierarchy and exact held titles:
+  - "Data Product Management Associate Manager — PepsiCo, Digital Procurement · 2026–present";
+  - "Data Science Sr. Analyst — PepsiCo, production forecasting · 2022–2026";
+  - "Machine Learning Researcher / DL Consultant — Novel Software Systems, applied research · 2019–2022";
+  - then "Earlier: procurement and operations roles (2014–2019)", linking to `/about#earlier-roles`.
+- How actual employer titles stay separate from the target role: only held titles appear. "Senior AI Engineer" and any "Azure AI Engineer" credential are asserted absent on every route. The current role is described as defining and prototyping the agentic AI roadmap, never as shipped enterprise LLM production.
+- ProcureRAG flagship wording and synthetic/employer-separation disclosure: "A procurement-intelligence copilot over a synthetic knowledge base: 34 documents of a fictional company, Vantera. An independent learning project, with no employer data, systems, affiliation or endorsement, and not a production system." A test asserts that the flagship card and the whole case study never name PepsiCo, and that the card keeps the separation sentence.
+- Short evidence chips and their methodology labels: "P@1 0.978 retrieval ranking (93 queries)" · "430+ tests + eval-gated CI" · "guarded FastAPI + local MCP".
+- Exact live-demo wording: "Live demo: in progress" (home flagship card, case-study header, demo panel). Tests reject any "Live demo:" not followed by "in progress", and any "try (the) demo".
+- CV/GitHub/LinkedIn/email navigation:
+  - header `CV` → `/cv.pdf` (200 `application/pdf`, byte-identical to the docs CV, by test);
+  - hero: case-study CTA, CV, LinkedIn, Email;
+  - Contact section, and footer GitHub · LinkedIn · Email;
+  - destinations: `https://www.linkedin.com/in/juanfpinzon/`, `https://github.com/juanfpinzon`, `mailto:juancho704@gmail.com`;
+  - the external targets answered 200 (LinkedIn's 200 is its logged-out page, per the inventory's auth-wall note).
+- First-time visitor / two-interaction check:
+  - at 1280 px, the first screen shows the hero, Barcelona, the case-study CTA and CV/LinkedIn/Email, with the photo beside them;
+  - one scroll reaches experience and the flagship;
+  - with the keyboard, CV/LinkedIn/Email are Tab stops 7–9;
+  - at 375 px the `h1` fills the first screen, and CV/LinkedIn/Email are reached after one scroll (screenshots at 320/375 px).
+
+Expected explanation shape:
+
+- Juan is an experienced ML practitioner, not a beginner career reset.
+- Production forecasting, procurement experience, and research precede and support the RAG/agent work.
+- ProcureRAG is an independent learning project over synthetic data, not an employer deployment.
+- The recruiter can reach the flagship case study, current CV, GitHub, LinkedIn, and email immediately.
+
+### Experience, earlier work, publications, credentials, and assets
+
+- PepsiCo production ML and current Digital Procurement wording used: on `/about`, the CV-approved bullets, labelled "Employer facts are as reported on my CV and describe my own role only":
+  - IBP forecasting (XGBoost, LightGBM, ensembles) weekly on millions of multi-country rows, Iberia 2022–2024;
+  - the Sustain model design;
+  - Beyond Spend (4+ weeks → near-real-time);
+  - the SpendHQ European rollout (100+ procurement members);
+  - the current role's roadmap definition and prototyping on Copilot declarative agents and the internal AI platform.
+
+  No internal dashboard or system is linked.
+- Novel Software research wording and ownership boundary: "Machine Learning Researcher / DL Consultant — Novel Software Systems", Aug 2019 – May 2022, Novosibirsk: applied research and client proofs of concept. The NER, market, DICOM2STL and U-NET cards each say "team research", "coauthor" or "client work".
+- Earlier procurement/operations roots, on `/about` under "Earlier roles (2014–2019)":
+  - ITMS Business / Systems Analyst (Nov 2018 – Aug 2019);
+  - Aritex de Colombia Production Planning Analyst (Aug – Dec 2016);
+  - STF Group Procurement & Inventory Analyst (Jan 2014 – Jul 2016, "reduced obsolete inventory by 20%").
+- NER paper citation, 2020 year, first-author wording, and destination: "J. F. Pinzon, S. Krainikovsky, R. Samarev. “Limitations of Neural Networks-based NER for Resume Data Extraction.” Procesamiento del Lenguaje Natural 65 (2020), pp. 53–58. First author."
+  - link: `http://journal.sepln.org/sepln/ojs/ojs/index.php/pln/article/view/6276`, 200;
+  - HTTP on purpose, because the HTTPS certificate does not match the host.
+- NER dataset wording and destination: "545 CVs with NER annotations (as documented in the dataset README)" → `https://github.com/juanfpinzon/resume-dataset`, 200.
+- Market/time-series citation and links: "A. Kolonin, A. Raheman, M. Vishwas, I. Ansari, J. Pinzon, A. Ho. “Causal Analysis of Generic Time Series Data Applied for Market Prediction.” AGI 2022 proceedings (published 2023), LNCS, pp. 30–39."
+  - DOI `https://doi.org/10.1007/978-3-031-19907-3_4` → `link.springer.com`, 200;
+  - preprint `https://arxiv.org/abs/2204.12928`, 200.
+- DICOM2STL upstream credit and Juan's scoped contribution:
+  - Card wording: "Adapted and extended the open-source dicom2stl by David T. Chen (NIAID), licensed Apache-2.0 per its README: a cranial-tuned pipeline, skull extraction, a DICOM organizer, CLI flags and a notebook. Autobone and its implant-prediction model belong to the client; I do not own them."
+  - Result: "Used to convert 1,000+ cranial CT scans into STL meshes for the client's implant-model training data."
+  - Links: `juanfpinzon/dicom2stl` and the upstream `dave3d/dicom2stl`, both 200. The upstream README names David T. Chen, NIAID and Apache-2.0. GitHub detects no LICENSE file there or in Juan's repository (inventory #6 still open).
+- U-NET client-PoC / non-clinical-production boundary: "A proof of concept for a client, not a deployed clinical product. The client owns the data and the product; the data was anonymized before it reached me." The card shows the X-ray (Juan's Day 27 choice; cleared in inventory §5.1).
+- CS231n archive/foundation treatment: one archive line, "CS231n self-paced solutions (Stanford, Spring 2019 assignments)", with "Stanford owns the course content". `cs231n.png` was not migrated.
+- Boot.dev exact title/date/scope and paired ProcureRAG evidence: "Boot.dev — Learn Retrieval Augmented Generation, certificate of completion, 18 September 2026." It links to `/procurerag#progression`, where the course is named as the structured source for the retrieval stages.
+- Hugging Face MCP Unit 1 exact title/date/scope and paired evidence: "Hugging Face — The MCP Course, Unit 1: Fundamentals of MCP, certificate of achievement, 22 October 2026." It links to `/procurerag#progression` (the local MCP tool). It never claims the whole course.
+- Azure credential remains `in progress`: it does not appear on any route (a test asserts `azure ai engineer` is absent). It stays "in progress" in the CV only.
+- Confirmation that private award images remain unpublished: they are in neither repository. No certificate image, credential ID or "Verify" link appears on the site.
+- Corrected CV route and source path: `/cv.pdf` ← `public/cv.pdf`, a copy of `docs/JuanFernandoPinzon_CV_Oct2026.pdf`. The sha256 values are identical, and the test compares the served bytes with the docs file.
+- CV link/readability/tag evidence:
+  - `pdfinfo` is not installed on this machine;
+  - parsing the PDF finds `/MarkInfo << /Marked true`, a `/StructTreeRoot`, `/Lang (en…)` and a `/Title`, over 2 pages;
+  - Day 26's `pdfinfo` `Tagged: yes` remains the authoritative check.
+- Source photo path, crop decision, optimized output path/format/dimensions/file size:
+  - Source: `assets/img/pic-juan.png`, 917 × 1417 RGBA, 1,927,847 bytes, a full upper-body portrait.
+  - Crop: box (left 217, top 40, right 797, bottom 620), a 580 × 580 head-and-shoulders square, resized to 480 × 480 (Lanczos) with Pillow.
+  - Encode: `cwebp -q 80 -m 6 -metadata none crop.png -o public/images/juan-pinzon-headshot.webp`.
+  - Output: 480 × 480 WebP, 10,258 bytes (−99.5% vs the source), rendered through `next/image` (static import, `sizes` 160/220 px, `preload`).
+- Photo alt-text decision: "Portrait of Juan F. Pinzon". It identifies the person next to the name, so it is not treated as decorative.
+- X-ray asset:
+  - Source and command: `assets/img/img55.png`, 716 × 801, `cwebp -q 92 -m 6 -metadata none -noalpha` → `public/images/unet-spine-vertebrae.webp`, 716 × 801, 23,404 bytes.
+  - Quality: q80 washed out the red angle lines and the green masks; q92 gives a PSNR of 51.3 dB.
+  - Alt: "Front-view spine X-ray with the model's output drawn on top: each detected vertebra is shaded green, with a blue centre point and a red line along its measured angle. The spine curves to one side."
+- Asset permissions/ownership caveats carried forward:
+  - `img55.png` and the NER notebook are cleared by owner decision only (inventory §5.1; no upstream anonymization record exists);
+  - LinkedIn is auth-walled;
+  - the dicom2stl LICENSE file is missing.
+- Remaining non-blocking inventory questions:
+  - #6, dicom2stl `LICENSE`: open, Day 30;
+  - #7, OpenClaw/Hermes upstream URLs: open. The credit is given in text, with no upstream links;
+  - #9, LinkedIn Experience export: open, Day 30.
+
+### ProcureRAG technical-path evidence (`/procurerag`)
+
+- Problem/intended users and why procurement:
+  - the problem: repeated policy questions whose answers are spread across policies, procedures, contracts and FAQs;
+  - the users: **requesters** and **buyers** (buyers may also read confidential documents);
+  - why the domain: "my career started in procurement and inventory (2014–2016), and my current role is in Digital Procurement … The project uses none of any employer's data or systems."
+- Juan's personal ownership and what he did not build/own:
+  - "What I built": retrieval from primitives plus the nine-configuration benchmark; the evaluation layer; the bounded LangGraph agent, four guard layers, FastAPI service, Docker image, eval-gated CI and local MCP adapter;
+  - "What I did not build": the open-source frameworks (named); the pretrained models (multi-qa-MiniLM-L6, ms-marco-TinyBERT-L2); the third-party answer model (gpt-4o through OpenRouter, opt-in and off by default).
+- Synthetic corpus disclosure: "All 34 documents describe a fictional company, Vantera, and were written for this project: 24 Internal and 10 Confidential documents, split into 570 chunks, plus 93 labeled queries …". A link to `docs/corpus-v1.md` follows.
+- Progression from retrieval primitives to MCP: retrieval from primitives → evaluation → bounded agent graph → guardrails and human approval → serving and delivery (FastAPI, Docker, the deleted Azure deployment, eval-gated CI, local MCP).
+- Architecture diagram path/type: an inline SVG in `components/ArchitectureDiagram.tsx`, in six vertical steps:
+  1. caller;
+  2. service boundary;
+  3. retrieval over 570 chunks;
+  4. LangGraph state graph;
+  5. generation + output guards;
+  6. QueryResponse.
+
+  Its colours come from the CSS tokens, so it follows dark mode.
+- Visible text alternative for the diagram: a visible `figcaption`, "Text description of the diagram.", with a six-item ordered list generated from the same `steps` array as the boxes, so the two cannot drift apart.
+- Evidence table and reproduction links: a 9-row table inside a labelled, focusable scroll region, plus links to the evaluation report, the `uv run python src/eval_metrics.py` command, commit `edf76f5` and CI run `40401385508`.
+- Retrieval metrics shown, including method/corpus/query count/cutoff/date/commit:
+  - all nine configurations with P@1, R@5, MRR@10 and nDCG@5, on synthetic corpus v1 (34 documents, 570 chunks), 93 labeled queries, depth-10 cut;
+  - relevance is binary for P@1/R@5/MRR@10 and graded (primary 2, secondary 1) for nDCG@5;
+  - measured 2026-10-26 at `edf76f5`. The re-run output matched the README row for row.
+- Exact wording that prevents P@1 from being read as answer accuracy: "P@1 0.978 is retrieval ranking—not answer accuracy. It counts how often the top-ranked document is one of the expected documents for the question. It says nothing about whether a generated answer is correct or complete (see Q091 below)."
+- Short test-count wording and exact count/date/commit wording:
+  - short surfaces: "430+ tests + eval-gated CI";
+  - case study: "452 automated tests passed on 2026-10-26 at commit edf76f5, with no credentials and no network."
+- Demonstrated/reproducible claims:
+  - retrieval ranking;
+  - the 452 tests;
+  - the deterministic regressions (7 of 7 frozen, 6 of 6 retrieval verifications, 6 of 6 graph contracts);
+  - eval-gated CI (three required checks; linked run).
+- Local-only claims (label "Demonstrated locally"):
+  - the bounded agent with guardrails and an approval gate, checked with a stand-in model, with "no conversational memory, no autonomous research";
+  - the FastAPI service and the non-root Docker image;
+  - the read-only stdio MCP tool, "not a remote MCP service".
+- Historical/deleted deployment claims (label "Historical · deleted"): "Deployed to Azure Container Apps by image digest and rolled back once, in a learning exercise. Every resource was deleted the same day; nothing is live."
+- Red/limited claims (label "Red · limited"):
+  - Q091's incomplete live answer;
+  - free-text questions have no gold labels and unchecked evidence;
+  - the agentic second pass only runs on labeled queries.
+- Not-built claims (label "Not built yet"):
+  - the public demo: browser chat, server-side proxy, authenticated upstream, persistent quota and hosted service;
+  - the roadmap section, under the same label: "Planned, in order. None of it exists yet."
+- Q091 live-answer completeness and `Band 3` wording:
+  - first, the question and its live result: the first pass misses the chunk with the Band 3 threshold, and the approval-gated second pass recovers it. The one live gpt-4o run stated the threshold with a valid citation but dropped the renewal usage-data step that the expected answer requires;
+  - then: "The deterministic frozen regression still tracks Q091's term-level Band 3 gap as a named, expected case. The failure is open and owned by generation, not retrieval. A valid citation and repaired retrieval do not make a complete answer, which is why Q091 is not an example question for the demo."
+- Caller-asserted role/stateless approval/process-local rate limit/free-text/source-ID limitations: "Limits of what is built" covers:
+  - roles are caller-asserted (no authentication);
+  - approval is stateless (no reviewer identity);
+  - limits are process-local (they reset on restart, and each worker adds its own rate limit);
+  - free text is unchecked;
+  - sources are IDs only (no snippets, file links or trace links);
+  - the corpus is synthetic.
+
+  It also shows the weakest slice: `multi_doc` P@1 0.600 over 5 queries, against 0.978 overall.
+- Static demo section wording and approved preset display: the panel opens with "Live demo: in progress", then "**Nothing on this page sends a question anywhere.** The public demo is not built yet."
+  - It then lists what the demo *will* do: question text only, the 24 Internal documents, a fixed requester role, typed states, IDs-only sources, the "evidence unchecked" label for free text, and on-page history without model memory.
+  - The presets are a plain ordered list (`Q001`, `Q005`, `Q021`, `Q090` with their exact corpus texts), not buttons, with the Q091/Q092 withholding reasons.
+  - The future third-party-provider disclosure is written in the future tense.
+  - It links to the local quickstart and has a `<noscript>` line.
+- Evidence that the static demo sends no request and simulates no answer:
+  - `grep -rnE "fetch\(|<form|<button|onClick|onSubmit|XMLHttpRequest|navigator\." app components content` finds only a code comment;
+  - 0 route handlers;
+  - the console/network inspection logged 0 failed requests, and every request was a same-origin static asset;
+  - the panel contains no input, button or answer text.
+- Reproduction/runbook links and roadmap:
+  - a wrapped command block: clone; `uv sync --locked --dev`; `uv run pytest -q` ("452 tests at edf76f5"); `eval_metrics.py`; `regression_suite.py`; `graph_regression.py`;
+  - links: the CI run, the Docker runbook, the Azure runbook ("historical; resources deleted") and the test queries;
+  - roadmap, labelled "Not built yet": the secured local chat slice, the hosted chain with quota/ceiling/kill switch/launch smoke, the public cutover with the old CV link kept, and a Q091 repair with its own gate.
+
+Expected explanation shape:
+
+- Metrics are scoped retrieval measurements, never general answer quality.
+- The case study separates reproducible evidence from local, historical, red, and planned work.
+- Q091 remains visible because retrieval/citation plumbing can pass while the generated answer is incomplete.
+- The Day 27 preview explains the future demo contract without pretending Day 28–30 exists.
+
+### About-route evidence (`/about`)
+
+- Experience chronology and held titles: all six CV roles, newest first, each with an `h3` (title — employer), dates, location and the approved bullets. Three are under "Experience", and three under "Earlier roles (2014–2019)" (`id="earlier-roles"`, the home page's link target).
+- Education and languages:
+  - "M.Sc. Big Data Analytics & AI, Novosibirsk State University (NSU), Novosibirsk, Russia · 2017–2019";
+  - "B.B.A. Business Administration, Universidad ICESI, Cali, Colombia · 2015";
+  - "Languages: Spanish (native) · English (full professional) · Russian (elementary)."
+- Production versus research versus independent-project distinction: the opening list reads "Production ML: forecasting at PepsiCo since 2022" / "Applied research and client proofs of concept: Novel Software Systems, 2019–2022" / "Independent learning project: ProcureRAG (2026), over synthetic data, with no employer affiliation".
+- Publications/research links: both full citations (inventory §3 wording), each with its links (the journal page; the 545-CV dataset; DOI; arXiv), plus a pointer to the home page's "Selected work and research".
+- Credentials' subordinate placement: the second-to-last section, set in the small `credentials` type, after Other projects. It holds the two text lines and "Other courses are listed on the CV."
+- CV and contact path: a final "CV and contact" section: current CV (PDF, October 2026), email, LinkedIn, GitHub. The header and footer carry the same links.
+- OpenClaw/Hermes upstream-credit wording and unresolved URLs:
+  - the inventory §2.1 sentence verbatim ("Configured and extended the open-source OpenClaw and Hermes Agent frameworks (credited upstream) …"), plus "I wrote the listed automations; I did not write the frameworks.";
+  - links to the public `AndyJuan_Newsletter` and `DP_news_scout` repositories (both 200);
+  - **the upstream OpenClaw and Hermes Agent URLs are still open (inventory #7)**, so the credit is in text only.
+
+### Metadata and share evidence
+
+- Root title and description (rendered `<title>` and `meta[name=description]`): "Juan F. Pinzon — ML/AI engineer" / "ML/AI engineer with production forecasting and procurement experience, building evidence-driven RAG and agentic applications. Based in Barcelona, Spain."
+- ProcureRAG route title and description: "ProcureRAG case study — Juan F. Pinzon" / "ProcureRAG, an independent learning project: a procurement-intelligence copilot over a synthetic knowledge base. Retrieval measured on 93 labeled queries, known failures and limits, and how to reproduce it. Live demo in progress."
+- About route title and description: "About — Juan F. Pinzon" / "Experience, education, research and publications, learning credentials, CV and contact for Juan F. Pinzon, ML/AI engineer in Barcelona, Spain."
+- Canonical URL policy for a non-production preview: no canonical link and no `metadataBase`, until ADR §11 #9 fixes the public URL. Whether a Vercel preview would add its own `noindex` header is to be verified on Day 28, before any preview deploy.
+- Favicon/file-based metadata added: `app/icon.svg`, served as `/icon.svg` (static).
+- Open Graph and Twitter card tags:
+  - **Text-only, on every route** (added in review round 1): `og:title`, `og:description`, `og:type` (`website`), `og:site_name`, `og:locale` (`en_US`), `twitter:card` (`summary`), `twitter:title`, `twitter:description`. Each repeats the route's own `<title>` and description.
+  - **Acceptance exception (HER-295):** `og:image`, `og:url`, `twitter:image` and the canonical link are deliberately absent until the Day 30 public URL (ADR §11 #9). This was measured, not assumed: with a share image and no `metadataBase`, `next build` warns and emits `og:image` as `http://localhost:3000/…`. `tests/metadata.spec.ts` asserts that the four are absent.
+- Check that metadata/share images make no live-demo, answer-accuracy, employer-endorsement, or enterprise-readiness claim:
+  - read first from the rendered pages: the only demo wording is "Live demo in progress", and there is no share image;
+  - **since review round 1 the check is automated:** `tests/metadata.spec.ts` runs the same forbidden-claims list over the `<title>` and every `<meta content>`.
+
+### Responsive and accessibility evidence
+
+Record actual method, viewport, result, and any fix for each item.
+
+- Semantic structure: on each route, a Playwright test asserts `lang="en"`, exactly one `h1`, one `banner`, one `main`, one `contentinfo` and the `navigation` named "Main". A second test asserts that heading levels start at `h1` and never skip a level. Both pass on all three routes.
+- Skip link behavior, asserted on all three routes:
+  - it is the first Tab stop and is visible in the viewport;
+  - its focus ring is 3 px solid, offset 3 px;
+  - Enter moves to `#main`, and the next Tab lands inside `<main>`.
+
+  `main` needs no `tabindex`: following the fragment link moves the browser's sequential-focus starting point.
+- Full keyboard path and DOM order (automated Tab walk at 1280 px, first 12 stops):
+  - `/`: skip → name → ProcureRAG → About → CV (PDF) → CTA → CV → LinkedIn → Email → Earlier roles → Read the case study → ProcureRAG code;
+  - `/procurerag`: skip → 4 header links → the 9 table-of-contents links in reading order;
+  - `/about`: skip → 4 header links → ProcureRAG → the publication links in order.
+  - **Manual real-browser pass to the footer: done by Juan during review, on all three routes; no defect reported.**
+- Keyboard traps: no modal, custom widget or focus-managing script exists, and the automated walk never stalled. Juan's manual walk reported no trap.
+- Visible focus against each background/control type:
+  - a `--color-focus` outline outside the element;
+  - focus on bg 4.7:1 light / 9.0:1 dark, and on surface 4.3:1 / 8.1:1, all above the 3:1 non-text minimum;
+  - on the accent button, the ring sits outside the button, on bg.
+- `outline: none` audit: a test fails if `app/globals.css` (the only stylesheet) contains `outline: none` or `outline: 0`. An early draft had `main:focus { outline: none }` and was removed before any test ran.
+- Color-token contrast evidence and any new-color ratios, computed with the WCAG formula for every pair in use (light / dark):
+  - ink on surface 14.7 / 13.6, ink on bg 16.2 / 15.1;
+  - on-accent on accent 7.6 / 8.1;
+  - muted on surface 6.1 / 6.5;
+  - lane labels on bg: ok 6.0 / 8.8, accent 7.1 / 8.6, muted 6.7 / 7.2, danger 6.6 / 7.5, warn 5.6 / 9.3;
+  - accent on surface 6.5 / 7.8.
+
+  New colours: none beyond the tokens. `icon.svg` uses accent with white text (7.6:1).
+- 320 px reflow:
+  - no page-level horizontal scroll on all three routes (test);
+  - the header links wrap under the name;
+  - the metrics table scrolls inside its region (a test asserts that the region itself overflows at 320 px);
+  - a 320 px screenshot showed the table caption clipped inside the scroll region, so the method details moved into a paragraph above the table and the caption became "Retrieval ranking by method".
+- 375 px mobile result/capture: light and dark screenshots of all three routes. The hierarchy reads hero → experience → flagship → work → credentials → contact. The CTA wraps with its arrow inline (after a fix, see below).
+- Intermediate/tablet result: 768 and 1024 px pass the overflow tests. At 768 px the work grid has 2 columns, and at 1024 px 4 columns; the case-study sidebar starts at 1024 px.
+- 1280/1440 px desktop result/capture: light and dark screenshots.
+  - The hero has the photo on the right, the flagship card two columns, and the work grid four columns.
+  - On `/procurerag`, the table of contents is a sticky sidebar.
+  - **Observation:** at 4 columns the work cards are narrow and tall, because the approved copy is long. This follows DESIGN's 4-column rule, so it is Juan's call whether to shorten the copy or use 2 columns.
+- 400% zoom result: the automated equivalent is a 320 CSS px viewport (1280 ÷ 4), which passes. **Real 400% browser zoom: checked by Juan during review; no sideways scrolling reported.**
+- Page-level horizontal overflow check: 18 of 18 tests pass (3 routes × 320/375/768/1024/1280/1440).
+- Wide-table labeled/focusable overflow region: `<div role="region" aria-label="Retrieval metrics table, scrolls horizontally" tabindex="0">` (test).
+- Reduced-motion behavior: a test asserts the CTA's transition duration is `0.15s` normally and `0s` under `reducedMotion: "reduce"`. No animation exists, and no content depends on motion.
+- Meaningful/decorative image alternatives:
+  - photo: "Portrait of Juan F. Pinzon";
+  - X-ray: the descriptive alt above, plus a visible caption;
+  - decorative glyphs (↗, →) are `aria-hidden`, and the external-link hint is announced as "(external site)";
+  - there are no images of text and no certificate images.
+- Architecture-diagram text equivalent: the visible six-step list. A test checks the SVG's accessible name and the visible description.
+- Target-size check:
+  - header/footer `.nav-link` boxes are ≥ 44 px tall and ≥ 24 px wide on all routes (test);
+  - the CTA has `min-height: 44px`;
+  - the table-of-contents `<summary>` is padded to about 46 px;
+  - in-sentence links use the 2.5.8 inline exception;
+  - fix: the footer links first had 44 px wrapper spans around about 22 px anchors, so the hit area moved onto the `<a>` itself.
+- No-JavaScript content/navigation/static-demo result: with JavaScript disabled, 4 Playwright tests pass:
+  - every route shows its `h1` and the three header links;
+  - `/procurerag` shows "Nothing on this page sends a question anywhere." and the `<noscript>` paragraph;
+  - the narrow `<details>` table of contents opens with no script.
+- Automated accessibility tool, if used, plus its limits: axe-core 4.14.0 (tags `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `wcag22aa`), injected through Playwright on 3 routes × light/dark × 375/1280 px: **0 violations**.
+  - axe reported "incomplete" (it could not decide) for three kinds of node:
+    - SVG `<text>` on `<rect>`: ink on surface, 14.7 / 13.6;
+    - metric cells partly scrolled out of the region at 375 px: ink on bg/surface;
+    - the CTA's arrow glyph: on-accent on accent, 7.6 / 8.1.
+  - Computing those token pairs resolved all three.
+  - Its limits: axe does not judge copy truth, link purpose in context, keyboard order, real zoom or screen-reader output.
+- Manual findings that a score would not have caught:
+  1. a CSS grid blowout: the `1fr` case-study column grew to the 591 px table and scrolled the whole page at 320/375 px. The overflow test caught it; it was fixed with `minmax(0, 1fr)`;
+  2. `display: flex` on `<summary>` removed the native disclosure marker, so the mobile table of contents looked like plain text (seen in a screenshot);
+  3. the table caption scrolled out of view at 320 px;
+  4. the footer hit areas were wrappers, not links;
+  5. the `inline-flex` CTA pushed its arrow to the far edge when the label wrapped.
+
+  axe reported 0 violations before and after all five fixes.
+
+### Build, tests, links, console, and preview evidence
+
+Record every command separately with exact exit code and meaningful output:
+
+```text
+locked install: npm ci (clean tree: no node_modules, no .next) / exit 0 / 350 packages added, 0 vulnerabilities (Node v22.22.3, npm 10.9.8)
+typecheck: npm run typecheck / exit 0 / "✓ Types generated successfully", tsc silent
+lint: npm run lint / exit 0 / no findings
+tests: npm test / exit 0 / 58 passed (5.1s), Chromium 156 against `next start`
+production build: npm run build / exit 0 / Next.js 16.4.3 (Turbopack); compiled, TypeScript passed, 6/6 static pages; /, /about, /procurerag, /icon.svg, /_not-found all ○ (Static); no warnings
+built-artifact preview/start: npm run start / serves the build at http://localhost:3000 (the tests use 127.0.0.1:3100)
+internal link check: Playwright test over every same-site href and #anchor on the three routes / pass (all 200, every target id present)
+external link check: curl -L over the 28 unique external hrefs in the three built pages, 2026-10-26 / 28 × HTTP 200; DOI resolves to link.springer.com; LinkedIn's 200 is its logged-out page; the SEPLN link is HTTP by design; the README anchors match the README's contents list; mailto not network-checked
+client-asset secret-name scan: tests/build-artifacts.spec.ts over .next/static / 0 findings (names and key-shaped values); 0 browser source maps; no .env* file; no process.env read in app code
+unsupported-live-claim scan: tests/content.spec.ts forbidden list over the visible text of all three routes / 0 matches
+git diff --check: exit 0 (tracked files); trailing-whitespace grep over the new untracked files: none
+git status --short: D .github/workflows/ci.yaml, M .gitignore, M README.md; untracked .nvmrc, AGENTS.md, app/, components/, content/, eslint.config.mjs, next.config.ts, package-lock.json, package.json, playwright.config.ts, public/, tests/, tsconfig.json (nothing committed) — snapshot before the implementation commit; everything listed was committed as 1745cbb
+```
+
+- Tests added and what they prove: 58 Playwright tests in three files, all against the production build.
+  - `tests/accessibility.spec.ts`:
+    - landmarks, `lang`, one `h1`, heading order;
+    - skip link and focus ring;
+    - image alts, target sizes;
+    - 18 overflow checks;
+    - the table region, the diagram alternative;
+    - reduced motion, no outline removal;
+    - 4 no-JavaScript checks.
+  - `tests/content.spec.ts`:
+    - required claims per route, forbidden claims per route;
+    - employer separation;
+    - exact link destinations, header navigation;
+    - `/cv.pdf` byte identity;
+    - internal links and anchors.
+  - `tests/build-artifacts.spec.ts`: the build exists, the browser-asset secret scan, no `.env` file.
+  - **Mutation check:** 11 deliberate faults, each applied, rebuilt, run and restored by hash:
+    - the chip's method label removed;
+    - "try the demo" copy;
+    - the grid blowout;
+    - the focus ring removed;
+    - the nav landmark renamed;
+    - stale CV bytes;
+    - the reduced-motion rule removed;
+    - the Q091 `Band 3` gap wording removed;
+    - a "Senior AI Engineer" title;
+    - "Built at PepsiCo" on the flagship card;
+    - PepsiCo named in the case study.
+
+    All 11 were caught, but only after two tests were strengthened: the first `Band 3` check passed on any mention of "Band 3", and the first employer-separation heuristic let "Built at PepsiCo" through.
+- What remains manual/unproven:
+  - ~~a screen-reader pass~~: done by Juan during review (the screen reader used was not recorded); no defect reported;
+  - ~~a real-browser keyboard walk to the footer~~: done by Juan;
+  - ~~real 400% zoom~~: done by Juan;
+  - **still open:** Safari and Firefox rendering (only Chromium is automated or checked);
+  - whether the copy is *true*: tests prove the wording is present or absent, and truth comes from the inventory and ProcureRAG evidence;
+  - visual quality between the tested widths.
+- Browser console errors/warnings on `/`, `/procurerag`, `/about`: 0 errors, 0 warnings (Chromium, production build, 1280 px; `console` and `pageerror` listeners).
+- Unexpected first-party network failures: 0 failed requests and 0 responses ≥ 400. Every request was a same-origin static asset; client JavaScript was 7 scripts, 467 KB raw (about 140 KB gzip) per route.
+- Mixed-content check: 0 `http://` subresources. The only `http://` URL is the SEPLN journal link, a navigation link.
+- Confirmation that no credential appears in browser assets/source maps: confirmed by the scan above. No browser source maps are emitted, and no credential exists on Day 27.
+- Preview URL: **not deployed.**
+- Preview commit SHA: no deployment exists, so the evidence commit is the one to build locally: implementation commit `1745cbb279f06090c02710eef5fe7d351eaedcaa` (2026-10-26 23:58 +0100), pushed to `origin/day-27-preview`. The review round 1 follow-up is `530dfe4` on top of it (see "Review round 1 follow-up").
+- Preview access/account blocker if not deployed: on 2026-10-26 Juan chose a local production build only. ADR §5 and §11 #4 put the Vercel account, the Hobby-terms check, the `dub1` region and repository linking on Day 28.
+- Reproducible local production URL/command: `git switch day-27-preview && npm ci && npm run build && npm run start` → `http://localhost:3000`. Tests: `npx playwright install chromium && npm test`.
+- Evidence that live Jekyll `master`/Pages remained unchanged: `origin/master` is still `7526f0c`, and Pages is still built from `master` `/` (legacy) at `7526f0c`. See Block 0.
+
+### ProcureRAG re-verification
+
+Run with live LLM and tracing forced off. Record each command separately. Run on 2026-10-26T21:38Z on branch `day-27` @ `8c4b64e`, whose only difference from `main` @ `edf76f5` is two documentation files (`docs/learning-log.md`, `docs/day-27-portfolio-case-study.md`):
+
+```text
+uv sync --locked --dev: exit 0, Resolved 154 packages, Checked 145 packages
+uv lock --check: exit 0, Resolved 154 packages
+pytest: exit 0, 452 passed in 3.53s
+compileall src tests scripts: exit 0
+Ruff src tests scripts: exit 0, All checks passed!
+frozen fixture regression: exit 0, 7/7 as_expected ("All cases match their currently expected state")
+current retrieval verification: exit 0, 6/6 [OK]
+graph regression: exit 0, 6/6 contracts passed, 4 stand-in LLM calls
+no-paid portfolio contract probe: exit 0, 21 [PASS] lines (19 scenarios + 2 contract checks), 0 failures
+eval_metrics (HF_HUB_OFFLINE=1, added because the case study publishes its table): exit 0, nine-method table identical to the README; reranked hybrid RRF chunk→document P@1 0.978 / R@5 0.806 / MRR@10 0.984 / nDCG@5 0.869
+git diff --check / git status --short: exit 0 / clean (before this log was edited)
+```
+
+- Confirmation that no live provider call or trace upload ran: `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`. The graph regression's 4 LLM calls are the stand-in, and the probe uses its own fake upstream.
+- Q091 state after the rerun: still **red** for live-answer completeness (no live run today).
+  - The frozen row `retrieval-miss-q091` is `as_expected`: "REPAIRED 2026-09-21: missing docs were ['GUIDE-002','POL-001'], now [] | term-level gap OPEN: missing ['Band 3']".
+  - The graph contract `recursive-recovery-q091` (recursive_retrieve → generate, 2 retrieval passes) passed with the stand-in model.
+
+### What failed or was confusing
+
+- `create-next-app` 16.4.3 turned on `cacheComponents` and `partialPrefetching` by default. Both exist to mix static and request-time content inside a route; an all-static preview does not need either, so both were removed.
+- npm flags ESLint 9 as deprecated, yet ESLint 10 is outside the peer ranges of the React, jsx-a11y and import plugins that `eslint-config-next` 16.4.3 bundles. The fix is to wait for the Next.js config, not to force it.
+- The CSS grid "blowout": a `1fr` track's minimum is its content's minimum width, so one wide table widened the whole page on phones. The overflow test went red before any screenshot showed it.
+- Playwright's `getByText()` skips `<noscript>`. The no-JavaScript test first looked like a site bug; the page rendered the paragraph, and only the selector engine ignored it.
+- Mutation testing found two weak tests. A substring check passed because "Band 3" appears twice, and a sentence heuristic let "Built at PepsiCo" through. A test that passes on the real page has not yet shown that it can fail.
+- The legacy `.github/workflows/ci.yaml` (a Ruby 2.7 Jekyll theme build, `actions/checkout@v2`, `on: push` for every branch) was a trap waiting to fire.
+  - It had **never run**: `gh api …/actions/runs` reports `total_count` 0, including the Day 26 pushes.
+  - The repository is a fork of `pages-themes/minimal`, and GitHub keeps a fork's workflows switched off until the owner enables them in the Actions tab, even though the repository-level Actions permission reports `enabled: true`.
+  - Enabling Actions for any Day 28–30 workflow would also have switched this job on, on every push.
+  - **Decision (Juan, 2026-10-26): deleted on `day-27-preview`.** `.github/workflows/` is now empty. It does not affect `master` or the Pages build (a `legacy` Pages build, not an Actions workflow).
+  - The inert theme leftovers (`.travis.yml`, `script/`, `Gemfile`, `.rubocop.yml`, the `.github/*.yml` bot configs) stay until the Day 30 migration.
+
+### What became clearer
+
+- "No Client Components" is a statement about *app* code. The framework runtime (about 140 KB gzip) still loads, but the HTML is complete before it does, which is why the no-JavaScript tests pass.
+- Static `metadata` objects cover every Day 27 route, including the text-only share tags. Next.js merges metadata shallowly, so a page that sets `openGraph` replaces the layout's whole object; one helper builds it per route. The URL-based items (canonical, `og:url`, the share image, the sitemap) all depend on one undecided fact, the public URL, so they move together to Day 30.
+- Accessibility evidence came from behaviour tests and screenshots, not the score. axe reported 0 violations throughout, while tests and screenshots found five real layout and target problems.
+
+### What I can now explain in an interview
+
+Write concise answers in your own words before looking back at the route:
+
+1. **What a recruiter should understand in the first minute:** I am an ML/AI engineer in Barcelona, working in ML and data science since 2019, with production forecasting at PepsiCo since 2022 and procurement roots since 2014. Today I am a Data Product Management Associate Manager in Digital Procurement, prototyping the agentic AI roadmap. ProcureRAG is my flagship: an independent project over synthetic data that shows evidence-driven RAG and agent engineering. It extends production ML into RAG; it is not a career reset. The CV, LinkedIn and email are in the first screen.
+
+2. **Why experience and projects lead and course awards support:** a certificate proves I completed structured learning on a date. Roles, two papers, public code, reproducible measurements, a recorded failure (Q091) and a real but deleted Azure exercise prove I applied it. So each credential is one small text line that links to the ProcureRAG evidence it fed. MCP says "Unit 1" only, never the whole course. The Azure certification stays off the site while it is in progress, and no certificate image is published.
+
+3. **Why most Day 27 routes are Server Components:**
+   - The content is static evidence, and App Router pages are Server Components by default. Client Components are for state, event handlers, effects and browser APIs, and a `"use client"` file pulls its whole import graph into the bundle.
+   - Nothing on Day 27 needs that. The header links wrap instead of hiding behind a menu toggle, the table of contents is a native `<details>`, and the demo section is text.
+   - Result: every route is prerendered `○ (Static)`, the HTML is complete before any JavaScript runs, and the no-JavaScript tests pass. The browser still loads Next's framework runtime (about 140 KB gzip), but no app-authored client code.
+   - Day 28's chat form becomes the first, smallest island.
+
+4. **What makes the ProcureRAG metrics defensible:** every number carries its method, all of it shown:
+   - corpus: synthetic v1, 34 documents and 570 chunks; 93 labeled queries;
+   - cut-off: depth 10; relevance: binary, graded for nDCG@5;
+   - when: commit `edf76f5` on 2026-10-26;
+   - how to reproduce: `uv run python src/eval_metrics.py`. I re-ran it, and it matched the README row for row.
+
+   All nine configurations are shown, not just the winner, and the weakest slice is disclosed (`multi_doc` P@1 0.600 over 5 queries). P@1 0.978 is labeled retrieval ranking, not answer accuracy. The exact test count (452) appears only with its commit and date; short surfaces say "430+".
+
+5. **Why Q091 is shown rather than hidden:** it is the clearest proof that plumbing is not correctness. The approval-gated second pass repaired retrieval, the citation is valid, and the one live answer still dropped the renewal usage-data step. Showing it demonstrates evaluation judgment, and it explains a product decision: Q091 is withheld from the demo presets. A disclaimer is not a repair. The fix needs its own evidence-backed regression gate. Meanwhile the frozen regression tracks the `Band 3` term gap as a named, expected case, not a silent pass.
+
+6. **Demonstrated versus local-only versus historical versus red versus unbuilt:**
+   - **Demonstrated:** reproducible today from the public repository (the retrieval table, 452 tests, the deterministic regressions, the linked CI run).
+   - **Demonstrated locally:** it runs, but only on a laptop or in a container (the bounded graph with a stand-in model, FastAPI and Docker, the stdio MCP tool).
+   - **Historical · deleted:** it happened once and the resources are gone (the Azure deployment and its rollback).
+   - **Red · limited:** a known failure or limit (Q091, unchecked free text, caller-asserted roles, stateless approval, process-local limits, IDs-only sources).
+   - **Not built yet:** planned, with nothing to inspect (the public chat, BFF, authenticated upstream, quota store, hosted service).
+
+   The labels are words and colour is secondary. Their job is to prevent launch theater.
+
+7. **Why the static demo section is not a fake chat:**
+   - It has no input, no button, no `fetch` and no route handler. It says "Nothing on this page sends a question anywhere" and "Live demo: in progress".
+   - The presets are a plain list, not buttons.
+   - It describes the future contract in the future tense: question text only, a fixed requester role, the 24 Internal documents, typed states, IDs-only sources, and "evidence unchecked" for free text.
+   - A simulated answer would be a fabricated result that looks like evidence. Day 28 builds the real, secured local slice instead.
+
+8. **How accessibility was verified beyond a score:** through behaviour tests on the production build:
+   - **Structure:** landmarks, one `h1`, heading order.
+   - **Keyboard and focus:** the skip link is the first Tab stop and moves focus into `main`; the 3 px focus ring is measured; no rule removes outlines.
+   - **Targets and reflow:** 44 px header and footer targets; no page-level sideways scroll at six widths, including 320 px (the 400% zoom equivalent); a labelled, focusable table region.
+   - **Motion and JavaScript:** reduced motion gives 0 s transitions, and the content renders without JavaScript.
+   - **Alternatives and contrast:** image and diagram text alternatives, and contrast computed for every colour pair in use.
+
+   axe's 0 violations were supporting evidence only: tests and screenshots found five problems axe did not (the grid blowout, the lost disclosure marker, the clipped caption, the footer hit areas, the CTA arrow). Eleven deliberate faults were all caught. The checks that need a person (a screen reader, real zoom, Safari and Firefox) are listed as manual, not claimed as automated.
+
+9. **Why the live Jekyll site remains untouched:** Day 27 is a preview on a branch. `master` still publishes the legacy site through a `legacy` Pages build (`7526f0c`). The cutover needs four things first: the public-URL decision, the old CV URL kept working, browser and link checks on the deployed site, and a rollback path (the `legacy-jekyll` tag and branch). Those are Day 30 work. A good preview does not authorize a migration. Deleting the dead Ruby workflow on the preview branch changes nothing that `master` or Pages uses.
+
+10. **How employer, client, independent-project and upstream ownership stay separate:**
+    - **Employer:** exact held titles and CV-reported bullets only, with no internal systems linked.
+    - **ProcureRAG:** "independent", "synthetic" and "no employer data, systems, affiliation or endorsement". A test fails if the case study or the flagship card names PepsiCo.
+    - **Client work:** the Novel Software cards say team research, coauthor or client work. The client owns the U-NET data and product, and Autobone.
+    - **Upstream:** DICOM2STL credits David T. Chen (NIAID) and Apache-2.0, with an upstream link. The case study names the frameworks and pretrained models I did not build. OpenClaw and Hermes: I wrote the automations, not the frameworks.
+
+11. **What remains unbuilt after Day 27:**
+    - the BFF route and the service-token check in ProcureRAG;
+    - the live chat UI;
+    - a persistent, atomic quota store;
+    - the model choice, worst-case cost, output cap and OpenRouter credit limit;
+    - the Vercel account and region, and Azure re-provisioning;
+    - the kill switch;
+    - the deployed smoke test and rollback;
+    - the public URL and cutover (and with it canonical, `og:url`, the share image and the sitemap);
+    - the LinkedIn reconciliation;
+    - the Q091 repair;
+    - the weekly gate review.
+
+12. **What gets cut first under time pressure:** following DESIGN §8: bilingual duplication, a custom domain, a manual dark-mode toggle, motion beyond hover and focus, 3D or illustration, a blog, and analytics. These go before evidence, the current CV, accessibility, honest limits or build reproducibility. Day 27 also cut two optional items: the mobile Menu toggle (wrapping links instead) and the share image (deferred with the public URL).
+
+Three-minute walkthrough:
+
+- Duration: 3–4 minutes, given on 2026-10-26 before the log commit `cc8539f`. Juan reported it as a range; no exact time was recorded.
+- Completed without notes: yes (Juan's report).
+- Weakest answer and follow-up practice: **#11, what remains unbuilt after Day 27.** Practise it grouped by the day that owns each item (ADR §11), out loud, until it takes under 30 seconds:
+  - **Day 28:** the BFF route; the ProcureRAG service-token check; the chat UI; the model choice, worst-case cost, public output cap and OpenRouter credit limit; the Vercel account, terms and `dub1` region.
+  - **Day 29:** the persistent atomic quota store; the Azure subscription and re-provisioning; the kill switch; the provider data-retention disclosure; the deployed launch smoke and rollback.
+  - **Day 30:** the public URL and cutover (with canonical, `og:url`, share image and sitemap); the old CV URL; the LinkedIn reconciliation; the weekly gate review.
+  - **Unscheduled:** the Q091 repair with its own regression gate.
+- Script (about 3 minutes; open the local build with `npm run start`):
+  1. **`/` (60 s):** read the hero and point at "Based in Barcelona" and the three experience rows (production since 2022, research 2019–2022, procurement since 2014). Show the flagship card: synthetic, independent, the three method-labeled chips, "Live demo: in progress". Then the four work cards (NER 2020, AGI 2022, DICOM2STL credit, U-NET PoC) and the small credential lines.
+  2. **`/procurerag` (90 s):** problem and users, then what I built versus what I did not, then the synthetic corpus. Walk the six-step diagram. Show the nine-row table and read the "retrieval ranking—not answer accuracy" sentence. Show the evidence lanes, then Q091, then the static demo ("Nothing on this page sends a question anywhere"), then the reproduce commands.
+  3. **`/about` and the close (30 s):** the full chronology, publications, credentials last, the CV link. Close with what is unbuilt (Day 28–30) and why the Jekyll site is untouched.
+
+### Review prompt
+
+> “Day 27 portfolio preview is ready. Please fetch both repos and review the implementation branch against the accepted Day 26 design/inventory/ADR. Check the recruiter path, production ML/procurement experience, preserved work/publications, scoped course awards, current CV/contact, ProcureRAG ownership/architecture/eval claims, Q091 and synthetic-data limitations, Server/Client boundary, responsive/accessibility/no-JS behavior, real build/test evidence, preview URL or blocker, and that no Day 28–30 chat/deployment work is falsely presented as live. Juan owns implementation.”
+
+Sent: yes, after both pushes on 2026-10-26 (portfolio `1745cbb`, ProcureRAG `cc8539f`). Hermes review round 1 returned 2 findings (1 Medium, 1 Low), addressed in the next section. Round 2 is recorded after it.
+
+### Review round 1 follow-up (2026-10-27)
+
+Hermes reviewed portfolio `1745cbb` and ProcureRAG `cc8539f`.
+
+1. **Medium: the closure evidence was internally stale.** The log still said the implementation was uncommitted and the walkthrough not given, while Next step #7 said DONE.
+   - **Fixed in this log:**
+     - implementation commit `1745cbb` recorded (Block 0, preview evidence, Next step #2 and #5);
+     - walkthrough recorded from Juan's report: 3–4 minutes, no notes, weakest answer #11, with a practice plan;
+     - review prompt marked as sent;
+     - Juan's manual keyboard, 400% zoom and screen-reader checks recorded;
+     - Safari/Firefox stays open.
+2. **Low: no Open Graph fields** (HER-295 mentions OG metadata). **Fixed in the portfolio** (Juan's decision: text-only tags now, image later):
+   - `app/share-metadata.ts`: `shareMetadata(title, description)` returns text-only `openGraph` and `twitter` objects.
+     - The root layout uses it, and `/` inherits from the layout; `/procurerag` and `/about` call it with their full titles.
+     - It is a helper because Next.js merges metadata shallowly, so a page's `openGraph` replaces the layout's (bundled Next.js 16.4.3 docs, "Merging").
+   - Rendered on `/procurerag`, from the build: `og:title` and `twitter:title` "ProcureRAG case study — Juan F. Pinzon", `og:description`/`twitter:description` equal to the page description, `og:site_name` "Juan F. Pinzon", `og:locale` `en_US`, `og:type` `website`, `twitter:card` `summary`.
+   - `tests/metadata.spec.ts`, 9 tests (3 per route):
+     - the share tags exist and equal the page's own title and description;
+     - `og:image`, `og:url`, `twitter:image` and the canonical link are absent;
+     - the forbidden-claims list holds for the `<head>` text too. The list moved from `tests/content.spec.ts` to the shared `tests/routes.ts`, so both tests use one copy.
+   - Mutation check, 3 of 3 caught: the page drops its share tags; a share image sneaks in; the `<head>` text says "Try the demo".
+   - **Explicit acceptance exception:** no share image, `og:url` or canonical on Day 27.
+     - The reason was measured: with an image and no `metadataBase`, `next build` printed `⚠ metadataBase property in metadata export is not set for resolving social open graph or twitter images, using "http://localhost:3000"` and emitted `og:image` `http://localhost:3000/images/juan-pinzon-headshot.webp`.
+     - Owner: Juan. It lands with the Day 30 public URL (ADR §11 #9), with a share image whose visible claims are true at that point.
+
+Portfolio gates after the follow-up (run on the working tree on 2026-10-27, then committed unchanged as `530dfe4`):
+
+```text
+typecheck: npm run typecheck / exit 0
+lint: npm run lint / exit 0
+production build: npm run build / exit 0 / /, /about, /procurerag, /icon.svg, /_not-found all ○ (Static); no warnings
+tests: npm test / exit 0 / 67 passed (the 58 from 1745cbb + 9 metadata tests)
+git diff --check: exit 0
+```
+
+- Live site re-checked 2026-10-27:
+  - `origin/master` = `7526f0c`;
+  - Pages: `legacy` build from `master` `/`, latest build `7526f0c`;
+  - 0 Actions runs ever on the repository (the deleted `ci.yaml` never ran).
+- Follow-up commits, both pushed on 2026-10-27:
+  - portfolio `530dfe41a51144cd1c01405884993bd84bca6728` (00:44 +0100) on `origin/day-27-preview`: exactly the 7 files above, and the working tree was clean afterwards;
+  - ProcureRAG `5c25922c274ebb573bbe3f7fdd42d3e674d54adb` (00:44 +0100) on `origin/day-27`: this log reconciled.
+
+### Review round 2 (2026-10-27)
+
+Hermes re-reviewed portfolio `530dfe4` and ProcureRAG `5c25922`.
+
+- Technical gates: passed.
+- Walkthrough and preview-commit evidence: confirmed as properly recorded.
+- 1 finding: two lines in this log, the follow-up commit line above and Next step #8, still said the commit, push and re-review were pending after all three had happened.
+  - **Fixed in this log:** both lines now record `530dfe4`, `5c25922` and this round.
+  - The fix touches only this log. The portfolio is unchanged since `530dfe4`, so the round 2 gates still hold.
+  - This log does not record the SHA of the commit that adds this section, because a file cannot contain the SHA of its own commit. That commit is the one after `5c25922` on `origin/day-27`.
+
+### Next step
+
+1. ~~Complete the exact readings and record applied decisions before scaffolding.~~ Done (Course/source checkpoint).
+2. ~~Create the Day 27 portfolio branch from the accepted head; preserve `master` and the live Jekyll site.~~ Done. `day-27-preview` from `76c719e`, committed as `1745cbb` and pushed (2026-10-26). `master`/Pages are unchanged (re-checked 2026-10-27). The legacy Ruby `ci.yaml` workflow was deleted (see "What failed or was confusing").
+3. ~~Build the three responsive routes, current-CV path, optimized photo crop, accurate evidence hierarchy, and static non-live demo explanation.~~ Done.
+4. ~~Run the real locked install, typecheck, lint, tests, production build, link, responsive, accessibility, no-JS, console, network, and secret-boundary checks.~~ Done. Juan's manual checks (keyboard walk to the footer, real 400% zoom, screen-reader pass) reported no defect. **Still open:** Safari and Firefox.
+5. ~~Record a preview URL + commit, or a reproducible local production command + explicit preview blocker.~~ Done. Not deployed: implementation commit `1745cbb`, the local command and the Vercel blocker are recorded.
+6. ~~Fill every Day 27 evidence field with real output or an explicit blocker.~~ Done, including the walkthrough, the review and the round 1 follow-up.
+7. ~~Give the three-minute walkthrough without notes.~~ Done: 3–4 minutes, no notes. Weakest answer #11, with a practice plan above.
+8. ~~Send the review prompt to Hermes.~~ Sent. Round 1 returned 2 findings, both fixed in portfolio `530dfe4` and ProcureRAG `5c25922`. Round 2 on those commits: technical gates passed, and its one finding (stale "pending" lines) is fixed in this log. **Remaining (Juan):** commit and push this reconciliation. HER-295 can then move to Done unless Hermes asks for another round.
+9. Only after Day 27 passes, start Day 28: implement the secured local procurement-chat vertical slice, including the typed BFF and backend service-token boundary, without implying public deployment before Day 29.
