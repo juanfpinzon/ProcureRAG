@@ -10277,3 +10277,413 @@ Changed in round 1:
    - fill in the walkthrough's "without notes" field; Done
    - commit and push both repositories, then ask Hermes for round 2.
 8. Keep HER-296 In Progress until Hermes accepts round 1. Then open the PRs: ProcureRAG `day-28` → `main`, where CI runs the amd64 Docker smoke; portfolio `day-28-chat` → `0ct26-overhaul`, as Day 27's PR #1 did.
+
+## 2026-10-27 — Day 29: Hosted portfolio demo with persistent spend controls
+
+Route: [`docs/day-29-hosted-portfolio-demo.md`](day-29-hosted-portfolio-demo.md)
+
+Linear: HER-297 — Day 29 loop: host and harden the portfolio demo with spend controls.
+
+Related gate: HER-271 — Week 6 gate: live AI portfolio, ProcureRAG demo and readiness.
+
+Project rule: Juan owns all Python, tests, workflow, Azure template, TypeScript, React, CSS, dependency, lockfile, account, secret, provider, deployment and spending changes. Hermes prepared only the route and this evidence scaffold, updates Linear, then reviews and quizzes. Day 29 may create a hosted preview path; Day 30 still owns canonical public cutover, legacy redirects, metadata URL and launch polish.
+
+### Day 28 prerequisite
+
+- HER-296: **Done**.
+- Accepted ProcureRAG head: `main` @ `a9fa7a8836d711a471ce7f5e7dd1b71c442b2e78` (PR #15 merge; all six checks passed).
+- Accepted portfolio head: `0ct26-overhaul` @ `e72b52a4af202a630964a3c197fe1072d4724fb0`.
+- Day 28 portfolio merge: `003556bd943c296b08578f64518bbbd00f83156d` (PR #2); the later PR #3 changes only CV wording/files.
+- The local secured browser → BFF → FastAPI slice is accepted. Persistent admission, runtime kill-switch storage, status route and hosting remain unbuilt.
+
+### Course/source checkpoint
+
+There is no new Boot.dev chapter today. Required sources and exact targets:
+
+- accepted portfolio ADR §§8.1–8.6 and 9–11;
+- Azure Container Apps Authentication and authorization, `Considerations for using built-in authentication`;
+- Azure Container Apps Manage secrets: app-level secrets, `secretref:`, revision/restart behavior and secret-list permissions;
+- Azure Container Apps Billing: Consumption meters, scale-to-zero and current monthly grants;
+- Azure Create and manage budgets: portal creation and alert behavior;
+- Vercel Functions limits: chosen-plan duration, memory, bundle/body and region limits;
+- Vercel function regions: project-level regions, Hobby single-region rule and `dub1`;
+- Vercel request headers: `x-forwarded-for` / `x-vercel-forwarded-for` and proxy behavior;
+- Vercel Marketplace storage: selected Redis product, plan, environment scope and injected variables;
+- Upstash Redis `EVAL`: `KEYS`/`ARGV`, atomic execution and TypeScript API;
+- Day 28's `Day 29 handoff`, model/cost worksheet and hosted-work limitations.
+
+Record one applied decision or rejection per source:
+
+- [ ] Accepted ADR read; decisions recorded.
+- [ ] Azure auth/secrets sources read; decisions recorded.
+- [ ] Azure billing/budget sources read; calculator result and alert limitation recorded.
+- [ ] Vercel limits/regions/headers/Hobby terms read; decisions recorded.
+- [ ] Selected store's current plan/region/`EVAL` support verified; decisions recorded.
+- [ ] Day 28 provider model/cost/privacy values re-checked against current data.
+
+### Starting baseline
+
+Kickoff evidence on 2026-10-27:
+
+```text
+ProcureRAG kickoff branch:          day-29
+ProcureRAG base/head:               main @ a9fa7a8836d711a471ce7f5e7dd1b71c442b2e78
+ProcureRAG divergence at branch:    day-29...origin/main = 0/0
+ProcureRAG working tree pre-route:  clean
+
+portfolio accepted branch/head:     origin/0ct26-overhaul @ e72b52a4af202a630964a3c197fe1072d4724fb0
+portfolio Day 28 merge:             003556bd943c296b08578f64518bbbd00f83156d
+portfolio audit-clone divergence:   0/0
+portfolio audit-clone working tree: clean
+legacy master/Pages:                7526f0c39ba08a41c2a3d4aa4338365481d6028c, untouched
+
+Python:       3.11.15
+uv:           0.11.11
+Node:         22.22.2
+npm:          10.9.7
+Azure CLI:    2.91.0; session reports an Enabled default subscription
+Vercel CLI:   65.4.0; logged out
+GitHub CLI:   authenticated
+```
+
+All ProcureRAG commands used `PROCURERAG_LIVE_LLM=0`, `LANGSMITH_TRACING=false`, `LANGSMITH_TRACING_V2=false`, `DEEPEVAL_TELEMETRY_OPT_OUT=1` and `OMP_NUM_THREADS=1`:
+
+```text
+uv sync --locked --dev:                    exit 0, 154 resolved / 146 checked
+uv lock --check:                           exit 0
+pytest -q:                                 exit 0, 486 passed in 11.46 s
+compileall src tests scripts:              exit 0
+Ruff src tests scripts:                    exit 0, All checks passed!
+frozen fixture regression:                exit 0, 7/7 as expected
+current retrieval verification, offline:  exit 0, 6/6 [OK]
+graph regression, offline:                exit 0, 6/6 passed, 4 stand-in LLM calls
+portfolio contract probe:                 exit 0, 20/20 scenarios + 2/2 checks
+git diff --check:                         exit 0
+```
+
+Portfolio baseline from a fresh accepted-branch clone:
+
+```text
+npm ci:                exit 0, 354 packages, 0 vulnerabilities
+npm audit --omit=dev:  exit 0, 0 vulnerabilities
+typecheck:             exit 0
+lint:                  exit 0
+production build:      exit 0; content routes static, /api/chat dynamic
+Playwright:            exit 0, 139 passed in 38.3 s
+git diff --check:      exit 0
+```
+
+No provider call, trace upload, Azure mutation, Vercel link/deployment or Redis provisioning ran during kickoff.
+
+### Current truth before implementation
+
+- The BFF/service-token/browser contract is built and accepted.
+- Global 54/day, per-client 10/day and in-flight 2 are decisions only, not enforced.
+- `app/api/chat/route.ts` still uses `const DEMO_ENABLED = true`.
+- `/api/chat/status` is deferred and absent.
+- The Azure template has no service/model secret refs and keeps `PROCURERAG_LIVE_LLM=0`; deploying it unchanged fails closed because the accepted API requires the token.
+- The portfolio is not linked to Vercel and Vercel CLI is logged out.
+- Azure CLI authentication alone does not prove credit, spending-limit, pricing or resource readiness.
+- The portfolio still correctly says `Live demo: in progress`; legacy GitHub Pages remains the public site.
+
+### Block 0 — account, economics and branch gate
+
+- [ ] Create portfolio `day-29-hosting` from `0ct26-overhaul` @ `e72b52a` after fetch/status/divergence proof.
+- [ ] Reconfirm Vercel Hobby terms and `dub1` with Juan.
+- [ ] Record Azure offer/credit/trial/spending-limit state without identifiers.
+- [ ] Calculate normal and 720-hour one-replica cloud cost with current prices; compare with US$10/month.
+- [ ] Record budget thresholds, owner and the fact that budget alerts do not stop resources.
+- [ ] Record store provider, current plan/price/allowance/region/persistence/eviction and `EVAL` support.
+- [ ] Create/verify a dedicated deployment OpenRouter key: US$5, monthly reset; record only non-secret limit fields.
+- [ ] Confirm ZDR + strict structured output and account prompt logging off.
+- [ ] Generate/locate service, quota-hash and store secrets outside both repositories.
+
+Economics worksheet:
+
+```text
+Azure offer / expiry / spending limit:
+Azure region and current pricing source/date:
+normal scale-to-zero estimate:
+720 h at 1 vCPU / 2 GiB estimate:
+registry / logs / request estimate:
+cloud ceiling verdict (US$10/month):
+budget alerts and owner:
+
+store provider / product / region:
+store plan / current price / allowance:
+EVAL verified by:
+persistence / eviction / operational limitation:
+
+deployment model: openai/gpt-4o-mini
+public output cap: 800
+worst-case cost/request carried from Day 28: US$0.0030525
+global cap: 54/day
+per-client cap: 10/day
+in-flight cap: 2
+deployment key limit / reset verified:
+ZDR endpoints / strict output verified:
+prompt logging off verified:
+```
+
+### Block 1 — persistent atomic admission
+
+- [ ] Key schema and environment/budget namespace documented.
+- [ ] Enabled deployments sharing one provider key share the global counter.
+- [ ] Client key is HMAC-SHA-256 of the Vercel-set client IP; raw IP/hash is absent from logs.
+- [ ] Missing/ambiguous trusted address fails closed.
+- [ ] UTC daily reset and key expiry documented/tested.
+- [ ] One Lua script prunes expired leases, checks all three caps, then writes one lease and two counters atomically.
+- [ ] A refusal changes no key and makes no upstream call.
+- [ ] Release is an idempotent `ZREM` for this request's lease.
+- [ ] Timeout/disconnect/process death leaves the lease until expiry; completed response/definitive network error releases.
+- [ ] Upstream failures do not refund daily counters.
+- [ ] Store error/malformed reply fails `unavailable`, never open.
+
+Atomic-script explanation and key table:
+
+```text
+budget namespace:
+global day key:
+client day key:
+in-flight sorted-set key:
+day boundary / TTL:
+lease id and expiry:
+safe return fields:
+```
+
+Required proof:
+
+- [ ] request 55 refused after global 54;
+- [ ] request 11 refused for one client while another may enter;
+- [ ] parallel empty-store race admits exactly 2;
+- [ ] double/late release harmless;
+- [ ] expired lease pruned;
+- [ ] invalid input consumes nothing;
+- [ ] real-provider integration proof, not only a fake `eval()`;
+- [ ] mutation checks catch non-atomic writes, refund, timeout release, raw-IP keys and fail-open.
+
+### Block 2 — runtime kill switch and status route
+
+- [ ] Kill switch stored outside the build and read for every chat/status request.
+- [ ] Missing/invalid/store failure means off.
+- [ ] Off → 503 `unavailable`, no admission and no Azure/provider call.
+- [ ] Juan-only operating procedure recorded without credentials.
+- [ ] Flip-to-effect measured; already-admitted work limitation recorded.
+- [ ] Secondary Azure stop and tertiary provider-key revocation documented.
+- [ ] `/api/chat/status` implemented with 90 s upstream / 100 s function bounds and its own derived persistent caps, or an evidence-backed rejection recorded.
+- [ ] Browser makes one warm-on-intent request; no polling/retry loop.
+
+```text
+kill-switch store/key:
+initial/final state:
+flip time:
+first effective request:
+flip-to-effect:
+already-admitted behavior:
+
+status route decision:
+global/client warm-up caps and derivation:
+status outcomes and measured cold wake:
+```
+
+### Block 3 — Azure configuration and deployment
+
+- [ ] Secret refs for service token and dedicated OpenRouter key; no value in YAML/logs/args.
+- [ ] Plain config: live LLM, model id, output cap, tracing off, offline models, one OMP thread.
+- [ ] Scale remains min 0 / max 1, 1 vCPU / 2 GiB, accepted probes.
+- [ ] Secret-list permissions reviewed for least privilege.
+- [ ] Existing workflow remains manual-main-only, exact-commit-CI-gated, reviewer-gated, OIDC and digest-based.
+- [ ] URL smoke receives token through a masked environment.
+- [ ] Easy Auth applied/rejected decision recorded.
+- [ ] HTTPS/`allowInsecure=false`, safe env names, scale, retention and revision state read back.
+- [ ] Public 401-before-work and public-ingress wake-cost residual proven/recorded.
+
+```text
+deployed commit:
+image digest:
+previous revision/digest:
+new revision:
+safe runtime config:
+scale / ingress / retention:
+Easy Auth decision:
+```
+
+### Block 4 — Vercel configuration and deployment
+
+- [ ] Correct personal account/project linked; current terms reconfirmed.
+- [ ] `dub1` configured and verified.
+- [ ] API URL, service token, store credentials and HMAC secret are server-only.
+- [ ] Exactly one environment is enabled; other previews fail closed.
+- [ ] API URL is HTTPS; dynamic route limits are correct.
+- [ ] Browser artifact/response scan finds no setting value/name, API URL or key-shaped secret.
+- [ ] Static content survives store/Azure/chat failure.
+- [ ] `master`/Pages and Day 30 metadata/cutover remain untouched.
+
+### Block 5 — deployed proof, smoke and lease TTL
+
+Free proof:
+
+- [ ] static content works;
+- [ ] `/health` unauthenticated;
+- [ ] direct query routes without/wrong token → 401 before body/provider work;
+- [ ] broken store → `unavailable`, zero upstream;
+- [ ] kill switch off → `unavailable`, zero upstream;
+- [ ] quota/in-flight refusal → `busy`, zero upstream.
+
+Paid launch smoke (requires Juan approval):
+
+| Case | State / latency | Cited IDs | Cost/tokens | Manual verdict |
+|---|---|---|---|---|
+| Q001 preset | | | | inspect known wording issue |
+| Q005 preset | | | | |
+| Q021 preset | | | | |
+| Q090 preset | | | | expect honest `gap_report` |
+| Q001 paraphrase | | | | expect unchecked caveat |
+| Company cars | | | | expect `model_declined` |
+| Injection | | | | expect `blocked`, no model |
+| Q091 free text | | | | record known red result |
+
+Cold-start/lease worksheet:
+
+```text
+admission timestamp:
+Azure wake / health-ready time:
+retrieval start/end:
+provider start/end or timeout:
+BFF response/timeout:
+latest possible upstream continuation:
+safety margin:
+derived lease TTL:
+ADR/test/config updates:
+```
+
+Log/privacy proof:
+
+- [ ] safe request metadata only;
+- [ ] zero question/answer/excerpt/raw IP/hash/token/API URL/store credential in logs;
+- [ ] tracing off, no LangSmith upload;
+- [ ] ZDR still active, prompt logging off;
+- [ ] browser assets/responses hold no server values.
+
+### Block 6 — rollback rehearsal
+
+- [ ] Runtime kill switch stops chat while content remains available.
+- [ ] Vercel prior deployment rollback succeeds; content smoke passes.
+- [ ] Azure previous digest/revision rollback succeeds; health + authenticated retrieval-only smoke passes.
+- [ ] Final intentional deployment/kill-switch state recorded.
+- [ ] No resource deletion and no legacy Pages change.
+
+### Required verification
+
+ProcureRAG, provider calls/tracing forced off except the explicitly approved smoke:
+
+```text
+uv sync --locked --dev
+uv lock --check
+pytest -q
+python -m compileall -q src tests scripts
+python -m ruff check src tests scripts
+python src/regression_suite.py
+HF_HUB_OFFLINE=1 python src/regression_suite.py --verify-retrieval
+HF_HUB_OFFLINE=1 python src/graph_regression.py
+python scripts/portfolio_contract_probe.py
+python scripts/container_smoke.py <new-image>
+git diff --check
+```
+
+Portfolio:
+
+```text
+npm ci
+npm audit --omit=dev
+npm run typecheck
+npm run lint
+npm run build
+npm test
+git diff --check
+```
+
+Final command evidence:
+
+```text
+ProcureRAG commit:
+uv sync:
+lock check:
+pytest:
+compileall:
+ruff:
+frozen regression:
+retrieval verification:
+graph regression:
+contract probe:
+container smoke:
+CI / image-internal gates:
+git diff --check:
+
+portfolio commit:
+npm ci / audit:
+typecheck / lint:
+build:
+Playwright:
+real-store integration:
+secret scan:
+git diff --check:
+```
+
+### What failed or was confusing
+
+- _Fill during implementation._
+
+### What became clearer
+
+- _Fill during implementation._
+
+### What I can now explain in an interview
+
+Write concise answers without reading the route:
+
+1. Why one atomic script is necessary for all three limits.
+2. Why one expiring lease per request is safer than one counter with a TTL.
+3. Why timeout does not release/refund.
+4. Vercel-set client address versus a browser-controlled header.
+5. HMAC client digest versus raw IP/plain hash.
+6. Store failure and `unavailable` versus quota `busy`.
+7. How the five spend controls cover different failures.
+8. Why Azure budgets are alerts, not hard stops.
+9. Why a public 401 may still cost scale-from-zero compute.
+10. Easy Auth decision.
+11. How deployed timings set lease TTL.
+12. Kill-switch guarantees and limitations.
+13. Shared provider-key budget across deployments.
+14. New proof from hosted smoke versus Day 28 local HTTP.
+15. Honest Q001/Q090/Q091 limitations.
+16. Chat-only, Vercel and Azure rollback layers.
+17. Evidence needed to change 54/day.
+18. Hosted preview versus Day 30 public launch.
+
+### Route review questions
+
+- [ ] Answer the route's 18 interview prompts in Juan's own words.
+
+### Three-minute walkthrough
+
+- Duration:
+- Completed without notes:
+- Notes / misses:
+
+Walk through architecture, atomic spend controls, one answer + one honest gap + one refusal, kill switch, cold-start/lease evidence, rollback, and honest Day 30 boundary.
+
+### Review prompt
+
+> “Review Day 29 across ProcureRAG and the portfolio against the accepted architecture ADR and `docs/day-29-hosted-portfolio-demo.md`. Verify atomic admission across global/client/in-flight caps; lease expiry/release semantics; fail-closed store, trusted-address and kill-switch paths; no quota refund or automatic retry; no raw IP/payload/secret storage or logs; one enabled budget domain across deployments; Azure secret refs and digest-gated deployment; Vercel `dub1` and server-only settings; status-route abuse bounds; exact spend controls; deployed smoke/manual answer verdicts; measured cold-start-derived lease TTL; rollback evidence; and that Day 30 cutover/public claims remain undone. Treat faked Redis calls, green HTTP alone, unverified provider-key limits, or missing live-chain evidence as insufficient. Juan owns implementation.”
+
+Sent:
+
+### Next step
+
+1. Juan starts with the route's Block 0 source/account/economics gate.
+2. Juan creates the portfolio implementation branch from the exact accepted head.
+3. Juan implements persistent admission and control locally, then runs deterministic and real-store tests.
+4. Juan changes/reviews Azure and Vercel configuration only after Block 0 passes.
+5. Juan requests explicit paid-smoke approval after the dedicated key, caps and kill switch are verified.
+6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes.

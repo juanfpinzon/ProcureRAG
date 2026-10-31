@@ -43,7 +43,7 @@ Steps 3 to 5 create those resources, and steps 6 to 9 prove them. The revision-s
 The Azure replica will run the image alone: no named volume, and no promise of network access to the Hugging Face Hub. Prove that the image can do that BEFORE paying for any cloud resource.
 
 ```bash
-docker build --tag procurerag-api:day23 .
+docker build --tag procurerag-api:demo .
 ```
 
 In the build output (`--progress=plain` shows it in full), the model step prints one line per model with the commit its `main` branch pointed to, then the size of the baked cache:
@@ -85,11 +85,11 @@ Why `OMP_NUM_THREADS=1`: run the same container without it, and startup takes ab
 
 ```bash
 export LOCATION=northeurope                           # not westeurope: it refuses this subscription (see Troubleshooting)
-export RESOURCE_GROUP=rg-procurerag-24
-export CONTAINERAPP_ENV=cae-procurerag-24
+export RESOURCE_GROUP=rg-procurerag-demo
+export CONTAINERAPP_ENV=cae-procurerag-demo
 export CONTAINERAPP_NAME=procurerag-api
-export ACR_NAME=procureragday24jp2                     # must be globally unique: 5-50 letters/digits
-export IMAGE="$ACR_NAME.azurecr.io/procurerag-api:day24"
+export ACR_NAME=procureragdemojfp1                     # must be globally unique: 5-50 letters/digits
+export IMAGE="$ACR_NAME.azurecr.io/procurerag-api:demo"
 ```
 
 Every Azure resource name above is visible in the URLs and resource ids. None of them is a credential. If `ACR_NAME` is taken (step 3 checks), pick another and re-export `IMAGE`.
@@ -137,7 +137,7 @@ Container Apps only runs `linux/amd64` images, and this Mac builds `linux/arm64`
 ```bash
 # A dedicated group. Tags let you find (and bill-check) everything Day 23 created.
 az group create --name "$RESOURCE_GROUP" --location "$LOCATION" \
-  --tags project=procurerag day=24 purpose=disposable-smoke
+  --tags project=procurerag day=demo purpose=demo
 
 # Registry names are global (they become <name>.azurecr.io). Expect: true
 az acr check-name --name "$ACR_NAME" --query nameAvailable -o tsv
@@ -160,7 +160,7 @@ Record the immutable handle of what you pushed:
 
 ```bash
 az acr repository show-tags --name "$ACR_NAME" --repository procurerag-api -o tsv           # expect: day23
-az acr repository show --name "$ACR_NAME" --image procurerag-api:day24 --query digest -o tsv  # sha256:...
+az acr repository show --name "$ACR_NAME" --image procurerag-api:demo --query digest -o tsv  # sha256:...
 ```
 
 The tag `day23` can be moved to another image later. The digest (`sha256:...`) cannot: it is the hash of the image's manifest. The digest is what a rollback should name.
@@ -209,7 +209,7 @@ That first revision runs with the platform defaults: 0.5 vCPU / 1 GiB, 0 to 10 r
 
 **(changes the app: creates a new revision)**
 
-The template file has two placeholders. Fill them in a temporary copy (the repo file stays generic), then apply it:
+The template file has three placeholders (two before Day 29). Fill them in a temporary copy (the repo file stays generic), then apply it. Since Day 29 the template references two app secrets by name, so they must exist first (`docs/day-29-runbook.md`, Block 3), and `__LIVE_LLM__` is `0` here: paid generation is switched on only through the deploy workflow's `live_llm` input.
 
 ```bash
 # The image the app runs right now, read back from Azure, not retyped
@@ -218,11 +218,11 @@ export IMAGE=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group
 echo "$IMAGE"
 
 RENDERED=$(mktemp)
-sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$IMAGE|" \
+sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$IMAGE|" -e "s|__LIVE_LLM__|0|" \
   deploy/azure/containerapp-template.yaml > "$RENDERED"
 grep -c '__' "$RENDERED"           # expect 0: no placeholder left
 
-az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --yaml "$RENDERED"
+c
 rm "$RENDERED"
 ```
 
@@ -678,14 +678,14 @@ On 2026-10-21 the evening re-run used `rg-procurerag-24`, `procureragday24jp2`, 
 | GitHub environment `production` | the repository's settings | only `main` may use it, and a reviewer must approve each run. Only then does the job receive the three Azure ids |
 
 - **Why a managed identity, not an app registration.** Both can hold a federated credential. The managed identity lives inside the resource group, so step 11's `az group delete` removes it too, and nothing is left behind in Entra ID. And it cannot have a client secret at all.
-- **Why `Contributor` on the app, not `Container Apps Contributor`.** The deploy needs exactly two calls on the app: `az containerapp update --yaml` sends a `GET` and a `PATCH` to `Microsoft.App/containerApps` (checked in the Azure CLI 2.91.0 source, core module). `Container Apps Contributor` lists `Microsoft.App/containerApps/*/write`, and that pattern probably matches only child resources. Microsoft's own roles list `managedEnvironments/read` next to `managedEnvironments/*/read`, and `jobs/write` next to their `jobs/*/...` patterns. They would not need both if `/*/` also matched the resource itself. This was not tested. `Contributor` certainly allows both calls, and its scope, this one app, is the real limit. A custom role with only `containerApps/read`, `containerApps/write`, and `containerApps/revisions/read` would be tighter. That would be the next step for a deployment meant to last.
+- **Why `Contributor` on the app, not `Container Apps Contributor`.** The deploy needs three calls on the app: `az containerapp update --yaml` sends a `GET`, a `POST .../listSecrets` and a `PATCH` to `Microsoft.App/containerApps` (checked in the Azure CLI 2.91.0 source, core module and the containerapp extension; the Day 24 version of this note missed the `listSecrets` call, which the CLI makes unconditionally, even when the app has no secrets). `Container Apps Contributor` lists `Microsoft.App/containerApps/*/write`, and that pattern probably matches only child resources. Microsoft's own roles list `managedEnvironments/read` next to `managedEnvironments/*/read`, and `jobs/write` next to their `jobs/*/...` patterns. They would not need both if `/*/` also matched the resource itself. This was not tested. `Contributor` certainly allows both calls, and its scope, this one app, is the real limit. A custom role with only `containerApps/read`, `containerApps/write`, `containerApps/listSecrets/action` and `containerApps/revisions/read` would be tighter, but it still includes reading the secret values, because `update --yaml` needs them. That would be the next step for a deployment meant to last.
 - **Why `AcrPush` is enough for `az acr login`.** The identity cannot read the registry's settings, so the CLI cannot look up its login server. It then falls back to `<name>.azurecr.io` (checked in the CLI source) and exchanges the sign-in for a registry token. That exchange is what `AcrPush` allows.
 
 ### 1. The identity (creates an Azure resource)
 
 ```bash
 az identity create --name "$DEPLOY_IDENTITY" --resource-group "$RESOURCE_GROUP" --location "$LOCATION" \
-  --tags project=procurerag day=24 purpose=github-actions-deploy -o none
+  --tags project=procurerag day=demo purpose=demo-deploy -o none
 ```
 
 ### 2. The federated credential (creates the trust)
@@ -805,9 +805,11 @@ The job summary's rollback handle is the previous image, named by its digest. Ro
 # a) The handle, from the job summary's "rollback handle" line
 export ROLLBACK_IMAGE="<rollback handle from the job summary>"     # ...azurecr.io/procurerag-api@sha256:...
 
-# b) Render the template with THAT image, and apply it (a new revision)
+# b) Render the template with THAT image, and apply it (a new revision).
+#    Day 29: LIVE_LLM=0 rolls back to retrieval-only, the safe default. Use 1 only to restore an approved live revision.
+export LIVE_LLM=0
 RENDERED=$(mktemp)
-sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$ROLLBACK_IMAGE|" \
+sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$ROLLBACK_IMAGE|" -e "s|__LIVE_LLM__|$LIVE_LLM|" \
   deploy/azure/containerapp-template.yaml > "$RENDERED"
 grep -c '__' "$RENDERED"           # expect 0
 az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --yaml "$RENDERED" -o none
@@ -826,7 +828,8 @@ until [ "$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$R
 az containerapp revision list --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --all \
   --query '[].{revision:name, active:properties.active, traffic:properties.trafficWeight, image:properties.template.containers[0].image}' -o table
 
-# e) Smoke it
+# e) Smoke it. Since Day 28 URL mode needs the deployment's token in the environment
+#    (read it silently: `read -rs PROCURERAG_SERVICE_TOKEN; export PROCURERAG_SERVICE_TOKEN`).
 python3 scripts/container_smoke.py --url "https://$(az containerapp show --name "$CONTAINERAPP_NAME" \
   --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)"
 

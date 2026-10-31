@@ -3,9 +3,11 @@
 # ProcureRAG's revision template for Azure Container Apps (Day 23): what
 # every replica of the app runs, and how the platform decides it is healthy.
 #
-# Applied by step 5 of docs/azure-container-apps-runbook.md:
+# Applied by step 5 of docs/azure-container-apps-runbook.md (and by step 6
+# of .github/workflows/deploy.yml, which is the normal path since Day 24):
 #
 #   sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$IMAGE|" \
+#     -e "s|__LIVE_LLM__|$LIVE_LLM|" \
 #     deploy/azure/containerapp-template.yaml > "$RENDERED"
 #   az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" --yaml "$RENDERED"
 #
@@ -26,17 +28,29 @@
 #   Each change to it creates a new revision (an immutable snapshot of this
 #   template), which is what makes a rollback point at something exact.
 #
-# Two placeholders are filled in at deploy time, because their values only
-# exist once the registry and the app do: `__CONTAINERAPP_NAME__` (the
-# container keeps the app's name, as `az containerapp up` named it) and
-# `__IMAGE__` (the image the app currently runs, read back from Azure).
+# Three placeholders are filled in at deploy time: `__CONTAINERAPP_NAME__`
+# (the container keeps the app's name, as `az containerapp up` named it),
+# `__IMAGE__` (the image digest being deployed) and `__LIVE_LLM__` ("0" or
+# "1", the deploy workflow's `live_llm` input: paid generation is on only in
+# a revision someone explicitly asked for, and a reviewer approved).
 #
-# What is deliberately NOT here: any secret. The deterministic deployment
-# needs no provider key, so there is no `secrets:` block and no
-# `secretRef`. Replicas pull the image with the app's managed identity
-# (`AcrPull`, set up by `az containerapp up`), so no registry password is
-# stored either. That registry setting lives under `configuration`, which
-# this PATCH does not touch.
+# Secrets (Day 29): this file holds secret NAMES, never VALUES. A Container
+# Apps secret is stored once per APP (not per revision) under
+# `configuration.secrets`, and a container reads it through `secretRef`:
+#
+#   env:
+#     - name: OPENROUTER_API_KEY        # what the Python process sees
+#       secretRef: openrouter-api-key   # which app secret fills it
+#
+# The two values are written ONCE, by hand, with `az containerapp secret set`
+# (docs/day-29-runbook.md, Block 3), and never pass through GitHub: the
+# OpenRouter key lives only in Azure (ADR §8.1). Because this PATCH does not
+# mention `configuration`, the stored secrets are left as they are. Both
+# secrets must exist before a deploy, or Azure refuses a revision that
+# references a missing one (the workflow checks their names first).
+#
+# Replicas pull the image with the app's managed identity (`AcrPull`, set up
+# by `az containerapp up`), so no registry password is stored either.
 
 properties:
   template:
@@ -74,10 +88,23 @@ properties:
         # env, and it cannot see the image's ENV.
         # -------------------------------------------------------------------
         env:
-          # No paid LLM call: a complete-evidence query ends "not_generated".
-          # There is no OPENROUTER_API_KEY anywhere in this deployment.
+          # The paid-generation switch, chosen per deploy ("0" or "1"; see
+          # the header). "0": a complete-evidence query ends "not_generated"
+          # and no provider call is ever made, even with a key present.
           - name: PROCURERAG_LIVE_LLM
-            value: "0"
+            value: "__LIVE_LLM__"
+          # The two secrets, by reference (values set once by hand). The API
+          # refuses to START without the service token (Day 28).
+          - name: PROCURERAG_SERVICE_TOKEN
+            secretRef: procurerag-service-token
+          - name: OPENROUTER_API_KEY
+            secretRef: openrouter-api-key
+          # The public model and output cap decided on Day 28: worst case
+          # US$0.0030525 per question, so 54 a day stay under US$5 a month.
+          - name: OPENROUTER_MODEL
+            value: openai/gpt-4o-mini
+          - name: PROCURERAG_MAX_ANSWER_TOKENS
+            value: "800"
           # No LangSmith traces. Both names, because LangSmith reads _V2 first.
           - name: LANGSMITH_TRACING
             value: "false"
@@ -176,6 +203,12 @@ properties:
     # maxReplicas 1: never more than one replica. It caps spend, and it
     # keeps the in-process rate limiter honest (one process, one counter).
     # No scale rule is listed, so the default HTTP rule applies.
+    #
+    # Day 29: any request to the public URL wakes the replica, even one the
+    # API then refuses with 401 (the platform starts the replica BEFORE the
+    # app can check a token). Worst case, it runs 24/7: 2,592,000 vCPU-s and
+    # 5,184,000 GiB-s a month. That is why max 1 replica, the Azure budget
+    # alert and the BFF's kill switch exist (docs/day-29-runbook.md, Block 0).
     # -----------------------------------------------------------------------
     scale:
       minReplicas: 0

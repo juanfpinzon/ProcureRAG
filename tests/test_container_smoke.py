@@ -63,6 +63,15 @@ def test_health_requires_live_llm_false():
     assert smoke.check_health({"status": "ok", "live_llm": True}) != []
 
 
+def test_health_requires_live_llm_true_only_when_a_live_revision_is_expected():
+    """Day 29: `--expect-live-llm` flips the expectation; it never accepts either answer."""
+    smoke = _load_container_smoke_module()
+
+    assert smoke.check_health({"status": "ok", "live_llm": True}, expect_live_llm=True) == []
+    assert smoke.check_health({"status": "ok", "live_llm": False}, expect_live_llm=True) != []
+    assert smoke.check_health({"status": "ok"}, expect_live_llm=True) != []  # missing is not true
+
+
 def test_q001_passes_on_the_measured_answer_and_fails_when_the_llm_ran_or_retrieval_changed():
     smoke = _load_container_smoke_module()
 
@@ -125,7 +134,11 @@ def _serve_measured_answers(monkeypatch, smoke, health=None):
     def no_docker(*args, **kwargs):
         raise AssertionError("URL mode must not call docker")
 
+    sent = []
+
     def fake_post(url, body, token, timeout=60):
+        route = "/query/stream" if url.endswith("/query/stream") else "/query"
+        sent.append((route, body.get("query_id"), token))
         if token != DEPLOYMENT_TOKEN:
             return 401, {"detail": "missing or invalid service credential"}
         answers = {"Q001": (200, Q001_ANSWER), "Q091": (200, Q091_PENDING)}
@@ -135,6 +148,7 @@ def _serve_measured_answers(monkeypatch, smoke, health=None):
     monkeypatch.setattr(smoke, "http_get_json", lambda url, timeout=5: (200, health or {"status": "ok", "live_llm": False}))
     monkeypatch.setattr(smoke, "http_post_json", fake_post)
     monkeypatch.setenv(smoke.SERVICE_TOKEN_ENV_VAR, DEPLOYMENT_TOKEN)
+    return sent
 
 
 def test_url_mode_passes_on_the_measured_answers_without_touching_docker(monkeypatch, capsys):
@@ -169,6 +183,51 @@ def test_url_mode_fails_when_the_deployed_revision_has_the_live_llm_on(monkeypat
     _serve_measured_answers(monkeypatch, smoke, health={"status": "ok", "live_llm": True})
 
     assert smoke.main(["--url", "https://procurerag-api.example.invalid"]) == smoke.EXIT_CONTRACT_FAILED
+
+
+def test_both_query_routes_are_probed_with_no_token_and_a_wrong_token(monkeypatch):
+    """Day 29: four free refusals, `/query` and `/query/stream`, none with the real token."""
+    smoke = _load_container_smoke_module()
+    sent = _serve_measured_answers(monkeypatch, smoke)
+
+    assert smoke.main(["--url", "https://procurerag-api.example.invalid"]) == smoke.EXIT_PASSED
+    refusals = [(route, token) for route, _query_id, token in sent if token != DEPLOYMENT_TOKEN]
+    assert sorted(refusals, key=str) == sorted(
+        [("/query", None), ("/query", smoke.WRONG_TOKEN), ("/query/stream", None), ("/query/stream", smoke.WRONG_TOKEN)],
+        key=str,
+    )
+
+
+def test_a_wrong_token_that_was_accepted_fails_the_smoke():
+    smoke = _load_container_smoke_module()
+
+    # A deployment that parsed the body first would answer 422, not 401.
+    assert smoke.check_unauthenticated_refused(422, {"detail": "query: input should be a string"}) != []
+
+
+def test_url_mode_against_a_live_revision_makes_no_paid_call(monkeypatch, capsys):
+    """With `--expect-live-llm`, Q001 (a model call with the LLM on) is never
+    sent with the real token. Q091 and the off-topic question stop before any
+    model, so they still run."""
+    smoke = _load_container_smoke_module()
+    sent = _serve_measured_answers(monkeypatch, smoke, health={"status": "ok", "live_llm": True})
+
+    assert smoke.main(["--url", "https://procurerag-api.example.invalid", "--expect-live-llm"]) == smoke.EXIT_PASSED
+    authorized_query_ids = [query_id for _route, query_id, token in sent if token == DEPLOYMENT_TOKEN]
+    assert "Q001" not in authorized_query_ids
+    assert "Q091" in authorized_query_ids
+    assert "[skip] Q001" in capsys.readouterr().out
+
+
+def test_expect_live_llm_is_refused_in_image_mode():
+    smoke = _load_container_smoke_module()
+
+    try:
+        smoke.main(["procurerag-api:ci-abc", "--expect-live-llm"])
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("image mode accepted --expect-live-llm")
 
 
 def test_url_mode_reports_a_service_that_never_answers_as_a_startup_failure(monkeypatch):
