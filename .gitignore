@@ -11,3 +11,5 @@ data/*
 src/procurerag.egg-info/
 .env
 .env.local
+.vercel
+.env*

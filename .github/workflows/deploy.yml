@@ -20,7 +20,31 @@
 #   5. record what the app runs now (the rollback handle);
 #   6. update the app to the DIGEST, through the repo's revision template;
 #   7. wait until Azure reports the new revision ready, running that digest;
-#   8. smoke the new revision through its public URL (URL mode).
+#   8. smoke the new revision through its public URL (URL mode);
+#   9. read back the safe deployment properties (Day 29).
+#
+# Day 29 additions:
+#
+#   - the `live_llm` input (default OFF). Paid generation is on only in a
+#     revision someone explicitly asked for at dispatch time, and the
+#     `production` reviewer then approves exactly that run;
+#   - the revision template references two app secrets BY NAME
+#     (procurerag-service-token, openrouter-api-key). Their VALUES are set
+#     once by hand (docs/day-29-runbook.md, Block 3) and never pass through
+#     this workflow, its logs or its files. A step checks that both names
+#     exist before the template is applied;
+#   - step 8 gets the service token from the `production` environment secret
+#     PROCURERAG_SERVICE_TOKEN (masked by GitHub), so the URL smoke can prove
+#     that both query routes refuse no token and a wrong token.
+#
+# A permission fact, checked in the Azure CLI's source (2.91.0, core and the
+# containerapp extension): `az containerapp update --yaml` ALWAYS calls the
+# app's `listSecrets` action with values, so it can re-send them in its
+# update. The deploy identity therefore needs that permission. It has it
+# through Contributor on this one app (Day 24), which can also read the two
+# secret values. That is accepted, and bounded: the identity exists only for
+# OIDC runs of this repository's `production` environment, which needs a
+# reviewer. Nothing here prints a value (`--output none`).
 #
 # The paid live eval (live-eval.yml) is NOT a gate here: its pass/fail rule
 # has no retry or false-positive policy yet (see docs/learning-log.md, Day 24).
@@ -37,6 +61,11 @@ name: Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      live_llm:
+        description: "Turn paid LLM generation ON in the new revision (PROCURERAG_LIVE_LLM=1). Leave off unless the paid launch is approved."
+        type: boolean
+        default: false
 
 # Least privilege by default. Each job below states exactly what it adds.
 permissions:
@@ -114,6 +143,8 @@ jobs:
       # One tag per commit. A tag can be moved later; the digest read back in
       # step 4 cannot, so the app is updated by digest, never by this tag.
       IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/procurerag-api:${{ github.sha }}
+      # "1" only when the person who started the run ticked `live_llm`.
+      LIVE_LLM: ${{ inputs.live_llm && '1' || '0' }}
     steps:
       - name: Check that the target names are set
         # Fail in seconds, before a two-minute build, if a variable is missing.
@@ -183,6 +214,21 @@ jobs:
       - name: Record the Azure CLI version (preinstalled on the runner, not pinned)
         run: az version --query '"azure-cli"' -o tsv
 
+      - name: Check that the two app secrets exist (names only, never values)
+        # Without `--show-values`, `secret list` reads the app's definition,
+        # which holds secret NAMES only. A missing secret would make Azure
+        # refuse the new revision in step 6, after the push; this fails first.
+        run: |
+          names=$(az containerapp secret list --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query '[].name' -o tsv)
+          for required in procurerag-service-token openrouter-api-key; do
+            if ! grep -qx "$required" <<<"$names"; then
+              echo "::error::App secret '$required' is missing. Set it by hand first (docs/day-29-runbook.md, Block 3)."
+              exit 1
+            fi
+          done
+          echo "app secrets present: procurerag-service-token, openrouter-api-key"
+
       - name: 3b-4. Push the smoked image, then read its digest from the registry
         run: |
           # A registry token for Docker, from the OIDC sign-in above. The
@@ -226,9 +272,11 @@ jobs:
         run: |
           # The same template and the same command as the runbook's step 5,
           # so the deployed revision always matches the reviewed file: CPU,
-          # memory, env (no key, live LLM off), probes, and scale limits.
+          # memory, env (secret NAMES only, the live-LLM switch), probes, and
+          # scale limits.
           rendered="$RUNNER_TEMP/containerapp.yaml"
           sed -e "s|__CONTAINERAPP_NAME__|$CONTAINERAPP_NAME|" -e "s|__IMAGE__|$DEPLOY_IMAGE|" \
+            -e "s|__LIVE_LLM__|$LIVE_LLM|" \
             deploy/azure/containerapp-template.yaml > "$rendered"
           if grep -q '__' "$rendered"; then
             echo "::error::A placeholder in the template was not filled."
@@ -238,6 +286,7 @@ jobs:
           # app's URL into this public log.
           az containerapp update --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
             --yaml "$rendered" --output none
+          echo "- live LLM in the new revision: \`PROCURERAG_LIVE_LLM=$LIVE_LLM\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 7. Wait until Azure reports the new revision ready, running that digest
         run: |
@@ -270,10 +319,48 @@ jobs:
           echo "- new revision: \`$new_revision\` (ready)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 8. Smoke the new revision through its public URL
+        env:
+          # The deployment's token, from the `production` environment's
+          # secrets. GitHub masks it in this log; the script never prints it,
+          # and reads it from its environment (never from its arguments).
+          PROCURERAG_SERVICE_TOKEN: ${{ secrets.PROCURERAG_SERVICE_TOKEN }}
         run: |
+          if [ -z "$PROCURERAG_SERVICE_TOKEN" ]; then
+            echo "::error::Set PROCURERAG_SERVICE_TOKEN as a secret of the production environment (the same value as the app secret)."
+            exit 1
+          fi
           fqdn=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
             --query properties.configuration.ingress.fqdn -o tsv)
-          # Hide the URL in this public log: the endpoint has no authentication.
+          # Hide the URL in this public log: every request to it wakes (and
+          # bills) the replica, even one the API refuses.
           echo "::add-mask::$fqdn"
-          python3 scripts/container_smoke.py --url "https://$fqdn"
-          echo "- post-deploy smoke: passed" >> "$GITHUB_STEP_SUMMARY"
+          # With the live LLM on, the smoke skips its one probe that would
+          # reach the model (Q001): a smoke never makes a paid call.
+          live_flag=()
+          if [ "$LIVE_LLM" = "1" ]; then live_flag=(--expect-live-llm); fi
+          python3 scripts/container_smoke.py --url "https://$fqdn" "${live_flag[@]}"
+          echo "- post-deploy smoke: passed (both query routes refuse no token and a wrong one)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 9. Read back the safe deployment properties
+        # Only properties that are safe in a public log: the revision, the
+        # digest, the running state, the scale bounds, env var NAMES (values
+        # are not projected), secret NAMES, and the ingress transport rules.
+        # Log Analytics retention lives on the workspace, which this
+        # identity cannot read: it is checked by hand (runbook, Block 3).
+        run: |
+          az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query '{revision: properties.latestReadyRevisionName, image: properties.template.containers[0].image,
+                      running: properties.runningStatus, cpu: properties.template.containers[0].resources.cpu,
+                      memory: properties.template.containers[0].resources.memory,
+                      minReplicas: properties.template.scale.minReplicas, maxReplicas: properties.template.scale.maxReplicas,
+                      envNames: properties.template.containers[0].env[].name,
+                      secretNames: properties.configuration.secrets[].name,
+                      ingressExternal: properties.configuration.ingress.external,
+                      allowInsecure: properties.configuration.ingress.allowInsecure}' \
+            -o json | tee "$RUNNER_TEMP/readback.json"
+          {
+            echo "- readback (no values):"
+            echo '```json'
+            cat "$RUNNER_TEMP/readback.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

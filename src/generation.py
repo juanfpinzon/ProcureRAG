@@ -506,10 +506,19 @@ def make_openrouter_client(model=None, api_key=None, response_model=None, max_to
 
     from openai import OpenAI
 
+    # `max_retries=0` (Day 29): the `openai` SDK otherwise retries a failed
+    # call TWICE by default (timeouts, connection errors, 429 and 5xx), each
+    # with its own 60 s timeout. One public question could then become three
+    # paid calls and about 180 s of provider time, which breaks two promises:
+    # ADR §8.3 "no automatic retry" (the cost bound assumes ONE call per
+    # admitted question), and the BFF's 180 s in-flight lease, which assumes
+    # the provider stops after one 60 s timeout. A failure is reported, never
+    # silently repeated: whoever wants to try again sends a new request.
     openai_client = OpenAI(
         api_key=api_key,
         base_url=OPENROUTER_BASE_URL,
         timeout=OPENROUTER_TIMEOUT_SECONDS,
+        max_retries=0,
     )
 
     # `reasoning` is an OpenRouter extension, not a standard OpenAI API

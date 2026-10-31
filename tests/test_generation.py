@@ -357,6 +357,29 @@ def test_the_output_cap_reaches_the_provider_request():
     assert sent_max_tokens == [generation.MAX_ANSWER_TOKENS, 800]
 
 
+def test_make_openrouter_client_never_retries_and_times_out_after_60_s():
+    """Day 29: one question is ONE provider call. The `openai` SDK retries
+    twice by default, which would turn one admitted public question into up
+    to three paid calls and ~180 s of provider time (longer than the BFF's
+    in-flight lease). The fake SDK records how the client was constructed
+    (no network)."""
+    import openai
+
+    generation = _load_generation_module()
+    constructed = []
+
+    class RecordingOpenAIClient:
+        def __init__(self, **kwargs):
+            constructed.append(kwargs)
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(openai, "OpenAI", RecordingOpenAIClient)
+        generation.make_openrouter_client(model="fake-model", api_key="fake-key")
+
+    assert constructed[0]["max_retries"] == 0
+    assert constructed[0]["timeout"] == generation.OPENROUTER_TIMEOUT_SECONDS == 60.0
+
+
 # ---------------------------------------------------------------------------
 # Day 19: structured generation (GeneratedAnswer). Fake clients return the
 # JSON text a provider returns under `response_format=json_schema`. No

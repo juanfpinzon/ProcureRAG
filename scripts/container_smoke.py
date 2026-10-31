@@ -15,7 +15,9 @@ Docker CI job needs no `uv sync` just to run it.
 and no network access to the Hub, loads its baked models, answers `/health`,
 refuses a query without the service token (Day 28), runs local retrieval for
 a labeled question, stops at the approval boundary, blocks an off-topic
-question, and logs no traceback or secret-like text. It says nothing about
+question, and logs no traceback or secret-like text. Since Day 29 it also
+refuses both query routes (`/query`, `/query/stream`) with a WRONG token, and
+before reading the body. It says nothing about
 answer quality, and nothing about any other image: it must be run against the
 exact tag the workflow just built.
 
@@ -36,8 +38,20 @@ process's environment (it must match the deployment's). Nothing is started
 or removed, so no `docker` is needed. There is no log probe in this mode:
 the logs live on the platform, not in a local container. The deploy workflow
 checks the logs of the same image in its local container smoke, before the
-image is pushed. (Day 29: the deploy workflow does not pass a token yet. See
-the Day 28 handoff in `docs/learning-log.md`.)
+image is pushed, and (Day 29) passes the deployment's token from its
+`production` environment secret.
+
+**A revision with the live LLM on (Day 29):**
+
+    PROCURERAG_SERVICE_TOKEN=... python3 scripts/container_smoke.py --url https://<app-fqdn> --expect-live-llm
+
+`/health` must then report `live_llm: true`, and the Q001 retrieval probe is
+SKIPPED: with the LLM on, Q001 would be answered by the model, i.e. a paid
+call, and a smoke must never spend money. Every other probe stays, because
+none of them reaches the model: the credential refusals stop before the
+body is read, Q091 stops at the approval boundary, and the off-topic question
+is blocked by the input guard. Q001's retrieval was already proven on the
+same image in image mode, before the push.
 
 **Exit codes** (both modes).
 
@@ -101,6 +115,13 @@ Q091_REQUEST = {
     "query_id": "Q091",
 }
 OFF_TOPIC_REQUEST = {"query": "What is the capital of France?", "role": "buyer"}
+
+# Day 29: the credential-refusal probes. A wrong token is sent with a body the
+# schema would reject (422) IF it were parsed: getting 401 instead shows that
+# the token is checked before the body is even read (Day 28's middleware).
+WRONG_TOKEN = "not-the-deployment-token"
+UNPARSEABLE_IF_READ = {"query": 7}
+QUERY_ROUTES = ("/query", "/query/stream")
 
 # The runbook's step 6 pattern for "secret-like text" in the logs.
 SECRET_LIKE = re.compile(r"api_key|token|secret|sk-or|lsv2_", re.IGNORECASE)
@@ -259,19 +280,25 @@ def remove_container():
 # ---------------------------------------------------------------------------
 
 
-def check_health(health):
+def check_health(health, expect_live_llm=False):
+    """`/health` must say "ok", and `live_llm` must be exactly what this run expects.
+
+    Image mode always expects false: no provider may be wired in. URL mode
+    expects true only with `--expect-live-llm`, i.e. for a revision deployed
+    on purpose with paid generation on.
+    """
     failures = []
     if health.get("status") != "ok":
         failures.append(f"/health status is {health.get('status')!r}, expected 'ok'")
-    if health.get("live_llm") is not False:
-        failures.append(f"/health live_llm is {health.get('live_llm')!r}, expected false: no provider may be wired in")
+    if health.get("live_llm") is not expect_live_llm:
+        failures.append(f"/health live_llm is {health.get('live_llm')!r}, expected {str(expect_live_llm).lower()}")
     return failures
 
 
 def check_unauthenticated_refused(status_code, body):
-    """A query with no service token: the API must refuse it with 401 (Day 28), before running anything."""
+    """A query with no (or a wrong) service token: the API must refuse it with 401 (Day 28), before running anything."""
     if status_code != 401:
-        return [f"a query without the service token returned HTTP {status_code}, expected 401: {body}"]
+        return [f"a query without a valid service token returned HTTP {status_code}, expected 401: {body}"]
     return []
 
 
@@ -357,19 +384,37 @@ def check_logs(logs):
 # ---------------------------------------------------------------------------
 
 
-def http_probes(base_url, health, token):
+def credential_refusal_probes(base_url):
+    """Both query routes, with no token and with a wrong one: four 401s, all free.
+
+    No refused request reaches retrieval or a model, so these are safe to send
+    to any deployment, live LLM or not.
+    """
+    probes = []
+    for route in QUERY_ROUTES:
+        url = f"{base_url}{route}"
+        probes.append((f"{route} without a token", check_unauthenticated_refused(*http_post_json(url, Q001_REQUEST, None))))
+        probes.append((
+            f"{route} with a wrong token (and a body that would be a 422)",
+            check_unauthenticated_refused(*http_post_json(url, UNPARSEABLE_IF_READ, WRONG_TOKEN)),
+        ))
+    return probes
+
+
+def http_probes(base_url, health, token, expect_live_llm=False):
     """The HTTP contract, identical for a local container and a deployed revision.
 
-    The refusal probe sends no token; every other query sends `token`.
+    The refusal probes send no token or a wrong one; every other query sends
+    `token`. With `expect_live_llm`, the Q001 probe is left out: it would be a
+    paid model call (see the module docstring).
     """
     query_url = f"{base_url}/query"
-    return [
-        ("/health contract", check_health(health)),
-        ("query without the service token", check_unauthenticated_refused(*http_post_json(query_url, Q001_REQUEST, None))),
-        ("Q001 labeled, local retrieval", check_q001(*http_post_json(query_url, Q001_REQUEST, token))),
-        ("Q091 without a decision", check_q091_pending(*http_post_json(query_url, Q091_REQUEST, token))),
-        ("off-topic question", check_off_topic_blocked(*http_post_json(query_url, OFF_TOPIC_REQUEST, token))),
-    ]
+    probes = [("/health contract", check_health(health, expect_live_llm)), *credential_refusal_probes(base_url)]
+    if not expect_live_llm:
+        probes.append(("Q001 labeled, local retrieval", check_q001(*http_post_json(query_url, Q001_REQUEST, token))))
+    probes.append(("Q091 without a decision", check_q091_pending(*http_post_json(query_url, Q091_REQUEST, token))))
+    probes.append(("off-topic question", check_off_topic_blocked(*http_post_json(query_url, OFF_TOPIC_REQUEST, token))))
+    return probes
 
 
 def print_probes(probes):
@@ -383,7 +428,7 @@ def print_probes(probes):
     return failed
 
 
-def smoke_running_service(base_url, health_budget, token):
+def smoke_running_service(base_url, health_budget, token, expect_live_llm=False):
     """URL mode: the HTTP probes against a service someone else started (e.g. an Azure revision).
 
     The URL itself is never printed: in a public CI log it would advertise
@@ -399,7 +444,9 @@ def smoke_running_service(base_url, health_budget, token):
         return EXIT_STARTUP_FAILED
     print(f"[ok] /health answered after {seconds:.1f} s: {health}")
 
-    failed = print_probes(http_probes(base_url, health, token))
+    failed = print_probes(http_probes(base_url, health, token, expect_live_llm))
+    if expect_live_llm:
+        print("[skip] Q001 labeled, local retrieval: a PAID call with the live LLM on (proven in image mode before the push)")
     print("[skip] logs: not readable over HTTP (the image's own logs are checked in image mode)")
 
     print(f"\nexit code: {EXIT_CONTRACT_FAILED if failed else EXIT_PASSED}")
@@ -415,17 +462,23 @@ def main(argv=None) -> int:
         "--health-budget", type=int, default=DEFAULT_HEALTH_BUDGET_SECONDS,
         help=f"seconds to wait for /health (default {DEFAULT_HEALTH_BUDGET_SECONDS})",
     )
+    parser.add_argument(
+        "--expect-live-llm", action="store_true",
+        help="URL mode only: the revision was deployed with PROCURERAG_LIVE_LLM=1 (skips the paid Q001 probe)",
+    )
     args = parser.parse_args(argv)
     # Exactly one target: an image to start, or a URL that is already serving.
     if (args.image is None) == (args.url is None):
         parser.error("give either an IMAGE to start, or --url of a running deployment (not both)")
+    if args.expect_live_llm and not args.url:
+        parser.error("--expect-live-llm applies to --url only: image mode never wires in a provider")
     if args.url:
         # A running deployment has its own token; this script cannot invent
         # it. The error names the variable, never a value.
         token = os.environ.get(SERVICE_TOKEN_ENV_VAR, "")
         if not token.strip():
             parser.error(f"--url needs the deployment's service token in the environment variable {SERVICE_TOKEN_ENV_VAR}")
-        return smoke_running_service(args.url.rstrip("/"), args.health_budget, token)
+        return smoke_running_service(args.url.rstrip("/"), args.health_budget, token, args.expect_live_llm)
 
     # Image mode: a fresh token for this one container, never printed.
     token = secrets.token_urlsafe(32)
