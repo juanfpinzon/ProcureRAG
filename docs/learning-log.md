@@ -10314,12 +10314,31 @@ There is no new Boot.dev chapter today. Required sources and exact targets:
 
 Record one applied decision or rejection per source:
 
-- [ ] Accepted ADR read; decisions recorded.
-- [ ] Azure auth/secrets sources read; decisions recorded.
-- [ ] Azure billing/budget sources read; calculator result and alert limitation recorded.
-- [ ] Vercel limits/regions/headers/Hobby terms read; decisions recorded.
-- [ ] Selected store's current plan/region/`EVAL` support verified; decisions recorded.
-- [ ] Day 28 provider model/cost/privacy values re-checked against current data.
+- [x] Accepted ADR read; decisions recorded.
+  - Applied, from §8.3.1: one atomic script per admission and one expiring lease per request. A lease is released only on a completed reply or a definitive connection error, and nothing is refunded (`lib/chat/upstash-admission.ts`, `lib/chat/bff.ts`).
+  - Applied, from §8.6: the kill switch lives in the same store and is read on every request.
+  - Applied, from §8.4: the residual risk (any public request wakes the replica) is recorded in the runbook, 3.6.
+  - Applied, from §9: the eight launch-smoke cases (runbook 5.5).
+  - Measured, not assumed: the provisional 180 s lease. Kept (runbook 5.4).
+- [x] Azure auth/secrets sources read; decisions recorded.
+  - Rejected: Easy Auth. It would also gate `/health`, which must stay anonymous for the probes and the warm-up, and the API already refuses both query routes before it reads the body (runbook 3.6).
+  - Applied: two app-level secrets, set once by hand and referenced by `secretRef`. A secret change does not restart a revision, so rotation includes a `revision restart` (runbook, "Rotation").
+  - Accepted: `az containerapp update --yaml` calls `listSecrets`, so the deploy identity can read both values through its existing `Contributor` on this one app. No new role was granted (runbook 3.2).
+- [x] Azure billing/budget sources read; calculator result and alert limitation recorded.
+  - Applied: the worst case is US$77.36 a month (one replica 24/7), the normal month ≈ US$5.00 (the registry), and the BFF-bounded case ≈ US$23.82. The calculator cross-check on 2026-10-29 matched (runbook 0.3).
+  - Recorded: a budget alerts on cost data that arrives hours late. It does not stop the app.
+  - Created on 2026-11-01 as `procurerag-budget`: US$10 a month at the billing-account scope, with no filter (runbook 0.3).
+  - Found on 2026-11-03: the subscription is a **Free Trial with the spending limit on**, and its credit expires 2026-11-18. Until then the spending limit is the hard stop, and the budget only warns (runbook 0.2).
+- [x] Vercel limits/regions/headers/Hobby terms read; decisions recorded.
+  - Hobby: personal, non-commercial use, a 300 s maximum duration (so `maxDuration = 100` fits), one function region.
+  - Applied: `"regions": ["dub1"]` in `vercel.json`, so the choice is reviewed in the repository, not set in the dashboard.
+  - Applied: `x-vercel-forwarded-for` is the only client address. One valid IP, or the request fails closed. Forged headers were ignored when deployed (runbook 5.3).
+- [x] Selected store's current plan/region/`EVAL` support verified; decisions recorded.
+  - Upstash for Redis through the Vercel Marketplace, free plan (500,000 commands a month, 10,000 a second, 250 MB of data, 10 GB of bandwidth), connected to Production only. Both Lua scripts ran on this store in the real-store proof.
+  - Read in the console: Ireland (`eu-west-1`), next to `dub1`, with no read regions; eviction **off**. Persistence is always on, by Upstash's durability page (runbook 0.4).
+- [x] Day 28 provider model/cost/privacy values re-checked against current data.
+  - Carried unchanged: `openai/gpt-4o-mini`, cap 800, worst case US$0.0030525 per request, 54 a day.
+  - Re-checked: the dedicated key (limit 5, monthly reset) and prompt logging off. Every paid call went to Azure, the ZDR endpoint. Azure still lists `structured_outputs` and `response_format` (2026-11-03).
 
 ### Starting baseline
 
@@ -10388,31 +10407,40 @@ No provider call, trace upload, Azure mutation, Vercel link/deployment or Redis 
 
 ### Block 0 — account, economics and branch gate
 
-- [ ] Create portfolio `day-29-hosting` from `0ct26-overhaul` @ `e72b52a` after fetch/status/divergence proof.
-- [ ] Reconfirm Vercel Hobby terms and `dub1` with Juan.
-- [ ] Record Azure offer/credit/trial/spending-limit state without identifiers.
-- [ ] Calculate normal and 720-hour one-replica cloud cost with current prices; compare with US$10/month.
-- [ ] Record budget thresholds, owner and the fact that budget alerts do not stop resources.
-- [ ] Record store provider, current plan/price/allowance/region/persistence/eviction and `EVAL` support.
-- [ ] Create/verify a dedicated deployment OpenRouter key: US$5, monthly reset; record only non-secret limit fields.
-- [ ] Confirm ZDR + strict structured output and account prompt logging off.
-- [ ] Generate/locate service, quota-hash and store secrets outside both repositories.
+- [x] Create portfolio `day-29-hosting` from `0ct26-overhaul` @ `e72b52a` after fetch/status/divergence proof. One commit on top of `e72b52a`: `246e073` (23 files, +2,416 / −169). On 2026-11-03: pushed, 0/0 against `origin/day-29-hosting`, clean tree. No PR yet.
+- [x] Reconfirm Vercel Hobby terms and `dub1` with Juan (runbook 0.1).
+- [x] Record Azure offer/credit/trial/spending-limit state without identifiers. Free Trial, spending limit On, US$199.99 of US$200 credit left, **credit expires 2026-11-18 15:45 UTC** (runbook 0.2).
+- [x] Calculate normal and 720-hour one-replica cloud cost with current prices; compare with US$10/month (runbook 0.3).
+- [x] Record budget thresholds, owner and the fact that budget alerts do not stop resources. `procurerag-budget`, created 2026-11-01: US$10 a month, alerts at 60% and 100% actual and 100% forecast, emailed to Juan. Its scope is the billing account rather than the planned resource group, which is wider, so it alerts earlier, never later (runbook 0.3).
+- [x] Record store provider, current plan/price/allowance/region/persistence/eviction and `EVAL` support (runbook 0.4).
+- [x] Create/verify a dedicated deployment OpenRouter key: US$5, monthly reset; record only non-secret limit fields (runbook 5.5, step 1).
+- [x] Confirm ZDR + strict structured output and account prompt logging off (runbook 0.5 step 4, 5.5, 5.6 step 5).
+- [x] Generate/locate service, quota-hash and store secrets outside both repositories (runbook 0.6). The hash secret was piped straight into Vercel (Block 4), and the store's credentials were injected by the Marketplace.
 
 Economics worksheet:
 
 ```text
-Azure offer / expiry / spending limit:
-Azure region and current pricing source/date:
-normal scale-to-zero estimate:
-720 h at 1 vCPU / 2 GiB estimate:
-registry / logs / request estimate:
-cloud ceiling verdict (US$10/month):
-budget alerts and owner:
+Azure offer / expiry / spending limit:  Free Trial (MCA individual), Enabled, spending limit ON, billing currency EUR;
+                                  US$200 sign-up credit, 199.99 left; credit 2026-10-19 → expires 2026-11-18 15:45 UTC.
+                                  After that: disabled unless upgraded to pay-as-you-go (decide before Day 30)
+Azure region and current pricing source/date: northeurope; Azure Retail Prices API 2026-10-28; calculator cross-check 2026-10-29
+normal scale-to-zero estimate:    ≈ US$5.00/month: compute inside the 50 free replica-hours, plus ACR Basic US$5.00
+720 h at 1 vCPU / 2 GiB estimate: US$72.36 compute (vCPU 57.89 + memory 14.47) + ACR 5.00 = US$77.36
+registry / logs / request estimate: ACR US$5.00; Log Analytics ≈ US$0 (inside 5 GB); requests ≈ US$0 (inside 2 million)
+actual so far (2026-10-28 → 11-03, by meter): Basic Registry Unit €0.54; Log Analytics €0.00; no Container Apps meter; no "Environment … Hour" meter
+cloud ceiling verdict (US$10/month): a normal month fits. 24/7 is 7.7× over; BFF-bounded ≈ US$23.82 is 2.4× over.
+                                    So the caps do not hold the ceiling: the alert plus the owner's action do.
+budget alerts and owner:          procurerag-budget (2026-11-01): US$10/month, billing-account scope, no filter;
+                                  60% and 100% actual, 100% forecast; emailed to Juan.
+                                  Action: kill switch off → Azure ingress off → revoke the OpenRouter key.
+                                  2026-11-03: evaluated spend US$0.00, forecast US$1.23 (the trial credit pays the usage;
+                                  re-check after any upgrade). During the trial the spending limit is the hard stop
 
-store provider / product / region:
-store plan / current price / allowance:
-EVAL verified by:
-persistence / eviction / operational limitation:
+store provider / product / region: Upstash for Redis via the Vercel Marketplace (`upstash-kv-rose-forest`), AWS, Ireland eu-west-1
+store plan / current price / allowance: free plan; 500,000 commands/month, 10,000/s, 250 MB data, 10 MB request, 10 GB bandwidth/month
+EVAL verified by:                 both Lua scripts run on this store by the real-store proof (M4/M5 real-store halves, 2026-10-31)
+persistence / eviction / operational limitation: persistence always on (Upstash durability docs); eviction OFF (console, 2026-11-03).
+                                  Free tier: no replicas. Usage so far: 159 commands, 266 B
 
 deployment model: openai/gpt-4o-mini
 public output cap: 800
@@ -10420,158 +10448,188 @@ worst-case cost/request carried from Day 28: US$0.0030525
 global cap: 54/day
 per-client cap: 10/day
 in-flight cap: 2
-deployment key limit / reset verified:
-ZDR endpoints / strict output verified:
-prompt logging off verified:
+deployment key limit / reset verified: limit 5, limit_remaining 5, limit_reset monthly (2026-11-02, before the key's first spend)
+ZDR endpoints / strict output verified: every 5.5 call routed to Azure; Azure lists structured_outputs + response_format (re-checked 2026-11-03)
+prompt logging off verified:      2026-11-02 (runbook 5.6, step 5)
 ```
 
 ### Block 1 — persistent atomic admission
 
-- [ ] Key schema and environment/budget namespace documented.
-- [ ] Enabled deployments sharing one provider key share the global counter.
-- [ ] Client key is HMAC-SHA-256 of the Vercel-set client IP; raw IP/hash is absent from logs.
-- [ ] Missing/ambiguous trusted address fails closed.
-- [ ] UTC daily reset and key expiry documented/tested.
-- [ ] One Lua script prunes expired leases, checks all three caps, then writes one lease and two counters atomically.
-- [ ] A refusal changes no key and makes no upstream call.
-- [ ] Release is an idempotent `ZREM` for this request's lease.
-- [ ] Timeout/disconnect/process death leaves the lease until expiry; completed response/definitive network error releases.
-- [ ] Upstream failures do not refund daily counters.
-- [ ] Store error/malformed reply fails `unavailable`, never open.
+- [x] Key schema and environment/budget namespace documented (table below; `lib/chat/admission.ts`).
+- [x] Enabled deployments sharing one provider key share the global counter. There is one budget domain, `or-demo-2026-10`. Only Production has settings, so a preview answers `unavailable` with `missing_config` (runbook 5.1).
+- [x] Client key is HMAC-SHA-256 of the Vercel-set client IP; raw IP/hash is absent from logs (M3; runbook 5.6: digests only in Upstash, neither address nor digest in any log).
+- [x] Missing/ambiguous trusted address fails closed. `trustedClientAddress` accepts exactly one valid IP; a list, a blank or a missing header gives `null`, and the request is refused.
+- [x] UTC daily reset and key expiry documented/tested (the real-store "UTC-midnight reset" and "bounded TTLs" tests; runbook 5.6 step 6 read a live TTL of 31,141 s).
+- [x] One Lua script prunes expired leases, checks all three caps, then writes one lease and two counters atomically (`CHAT_ADMISSION_SCRIPT`).
+- [x] A refusal changes no key and makes no upstream call (M4; runbook 5.1, global and in-flight cap).
+- [x] Release is an idempotent `ZREM` for this request's lease (the real-store release test).
+- [x] Timeout/disconnect/process death leaves the lease until expiry; completed response/definitive network error releases. Proven by M1, and when deployed: the 2026-11-02 canary logged `timed_out` with `kept_until_expiry` (runbook 5.4, sample 2).
+- [x] Upstream failures do not refund daily counters (M6: the 401, 422, 429 and 500 rows).
+- [x] Store error/malformed reply fails `unavailable`, never open. Proven by M2, and when deployed: a WRONGTYPE key gave "Demo offline" with `store_error` (runbook 5.1).
 
 Atomic-script explanation and key table:
 
 ```text
-budget namespace:
-global day key:
-client day key:
-in-flight sorted-set key:
-day boundary / TTL:
-lease id and expiry:
-safe return fields:
+budget namespace:          procurerag-demo:or-demo-2026-10   (KEY_PREFIX + PROCURERAG_BUDGET_DOMAIN: one domain per OpenRouter key)
+global day key:            <ns>:chat:global:<YYYY-MM-DD>     (status route: <ns>:status:global:<day>)
+client day key:            <ns>:chat:client:<day>:<64 hex>   (HMAC-SHA-256 of x-vercel-forwarded-for; status: <ns>:status:client:<day>:<64 hex>)
+in-flight sorted-set key:  <ns>:chat:in_flight               (member = lease id, score = lease expiry in ms)
+kill switch:               <ns>:chat:enabled                 (ON only for the exact string "true"; missing, any other value or a store error = OFF)
+day boundary / TTL:        the UTC date is part of the key's NAME, so a new day is a new key that starts at 0.
+                           EXPIRE = seconds to the next 00:00 UTC + 3,600 grace, always < 25 h; expiry only cleans up
+lease id and expiry:       randomUUID(); score = now + 180,000 ms (LEASE_TTL_MS); the set PEXPIREs 240 s after its newest lease
+safe return fields:        [admitted 0|1, reason, global, client, in_flight]: counts only, never the digest or an address
+script order:              ZREMRANGEBYSCORE expired leases → ZCARD + 2 × GET → any cap reached: return, write nothing
+                           → ZADD one lease + INCR both counters → EXPIRE/PEXPIRE. KEYS declared; now_ms passed in ARGV
 ```
 
 Required proof:
 
-- [ ] request 55 refused after global 54;
-- [ ] request 11 refused for one client while another may enter;
-- [ ] parallel empty-store race admits exactly 2;
-- [ ] double/late release harmless;
-- [ ] expired lease pruned;
-- [ ] invalid input consumes nothing;
-- [ ] real-provider integration proof, not only a fake `eval()`;
-- [ ] mutation checks catch non-atomic writes, refund, timeout release, raw-IP keys and fail-open.
+- [x] request 55 refused after global 54 (real store);
+- [x] request 11 refused for one client while another may enter (real store);
+- [x] parallel empty-store race admits exactly 2 (real store; with M5, a non-atomic version failed it on 5 of 5 runs);
+- [x] double/late release harmless (real store);
+- [x] expired lease pruned (real store);
+- [x] invalid input consumes nothing (chat-bff: an invalid body is refused before admission, so no counter or lease is touched);
+- [x] real-provider integration proof, not only a fake `eval()`. `tests/chat-admission-redis.spec.ts` against the live Upstash store, 2026-11-03: 10 passed in 7.2 s. The race test admits exactly 2. M4 and M5's real-store halves (2026-10-31) show the same tests fail when the script is broken.
+- [x] mutation checks catch non-atomic writes (M5), refund (M6), timeout release (M1), raw-IP keys (M3) and fail-open (M2). Each went red where predicted, except M3's log test, whose prediction was wrong (runbook, Blocks 1–2).
 
 ### Block 2 — runtime kill switch and status route
 
-- [ ] Kill switch stored outside the build and read for every chat/status request.
-- [ ] Missing/invalid/store failure means off.
-- [ ] Off → 503 `unavailable`, no admission and no Azure/provider call.
-- [ ] Juan-only operating procedure recorded without credentials.
-- [ ] Flip-to-effect measured; already-admitted work limitation recorded.
-- [ ] Secondary Azure stop and tertiary provider-key revocation documented.
-- [ ] `/api/chat/status` implemented with 90 s upstream / 100 s function bounds and its own derived persistent caps, or an evidence-backed rejection recorded.
-- [ ] Browser makes one warm-on-intent request; no polling/retry loop.
+- [x] Kill switch stored outside the build and read for every chat/status request (one `GET` at the start of each, nothing cached).
+- [x] Missing/invalid/store failure means off (M2; the real-store "kill-switch values" test; Block 4 started with no key = OFF).
+- [x] Off → 503 `unavailable`, no admission and no Azure/provider call (runbook 5.2 cross-check: `reason: "kill_switch"`, 503; 6.1).
+- [x] Juan-only operating procedure recorded without credentials: `SET`/`DEL` in the Upstash console CLI, so no token touches a shell (runbook Block 5).
+- [x] Flip-to-effect measured; already-admitted work limitation recorded (runbook 5.2).
+- [x] Secondary Azure stop and tertiary provider-key revocation documented (runbook 5.2: ingress off, not "max replicas 0", whose minimum is 1). Ingress off/on was rehearsed once, on 2026-10-31 at 15:33 UTC, about 17 s apart, with no new revision. That was reconstructed from the Activity Log and the system log.
+- [x] `/api/chat/status` implemented with 90 s upstream / 100 s function bounds and its own derived persistent caps.
+- [x] Browser makes one warm-on-intent request; no polling/retry loop (`components/ChatPanel.tsx`: one check, the first time the chat scrolls into view).
 
 ```text
-kill-switch store/key:
-initial/final state:
-flip time:
-first effective request:
-flip-to-effect:
-already-admitted behavior:
+kill-switch store/key:   Upstash, procurerag-demo:or-demo-2026-10:chat:enabled
+initial/final state:     initial: no key (= OFF) after Block 4; final: "false", OFF by choice until Day 30 (runbook 6.4)
+flip time:               run 1 ON→OFF: `date -u` 15:20:51; run 2 OFF→ON: 15:31:40 (2026-10-31, UTC, laptop clock)
+first effective request: 15:20:56.121; 15:31:42.922
+flip-to-effect:          ≤ 5.1 s and ≤ 2.9 s: upper bounds that include the hand movement to the console. A cache would add a fixed lag
+already-admitted behavior: read once, before admission. An admitted question finishes, and its lease is released as usual.
+                         The switch guards only the Vercel path: a token holder can still call Azure directly
 
-status route decision:
-global/client warm-up caps and derivation:
-status outcomes and measured cold wake:
+status route decision:   implemented (warm on intent). GET /api/chat/status → Azure /health only, never /query;
+                         90 s upstream, maxDuration 100 s; typed ready / waking / unavailable; Cache-Control: no-store
+global/client warm-up caps and derivation: 15/day global, 3/day per client. One wake ≤ 90 s + 300 s cooldown = 6.5 min;
+                         the free grant is 50 replica-hours/month ≈ 100 min/day; floor(100 / 6.5) = 15
+status outcomes and measured cold wake: switch off → 503 unavailable in 0.2–0.3 s (6.1; 2026-11-03).
+                         Cold → ready in 84.0 s (runbook 5.4, sample 3). The 4th check from one client → busy (5.3)
 ```
 
 ### Block 3 — Azure configuration and deployment
 
-- [ ] Secret refs for service token and dedicated OpenRouter key; no value in YAML/logs/args.
-- [ ] Plain config: live LLM, model id, output cap, tracing off, offline models, one OMP thread.
-- [ ] Scale remains min 0 / max 1, 1 vCPU / 2 GiB, accepted probes.
-- [ ] Secret-list permissions reviewed for least privilege.
-- [ ] Existing workflow remains manual-main-only, exact-commit-CI-gated, reviewer-gated, OIDC and digest-based.
-- [ ] URL smoke receives token through a masked environment.
-- [ ] Easy Auth applied/rejected decision recorded.
-- [ ] HTTPS/`allowInsecure=false`, safe env names, scale, retention and revision state read back.
-- [ ] Public 401-before-work and public-ingress wake-cost residual proven/recorded.
+- [x] Secret refs for service token and dedicated OpenRouter key; no value in YAML/logs/args. One residual: the values were in the `az` process's arguments once, on Juan's laptop, during 3.2. Run #6's log: 0 Azure URLs, 0 `Bearer` + value, 10 `***`.
+- [x] Plain config: live LLM, model id, output cap, tracing off, offline models, one OMP thread. Read on `0000005` (2026-11-03): `PROCURERAG_LIVE_LLM=1`, `OPENROUTER_MODEL=openai/gpt-4o-mini`, `PROCURERAG_MAX_ANSWER_TOKENS=800`, both `LANGSMITH_TRACING*=false`, `HF_HUB_OFFLINE=1`, `OMP_NUM_THREADS=1`.
+- [x] Scale remains min 0 / max 1, 1 vCPU / 2 GiB, accepted probes (readback, runs #5 and #6).
+- [x] Secret-list permissions reviewed for least privilege (runbook 3.2: no new role; `Contributor` on the app only, behind OIDC and the `production` reviewer).
+- [x] Existing workflow remains manual-main-only, exact-commit-CI-gated, reviewer-gated, OIDC and digest-based (runs #5 and #6).
+- [x] URL smoke receives token through a masked environment (run #6: the token and the endpoint show as `***`).
+- [x] Easy Auth applied/rejected decision recorded (rejected, runbook 3.6).
+- [x] HTTPS/`allowInsecure=false`, safe env names, scale, retention and revision state read back (runbook 3.4, 3.5).
+- [x] Public 401-before-work and public-ingress wake-cost residual proven/recorded (four 401s in every URL smoke and `free` run; residual in runbook 3.6).
 
 ```text
-deployed commit:
-image digest:
-previous revision/digest:
-new revision:
-safe runtime config:
-scale / ingress / retention:
-Easy Auth decision:
+deployed commit:          main @ d40b20f (PR #16 merge); CI run 41199432743 passed on it
+image digest:             sha256:9d9766a963054a386cff7d9d1b4671932c580b244bd40a5daf9c04e0811297f3 (runs #5 and #6: same commit, cached build)
+previous revision/digest: run #5: procurerag-api--upnd4y1, the `az containerapp up` quickstart.
+                          0000001 (the hand-pushed `:demo`, no secrets) never became ready: 5 crashes on 2026-10-30,
+                          "PROCURERAG_SERVICE_TOKEN is not set" (fail closed at startup).
+                          Run #6: 0000002 (same digest, LIVE_LLM=0)
+new revision:             0000002 (run #5, LLM off, 2026-10-31) → 0000003 (run #6, LLM on, 2026-11-02)
+                          → 0000004 (6.3 rollback, off) → 0000005 (6.4 restore, on: active, 100%, 0 replicas on 2026-11-03)
+safe runtime config:      9 env names; 2 secret names (procurerag-service-token, openrouter-api-key); plain values above
+scale / ingress / retention: min 0 / max 1; 1 vCPU / 2Gi; external, allowInsecure false; Log Analytics 30 days
+Easy Auth decision:       rejected: it would gate the anonymous /health; the token already gates both query routes before the body
 ```
 
 ### Block 4 — Vercel configuration and deployment
 
-- [ ] Correct personal account/project linked; current terms reconfirmed.
-- [ ] `dub1` configured and verified.
-- [ ] API URL, service token, store credentials and HMAC secret are server-only.
-- [ ] Exactly one environment is enabled; other previews fail closed.
-- [ ] API URL is HTTPS; dynamic route limits are correct.
-- [ ] Browser artifact/response scan finds no setting value/name, API URL or key-shaped secret.
-- [ ] Static content survives store/Azure/chat failure.
-- [ ] `master`/Pages and Day 30 metadata/cutover remain untouched.
+- [x] Correct personal account/project linked; current terms reconfirmed (`marca-ia-s-projects/procure-rag`, Hobby).
+- [x] `dub1` configured and verified (`vercel.json`; `x-vercel-id` reads `dub1`).
+- [x] API URL, service token, store credentials and HMAC secret are server-only (no `NEXT_PUBLIC_`; Vercel "sensitive" Production variables).
+- [x] Exactly one environment is enabled; other previews fail closed (`vercel env ls`: all 9 Production only; preview → `missing_config`, runbook 5.1).
+- [x] API URL is HTTPS; dynamic route limits are correct (`ƒ /api/chat`, `ƒ /api/chat/status`, `runtime = "nodejs"`, `maxDuration = 100`).
+- [x] Browser artifact/response scan finds no setting value/name, API URL or key-shaped secret (`deployed_proof.py free`: 8 scripts searched, 6.1 and 2026-11-03).
+- [x] Static content survives store/Azure/chat failure (every page is prerendered `○`; pages 200 with the chat off, 6.1 and 2026-11-03).
+- [x] `master`/Pages and Day 30 metadata/cutover remain untouched (`master` @ `7526f0c`; "Live demo: in progress" on the deployed `/` and `/procurerag`).
+
+Record: runbook Block 4, "Record". Production now serves B (`dpl_4y4u9bwoS6GYV4h3QD9prWQ5FWTg`, 6.2).
+
+**Local finding, 2026-11-03 (fixed the same day: the file was deleted, then `npm test` gave 196 passed, 10 skipped):** the portfolio's own test "no .env file exists in the project" failed. The cause is a git-ignored `.env.local` holding `VERCEL_OIDC_TOKEN`, written by the Vercel CLI at 13:42 UTC on 2026-10-31. The token expired on 2026-11-01, no code reads it, and neither build loaded an env file. ProcureRAG holds a similar leftover, plus a `.vercel/` link to the portfolio project (runbook, Blocks 1–2 local gates).
 
 ### Block 5 — deployed proof, smoke and lease TTL
 
 Free proof:
 
-- [ ] static content works;
-- [ ] `/health` unauthenticated;
-- [ ] direct query routes without/wrong token → 401 before body/provider work;
-- [ ] broken store → `unavailable`, zero upstream;
-- [ ] kill switch off → `unavailable`, zero upstream;
-- [ ] quota/in-flight refusal → `busy`, zero upstream.
+- [x] static content works (runbook 5.1, 6.1, 6.2);
+- [x] `/health` unauthenticated (200 in every `free` run; 71.1 s and 69.7 s when cold, 6.1 and 6.2);
+- [x] direct query routes without/wrong token → 401 before body/provider work (four 401s per run: runs #5 and #6, 5.1, 6.1–6.4);
+- [x] broken store → `unavailable`, zero upstream (runbook 5.1: a WRONGTYPE key, `store_error`);
+- [x] kill switch off → `unavailable`, zero upstream (runbook 5.1, 5.2, 6.1);
+- [x] quota/in-flight refusal → `busy`, zero upstream (runbook 5.1: global cap set to 54, then two manual leases).
 
-Paid launch smoke (requires Juan approval):
+"Zero upstream" in the refusal checks above was reconstructed from Azure's console log, since Vercel's 1-hour logs are gone. On 2026-10-31 there was no `POST /query` between the admitted question (14:46:07) and 15:38. Over the afternoon there were 7 `POST /query` 200s, which equals the global counter of 7: one upstream call per admission, none per refusal (runbook 5.1, Record).
+
+Paid launch smoke (approved by Juan; 2026-11-02, revision `0000003`, `scripts/chat_smoke.py`: 8/8 automatic checks, exit 0). Details: runbook 5.5.
 
 | Case | State / latency | Cited IDs | Cost/tokens | Manual verdict |
 |---|---|---|---|---|
-| Q001 preset | | | | inspect known wording issue |
-| Q005 preset | | | | |
-| Q021 preset | | | | |
-| Q090 preset | | | | expect honest `gap_report` |
-| Q001 paraphrase | | | | expect unchecked caveat |
-| Company cars | | | | expect `model_declined` |
-| Injection | | | | expect `blocked`, no model |
-| Q091 free text | | | | record known red result |
+| Q001 preset | `answered`, 4.67 s | FAQ-001 | US$0.000170; 879 in / 63 out | **Partly right, unchanged from Day 28.** Right approver; leaves out Band 3 and the cumulative rule; still cites the €25,000 three-bid threshold as a reason |
+| Q005 preset | `answered`, 2.80 s | FAQ-001, POL-001 (9 sources: a second pass) | US$0.000294; 1,698 / 66 | Correct and complete |
+| Q021 preset | `answered`, 2.46 s | POL-005 | US$0.000213; 1,165 / 64 | Correct and complete |
+| Q090 preset | `gap_report`, 0.42 s | none (4 sources) | no call | Honest gap: SOP-002 missing after 1 pass |
+| Q001 paraphrase | `answered`, 1.95 s | FAQ-001 | US$0.000155; 893 / 35 | As Q001; the unchecked caveat is present |
+| Company cars | `model_declined`, 2.13 s | none (5 sources) | US$0.000179; 1,032 / 41 | Correct refusal: no company-car policy in the corpus |
+| Injection | `blocked`, 0.23 s | none (0 sources) | no call | Correct: `prompt_injection`, no retrieval, no model |
+| Q091 free text | `answered`, 3.22 s | FAQ-001 ×2, POL-003 | US$0.000216; 897 / 136 | **Known red, worse than Day 28:** two wrong claims with accepted citations (a €60,000 "threshold"; an RFP "above €250,000" for €120,000) |
 
-Cold-start/lease worksheet:
+Spend: 6 paid calls, US$0.001227 in total, every finish `stop`, every call routed to Azure. A 7th call was Juan's browser click (US$0.000170). The key went from 5 to 4.99860275 remaining: US$0.00139725 used, the sum of the 7 rows.
+
+Cold-start/lease worksheet (runbook 5.4: sample 1, 2026-10-31, `0000002`, LLM off, Q001 by `curl`; samples 2–3, 2026-11-02):
 
 ```text
-admission timestamp:
-Azure wake / health-ready time:
-retrieval start/end:
-provider start/end or timeout:
-BFF response/timeout:
-latest possible upstream continuation:
-safety margin:
-derived lease TTL:
-ADR/test/config updates:
+admission timestamp:      16:10:36.933Z (Vercel `at`, t0; admission is milliseconds later)
+Azure wake / health-ready time: KEDA 0→1 at +0.1 s; image pulled (698 MB) by +21.2 s; container started +27.3 s;
+                          `Application startup complete` +51.4 s; startup probe passed ≈ +52.2 s
+retrieval start/end:      the held request was routed ≈ +52 s; `POST /query` 200 at +55.3 s (≈ 3–4 s of retrieval)
+provider start/end or timeout: none (LLM off). Bounded by configuration: one call, 60 s timeout, max_retries=0.
+                          Warm, LLM on (5.5): first token 1.3–1.8 s, whole answers 1.95–4.67 s
+BFF response/timeout:     sample 1: 200 in 55.3 s (latency_ms 55349), lease released.
+                          Sample 2 (canary, cold): timed_out at 75 s, lease kept_until_expiry. Sample 3 (status, cold): ready at 84.0 s
+latest possible upstream continuation: if the ingress cancels a held request when the BFF disconnects: 75 + 60 = 135 s.
+                          If it does not: ≈ 84 s (sample 3's cold path) + retrieval + 60 s ≈ 144 s + retrieval
+safety margin:            the written rule is 20%: 135 × 1.2 = 162 s; 144 × 1.2 = 172.8 s + retrieval
+derived lease TTL:        keep 180 s. It holds in both cases, but only by a few seconds in the second (unverified) one,
+                          not by the 56% first claimed from sample 1
+ADR/test/config updates:  none to the value. The `LEASE_TTL_MS` comment and ADR §8.3.1 still call 180 s "provisional".
+                          Open (HER-271): a 5 s startup probe, because 2 of 3 cold samples went past the BFF's 75 s
 ```
 
-Log/privacy proof:
+**After the Hermes review (2026-11-03):** the question timeout is now 90 s, the lease 240 s and the startup probe 5 s, all uncommitted and not deployed. See "Hermes review round 1" below.
 
-- [ ] safe request metadata only;
-- [ ] zero question/answer/excerpt/raw IP/hash/token/API URL/store credential in logs;
-- [ ] tracing off, no LangSmith upload;
-- [ ] ZDR still active, prompt logging off;
-- [ ] browser assets/responses hold no server values.
+Log/privacy proof (runbook 5.6, 2026-11-02: pass, with two limits recorded):
+
+- [x] safe request metadata only (Vercel: one BFF line per request, 10 lines for 10 requests; Azure: access lines only);
+- [x] zero question/answer/excerpt/raw IP/hash/token/API URL/store credential in logs. Azure: every word count 0, 47 of 47 addresses in the ingress's shared 100.64/10 range. Limits: Vercel's own request details show the Upstash and Azure hosts (project members, 1 hour). The Azure canary gave no result, because it timed out cold; the smoke's own words are the Azure content proof;
+- [x] tracing off, no LangSmith upload (`LANGSMITH_TRACING*=false`, no API key, only the two app secrets);
+- [x] ZDR still active, prompt logging off (every call routed to Azure; logging off 2026-11-02; OpenRouter's anonymous categorization sampling is a residual);
+- [x] browser assets/responses hold no server values (runbook 5.1, 6.1, 2026-11-03).
 
 ### Block 6 — rollback rehearsal
 
-- [ ] Runtime kill switch stops chat while content remains available.
-- [ ] Vercel prior deployment rollback succeeds; content smoke passes.
-- [ ] Azure previous digest/revision rollback succeeds; health + authenticated retrieval-only smoke passes.
-- [ ] Final intentional deployment/kill-switch state recorded.
-- [ ] No resource deletion and no legacy Pages change.
+- [x] Runtime kill switch stops chat while content remains available.
+- [x] Vercel prior deployment rollback succeeds; content smoke passes.
+- [x] Azure previous digest/revision rollback succeeds; health + authenticated retrieval-only smoke passes.
+- [x] Final intentional deployment/kill-switch state recorded.
+- [x] No resource deletion and no legacy Pages change. On 2026-11-03 every Azure revision since 2026-10-30 still exists (`upnd4y1`, `0000001`–`0000005`), and `master` is still `7526f0c`.
+
+Evidence and the one open limit (auto-assignment after the promote, shown on Day 30): `docs/day-29-runbook.md` Block 6, Record.
 
 ### Required verification
 
@@ -10606,70 +10664,218 @@ git diff --check
 Final command evidence:
 
 ```text
-ProcureRAG commit:
-uv sync:
-lock check:
-pytest:
-compileall:
-ruff:
-frozen regression:
-retrieval verification:
-graph regression:
-contract probe:
-container smoke:
-CI / image-internal gates:
-git diff --check:
+Run 2026-11-03 with PROCURERAG_LIVE_LLM=0, LANGSMITH_TRACING*=false, DEEPEVAL_TELEMETRY_OPT_OUT=1, OMP_NUM_THREADS=1:
 
-portfolio commit:
-npm ci / audit:
-typecheck / lint:
-build:
-Playwright:
-real-store integration:
-secret scan:
-git diff --check:
+ProcureRAG commit:        day-29 @ 9ceb068, the same tree as main @ d40b20f outside docs/ (PR #16 merged 2026-10-31)
+uv sync:                  exit 0, 154 resolved / 145 checked
+lock check:               exit 0
+pytest:                   exit 0, 499 passed in 3.22 s
+compileall:               exit 0
+ruff:                     exit 0, All checks passed!
+frozen regression:        exit 0, 7/7 as expected
+retrieval verification:   exit 0, 6/6 [OK] (HF_HUB_OFFLINE=1)
+graph regression:         exit 0, 6/6 passed, 4 stand-in LLM calls (HF_HUB_OFFLINE=1)
+contract probe:           exit 0, 22 [PASS] (20 scenarios + 2 checks), 0 failures
+container smoke:          image mode in deploy runs #5 and #6: /health after 34.4 s and 36.4 s, every probe ok, logs ok.
+                          URL mode after each deploy and in 6.3/6.4: four 401s, /health contract, Q091 and off-topic ok
+CI / image-internal gates: CI run 41199432743 passed on d40b20f. Runs #5 and #6, inside the image:
+                          retrieval 6/6, graph 6/6 with 4 stand-in LLM calls, no provider
+git diff --check:         exit 0 after this record (before it: a trailing space in the runbook)
+
+portfolio commit:         day-29-hosting @ 246e073, clean tree, 0/0 against origin
+npm ci / audit:           exit 0 / exit 0, 0 vulnerabilities
+typecheck / lint:         exit 0 / exit 0
+build:                    exit 0; ƒ /api/chat, ƒ /api/chat/status, every page ○
+Playwright:               exit 0: 196 passed, 10 skipped (the real-store spec, run on its own below), 7.4 s.
+                          The first run failed 1 test, "no .env file exists in the project" (.env.local, VERCEL_OIDC_TOKEN);
+                          the file was deleted, then the re-run passed
+real-store integration:   exit 0, 10 passed in 7.2 s (2026-11-03, live Upstash store, own namespaces); M4/M5 real-store halves 2026-10-31
+secret scan:              build-artifacts spec: the built files hold no setting name or key-shaped value (passed);
+                          deployed: `free`, 8 scripts searched, 0 findings (2026-11-03)
+git diff --check:         exit 0
 ```
 
 ### What failed or was confusing
 
-- _Fill during implementation._
+- **Vercel CLI 54.4.1, not 65.4.0.** The kickoff recorded a version that this Mac does not run. With 54:
+  - a project created in the dashboard needs its Framework Preset set by hand, or the first deploy fails ("The `projectSettings` object is required"). Auto-detection could pick Jekyll from `_config.yml`;
+  - `vercel env add` waits only 500 ms for piped input, so values from `az` must be read into a variable first;
+  - `rollback` and `promote` need `--scope`.
+- **The CLI also left `.env.local` files** (`VERCEL_OIDC_TOKEN`), in both repositories. They are git-ignored, so they were never committed, but the portfolio's copy breaks its own "no .env file" test. ProcureRAG also got a `.vercel/` link to the portfolio project on 10-30: `vercel link` was run in the wrong directory.
+- **The dedicated OpenRouter key sat in ProcureRAG's git-ignored `.env`** from 10-30, against the runbook's rule that a secret never goes in this repo. It was never committed, and the key's usage equals the 7 known calls. Removed on 2026-11-03, together with ProcureRAG's `.vercel/` and `.env.local`; the key now lives only in the Azure app secret.
+- **The first hand-made revision never became ready.** `0000001` had no service token, so the API refused to start (fail closed, as designed). As a result, run #5's rollback handle named the quickstart revision `upnd4y1` with `0000001`'s image.
+- **Mutation predictions were wrong twice.**
+  - M3's log test stayed green, correctly: the log never holds the digest or the address.
+  - M5's global test failed by timeout, not by assertion: a slowdown, not a logic catch. Only the race test counts as the proof.
+- **"A cold visitor gets an answer" was wrong.** It rested on one cold sample (55 s). Two later samples took more than 75 s and 84 s: the 15 s probe cadence and a slower image pull. The lease margin went from 56% to a few seconds in one case (runbook 5.4).
+- **Q091 got worse, not just stayed red.** It gave two wrong claims with citations that the automatic checks accept, at temperature 0. The likely cause is the provider's generation, not retrieval.
+- **The Azure canary proved nothing:** it timed out on a cold replica, and the per-client quota for the day was spent. The smoke's own words carried the Azure content proof instead.
+- **Small traps:**
+  - a `TTL` with the date written `02-11-2026` returned `-2` (no such key);
+  - KQL rejects `first`, `last` and `kind` as column names;
+  - `date -u +%T` drops the fraction, so flip-to-effect is an upper bound.
+- **The subscription is a Free Trial, and that changes the cost story.** With the spending limit on, nothing can cost real money until the credit expires on 2026-11-18. After that, the API stops unless the subscription is upgraded. 0.3's worksheet assumed pay-as-you-go from the start.
+- **The budget was created at the billing-account scope**, not on the resource group. A resource-group or subscription query does not find it, which caused a false "missing budget" on 2026-11-03.
+- **The ingress rehearsal and 5.1's refusal evidence were not written down at the time.** Both had to be rebuilt from Azure's Activity Log and console log (30 to 90 days of retention). Vercel's 1-hour logs could not help.
 
 ### What became clearer
 
-- _Fill during implementation._
+1. **One sample is a hypothesis, not a bound.**
+   - Sample 1 (55 s) made me write "a cold visitor gets an answer" and a 56% lease margin. Samples 2 and 3 (over 75 s, and 84 s) withdrew both claims.
+   - The cold path moves by about 30 s between runs: when the image pull starts (2 s or 14 s after the scale-up), how long it takes (18–29 s), and where the app lands in the probe's 15 s cycle.
+   - So a timeout or a TTL needs several samples of the slow path, and its margin is measured against the slowest one, not the first.
+
+2. **The timeouts and the lease are one system.**
+   - The lease must outlive everything an admitted question can still make Azure do, and the latest the request can reach Azure is the BFF's timeout. Raising the timeout from 75 to 90 s moved the lease's bound from 174 s to 192 s (each with 10 s for retrieval and 60 s for the provider, plus 20%), past the 180 s I had kept.
+   - I had checked the lease against the cold samples, but not the question timeout against the same samples. The review did.
+   - Now a test checks the arithmetic, so one number cannot change alone.
+
+3. **The warm-up and the question wait for the same cold start.**
+   - I designed warm on intent as if the visitor would wait for it, but the Ask button never did. A visitor who scrolls and clicks a preset at once sends the question into the cold start the check has just begun.
+   - There were two honest fixes: disable Ask while checking, or let the question's own timeout cover a cold start. I chose the second. The check stays advice, not a gate, and nobody waits up to 84 s before they can ask.
+   - The question starts after the check, so if the check finishes within 90 s, so does the question's wait. A UI test now sends a question while the check is held open.
+
+4. **"Ceiling" meant two different things.**
+   - The LLM's US$5 is enforced outside my code: OpenRouter refuses the key past it.
+   - Azure's US$10 is a target. Max 1 replica bounds compute at about US$77 a month. A budget only emails, from cost data that is hours late, and an unauthenticated request still wakes the replica.
+   - The trial's spending limit was the only hard Azure stop, and I found it only on 11-03. After pay-as-you-go there is none.
+   - So the words are "a US$10 Azure budget target with alerts and a manual shutdown procedure", and the portfolio now says "a provider-enforced LLM spend limit, a cloud budget alert".
+
+5. **Local green is a claim; CI green is evidence.**
+   - ProcureRAG has had a credential-free CI gate since Day 24. The portfolio's tests ran only on my laptop, so PR #4's reviewer could not see them pass.
+   - The new workflow runs the same seven commands with no secret. The real-store spec skips itself there and stays a hand-run proof.
+
+6. **Write evidence down when it happens.**
+   - Vercel keeps runtime logs for 1 hour. I had to rebuild 5.1's "zero upstream" and the ingress rehearsal from Azure's Activity Log and console log, days later.
+   - Azure's 30–90 days of retention saved that evidence; Vercel's would not have.
+
+7. **Git-ignored is not the same as safe.**
+   - The Vercel CLI wrote `.env.local` files holding an OIDC token in both repositories, and a `.vercel/` link in the wrong one. The dedicated OpenRouter key sat in ProcureRAG's ignored `.env` for four days.
+   - None was committed, but each one broke a rule or a test. A `git status --ignored` after any CLI session that logs in or links would have caught all three.
 
 ### What I can now explain in an interview
 
 Write concise answers without reading the route:
 
-1. Why one atomic script is necessary for all three limits.
-2. Why one expiring lease per request is safer than one counter with a TTL.
-3. Why timeout does not release/refund.
-4. Vercel-set client address versus a browser-controlled header.
-5. HMAC client digest versus raw IP/plain hash.
-6. Store failure and `unavailable` versus quota `busy`.
-7. How the five spend controls cover different failures.
-8. Why Azure budgets are alerts, not hard stops.
-9. Why a public 401 may still cost scale-from-zero compute.
-10. Easy Auth decision.
-11. How deployed timings set lease TTL.
-12. Kill-switch guarantees and limitations.
-13. Shared provider-key budget across deployments.
-14. New proof from hosted smoke versus Day 28 local HTTP.
-15. Honest Q001/Q090/Q091 limitations.
-16. Chat-only, Vercel and Azure rollback layers.
-17. Evidence needed to change 54/day.
-18. Hosted preview versus Day 30 public launch.
+1. **Why one atomic script is necessary for all three limits:** admission is read, decide, write, and two requests can interleave between the read and the write.
+   - Two visitors both read "1 in flight", both pass, and both write: now 3 are in flight. The same race turns 53 into 55 on the global counter.
+   - Redis runs a Lua script as one unit: no other command runs between my `GET`s and my `INCR`s.
+   - All three caps live in one script because any refusal must change nothing, and an admission must charge all three together. With three separate scripts, the global counter could be charged and then the client cap refuse, and I would need a refund path.
+   - Proof: on the real store, 10 parallel admissions admit exactly 2. My non-atomic mutation (M5) failed that same test on 5 of 5 runs.
+
+2. **Why one expiring lease per request is safer than one counter with a TTL:** a counter cannot tell whose slot is whose.
+   - With `INCR`/`DECR`, a request that dies never decrements, so its slot leaks. A TTL on the whole counter then frees every slot at once, including those of requests still running.
+   - A double or late `DECR` undercounts, and the next admission becomes a third in flight.
+   - With a sorted set, each request adds its own random lease id, scored by its own expiry. The script prunes only expired members, and a release is `ZREM` of my own id, so a double, late or unknown release removes nothing else.
+   - The real-store tests prove both: a release frees only its own lease, and an expired lease is pruned while a live one stays.
+
+3. **Why a timeout does not release a lease or refund quota:** a timeout only means the BFF stopped waiting.
+   - After the BFF's 75 s, Azure may still be starting, retrieving and making its one paid provider call (60 s).
+   - Releasing the lease would let a third question start while two are still running. That breaks the in-flight cap and the spend it bounds.
+   - Refunding would make failures free: a pattern that always fails or times out could loop without ever touching the daily caps. And the provider may already have been paid.
+   - Deployed proof: the 2026-11-02 canary timed out at 75 s and logged `lease: "kept_until_expiry"`. M1 (release on timeout) and M6 (refund on non-200) both turned tests red.
+
+4. **Why the Vercel client address is trustworthy deployed but not in a local test:** the trust comes from who writes the header, not from its name.
+   - On Vercel, the edge sets `x-vercel-forwarded-for` and overwrites whatever the client sent, so the value is the address Vercel itself saw.
+   - On `next start` on my laptop, nothing overwrites it, and any `curl` can type any address. Local tests inject an address only to reach the admission step: that proves the wiring, not the trust.
+   - I proved the trust on the deployment. `spoof-check` sent four different forged addresses, all four counted as one client, and the 4th got `busy` at the 3-per-client status limit.
+   - The code accepts exactly one valid IP. A missing header, a list or anything else fails closed.
+
+5. **Why an HMAC digest rather than the IP or a plain hash:** the store only needs to know "is this the same client again?".
+   - A raw IP is personal data, and keeping it buys me nothing.
+   - A plain SHA-256 of an IPv4 address is not anonymous. There are only about 4.3 billion addresses, so anyone holding the hash finds the match in minutes.
+   - An HMAC mixes in a server-only secret, `PROCURERAG_CLIENT_HASH_SECRET`. It was piped from `openssl` straight into Vercel, so I never saw it. Without that key, the digest cannot be recomputed or reversed.
+   - The Upstash keys hold 64-hex digests only, and no log holds the digest or the address. Rotating the secret resets every client's count, which is acceptable: the global cap still holds.
+
+6. **Why store failure fails closed, and why that is `unavailable`, not `busy`:** the store is my meter.
+   - If it cannot answer, I do not know the counts. Failing open would mean unlimited paid calls at exactly the moment I am blind, and any store outage would become a way around the spend cap.
+   - `busy` means "I counted, and you are over a limit", with honest retry guidance (a countdown to 00:00 UTC for the daily caps). A broken store is an outage with no known end, so it is `unavailable`: "Demo offline".
+   - Proof: deployed, a WRONGTYPE key gave "Demo offline" with `reason: store_error`, and Azure logged no `POST /query`. M2 (an unreadable kill switch counted as on) turned a test red.
+
+7. **How the controls cover different failures:** each one catches what the others miss.
+   - **54 a day, globally:** total paid calls. US$5 ÷ 30 days ÷ US$0.0030525 worst case = 54, so even many visitors cannot pass the monthly key budget.
+   - **10 per client a day:** one visitor or one script cannot eat the whole day. It is not identity: someone rotating IPs gets around it, which is why the global cap exists.
+   - **2 in flight:** concurrency. It bounds simultaneous work on one 1-vCPU replica and any burst of spend.
+   - **The US$5 monthly key limit:** enforced by OpenRouter, outside my code. If my counter has a bug or the token leaks, the key gets 402 past US$5.
+   - **Max 1 replica:** Azure compute cannot autoscale into a bill. One replica 24/7 is about US$77 a month, so this bounds the cost but does not keep it under US$10 on its own.
+   - **The budget alert, then the kill switch, ingress off and key revocation:** my response to what none of the above covers, mainly direct calls that wake Azure.
+
+8. **Why an Azure budget is not a hard spending limit:** a budget only evaluates cost data and sends email.
+   - The data arrives hours late, and nothing in a budget stops a resource. A 24/7 runaway costs about US$2.58 a day, so the forecast alert fires roughly a day after the data lands, and then I still have to act.
+   - Mine is US$10 a month on the billing account, alerting at 60% and 100% of actual cost and at 100% of forecast.
+   - The only hard stop I have is the trial's spending limit, which disables the subscription instead of charging. Pay-as-you-go cannot have one. Once I upgrade (before 11-18), the alert plus my action is the ceiling.
+
+9. **Why an unauthenticated request can still cost Azure compute:** the 401 is decided by FastAPI inside the container, and with scale to zero there may be no container yet.
+   - The ingress counts the request, and the HTTP scaler takes the app from 0 to 1 replica *before* my code can refuse it. Sample 1 shows it: KEDA scaled "from 0 to 1, triggered by `s0-upstream_rq_total`".
+   - Each wake is up to about 90 s of cold start plus the 300 s cooldown: about 6.5 minutes billed.
+   - So anyone who knows the URL can keep the replica awake. The bounds are max 1 replica, the budget alert and ingress off.
+   - Easy Auth would not change this: Microsoft runs it as a sidecar container on each replica, so the replica wakes for it too.
+
+10. **Why I rejected Easy Auth:** it answers a different question, and it would break something I need.
+    - Applied to all requests, it also gates `/health`, which must stay anonymous for the platform's probes and for my warm-up check.
+    - Its "allow unauthenticated" mode adds nothing to what I have. The API already refuses `/query` and `/query/stream` without the service token, in middleware, before it reads the body.
+    - Easy Auth is built for users signing in with an identity provider. My caller is a service, my own BFF, so a shared service token is the right tool. I am clear that it is service identity ("this came through my BFF"), not enterprise identity.
+
+11. **What work continues after a timeout, and how that set the lease TTL:** the lease must outlive everything an admitted question can still make Azure do, counted from admission, not just the function's 100 s.
+    - Continuation = cold start + retrieval + one provider call (60 s timeout, `max_retries=0`). The written margin is 20%.
+    - Sample 1 (cold, LLM off) took 55.3 s: (55.3 + 60) × 1.2 = 138 s, so 180 s looked comfortable.
+    - Samples 2 and 3 corrected that. The cold paths took more than 75 s and 84 s, mostly because of the 15 s probe cadence and slower image pulls. If the ingress still routes a held request after the BFF disconnects, the bound is (84 + 60) × 1.2 ≈ 173 s, plus retrieval.
+    - I kept 180 s, but the margin is a few seconds and rests on one untested assumption. A 5 s startup probe is my TODO before Week 6 closes.
+
+12. **What the kill switch stops, what it does not cancel, and how fast it took effect:** it stops new work.
+    - The BFF reads one key with one `GET` before admission, on every chat and status request, and caches nothing. Only the exact string `true` is on. A missing key, any other value or a store error is off.
+    - It does not cancel an admitted question, which finishes and releases its lease as usual.
+    - It only guards the Vercel path: anyone with the service token can still call Azure directly. The next steps are ingress off, which I rehearsed on 10-31 (off and back on in 17 s, no new revision), then revoking the key.
+    - Flip-to-effect: ≤ 5.1 s and ≤ 2.9 s. Those are upper bounds that include my hand moving to the console. A cache would have shown a fixed lag.
+
+13. **Why preview and production must share a global counter if they share one key:** the 54 a day is derived from that key's US$5.
+    - If each deployment had its own counter, a preview and production would each allow 54. That is 108 a day on one budget, and the arithmetic breaks.
+    - So the keys are namespaced by budget domain (`or-demo-2026-10`, one per OpenRouter key), not by deployment.
+    - I went one step further: only Production has settings at all. A preview answers "Demo offline" with `missing_config`.
+
+14. **What the deployed smoke proved that Day 28's local proof did not:** Day 28 proved the chain on one machine, with the LLM off and fakes standing in for real answers.
+    - Day 29 proved:
+      - TLS and Vercel's edge, with the functions in `dub1`;
+      - Azure scaling from zero;
+      - the real secret path: Azure `secretRef`, Vercel's sensitive Production settings, GitHub's masked secret;
+      - persistent quota and the kill switch on a real store;
+      - real gpt-4o-mini answers through OpenRouter, routed to Azure (Zero Data Retention). Six paid calls cost US$0.001227, and the most expensive was about 10 times under my worst case;
+      - the logs on the real platforms;
+      - a rollback, read back by id.
+    - It also found what local could not: Q091 got worse, and two of three cold paths went past the BFF's 75 s.
+
+15. **Why Q001, Q090 and Q091 are still honest limitations after hosting:** hosting changes where the system runs, not what it knows.
+    - **Q001 preset:** still only partly right. It names the right approver but leaves out Band 3 and the cumulative rule.
+    - **Q090:** an honest `gap_report`. SOP-002 is missing after one pass, and the system says so instead of guessing. That is the behaviour I want to show.
+    - **Q091:** worse than Day 28. It made two wrong claims with citations my automatic checks accept: €60,000 presented as a threshold, and "an RFP above €250,000" for a €120,000 renewal.
+    - My citation checks prove that a cited number points to a real retrieved source, not that the answer applied the rule correctly. Q091 is not a preset, but anyone can type it, so I disclose it rather than claim it.
+
+16. **How to roll back the chat without taking the case study offline:** the layers are separate on purpose.
+    - **The chat only:** `SET …:chat:enabled false` in the Upstash console. Within seconds the chat says "Demo offline". The pages are prerendered static files, so they do not notice. 6.1 showed it: 3 pages 200, and the status route answered 503 in 0.2 s without calling Azure.
+    - **The site:** `vercel rollback` to the previous production deployment, then `vercel promote` to undo it. On Hobby, only the immediately previous deployment can be the target.
+    - **The API:** a new revision from the previous image digest, with `PROCURERAG_LIVE_LLM=0`.
+    - Each step was read back by id. Here "previous" and "current" ran the same code, so a green smoke alone would not prove anything changed.
+
+17. **What evidence would justify changing 54 a day:** the number is arithmetic (budget ÷ days ÷ worst-case cost per request), so it changes when an input changes.
+    - **Raise it** if the key's limit goes up, or the worst case comes down: a cheaper model, a lower output cap, a tighter prompt bound. Real calls averaging US$0.0002, 10 times under the worst case, are not enough alone, because the cap must hold for someone who sends worst-case prompts on purpose.
+    - **Demand:** how often real visitors hit `global_cap`. The BFF logs a reason on every refusal.
+    - **Lower it** if prices rise, or if spend tracks toward the key limit before the month ends.
+
+18. **Why a hosted demo is still not the Day 30 public launch:** Day 29 built and proved the infrastructure; it announced nothing.
+    - The chain runs at `procure-rag.vercel.app` with the kill switch **off**.
+    - The portfolio still says "Live demo: in progress", and `juanfpinzon.github.io` still serves the legacy Jekyll site from `master`.
+    - Day 30 owns the cutover: the switch on, the public URL, canonical and share metadata, redirects, and the CV and LinkedIn links.
+    - Before that, I must also upgrade the Azure trial (it ends 11-18) and decide on the 5 s startup probe.
 
 ### Route review questions
 
-- [ ] Answer the route's 18 interview prompts in Juan's own words.
+- [X] Answer the route's 18 interview prompts in Juan's own words.
 
 ### Three-minute walkthrough
 
-- Duration:
-- Completed without notes:
-- Notes / misses:
+- Duration: 3:02
+- Completed without notes: Yes
+- Notes / misses: all good.
 
 Walk through architecture, atomic spend controls, one answer + one honest gap + one refusal, kill switch, cold-start/lease evidence, rollback, and honest Day 30 boundary.
 
@@ -10677,7 +10883,39 @@ Walk through architecture, atomic spend controls, one answer + one honest gap + 
 
 > “Review Day 29 across ProcureRAG and the portfolio against the accepted architecture ADR and `docs/day-29-hosted-portfolio-demo.md`. Verify atomic admission across global/client/in-flight caps; lease expiry/release semantics; fail-closed store, trusted-address and kill-switch paths; no quota refund or automatic retry; no raw IP/payload/secret storage or logs; one enabled budget domain across deployments; Azure secret refs and digest-gated deployment; Vercel `dub1` and server-only settings; status-route abuse bounds; exact spend controls; deployed smoke/manual answer verdicts; measured cold-start-derived lease TTL; rollback evidence; and that Day 30 cutover/public claims remain undone. Treat faked Redis calls, green HTTP alone, unverified provider-key limits, or missing live-chain evidence as insufficient. Juan owns implementation.”
 
-Sent:
+Sent: yes, 2026-11-03 (Juan). Hermes reviewed ProcureRAG PR #17 and portfolio PR #4 and returned 4 findings (2 High, 1 Medium, 1 Low), addressed in the next section.
+
+### Hermes review round 1 (2026-11-03)
+
+Each change below is made in the working trees, **uncommitted and not deployed**. The steps left for me are R1–R7 in `docs/day-29-runbook.md`, "Review follow-up".
+
+1. **High: portfolio PR #4 had no CI.** Agreed. The workflow is written; its first run is pending.
+   - The finding was right: `gh pr checks 4` showed no checks, and every portfolio gate had run only on my laptop.
+   - Added `.github/workflows/ci.yml`: `npm ci`, `npm audit --omit=dev`, typecheck, lint, build, Playwright, `git diff --check`. It uses no secret, triggers on `pull_request` (not `pull_request_target`), has a read-only token, and pins every action by SHA.
+   - Two details differ from the review's list. Chromium is installed before `npm test`. `git diff --check` compares the change with its base (`HEAD^1`), because the whole tree fails on the legacy Jekyll files (`_config.yml`, `index.md`).
+   - In CI the real-store spec skips itself (no store variables), so its 10 tests stay a hand-run proof (R1).
+   - The same commands, run locally on 2026-11-03: all exit 0; Playwright 199 passed, 10 skipped.
+   - Side finding: a full `npm audit` now reports 16 moderate advisories, all in dev-only ESLint plugins (through `minimatch`). `--omit=dev` is clean, and none of them ships.
+
+2. **High: a cold visitor could outrun the 75 s question timeout.** Agreed. The numbers are changed; the deployed proof is pending.
+   - Right on the substance: three of six cold paths (sample 2, 80.5 s and 84 s) were past 75 s, and Ask stays enabled while the check runs. The review cited `server-config.ts`; the timeout lives in `lib/chat/bff.ts`.
+   - **Decision:** keep Ask enabled, and make the question's timeout cover a cold start: **90 s**, above all six samples. It cannot go much higher, because 90 s plus three 3 s store calls is 99 s of the 100 s `maxDuration`.
+   - **Lease re-derived:** (90 + 10 retrieval + 60 provider) × 1.2 = 192 s, so 180 s was no longer enough. Now **240 s**. The cost: after a timeout, a slot stays blocked for up to 4 minutes instead of 3.
+   - **Tests:** two arithmetic tests (the timeout against the slowest cold path and `maxDuration`; the lease against the continuation) and one UI test that asks while the check is held open. Each went red under its mutation: the timeout back to 75 s, the timeout at 95 s, the lease back to 180 s, and Ask disabled while checking.
+   - **Startup probe:** 25 s / 5 s / 10 in the template, a budget of about 75 s, above every startup measured on any host (57 s at most). Not deployed.
+   - **Copy:** "about a minute" became "up to a minute and a half", because the measured cold starts were 55–84 s.
+   - **Still open:** 90 s is only 6 s above the slowest sample. Before the public switch: deploy both changes (R2, R3), take three cold answered questions (R4), and run the real race once (R5). If the slowest cold path is over 80 s, the switch stays off.
+
+3. **Medium: the US$10 is an operational target, not an enforced ceiling.** Agreed. The words are changed.
+   - Enforced: OpenRouter's US$5 key limit, and max 1 replica, which bounds Azure at about US$77 a month, not US$10.
+   - Not enforced: the US$10. A budget emails from late cost data, and after pay-as-you-go nothing stops a resource.
+   - Changed: ADR §8.2 now says so. The `/procurerag` roadmap says "a provider-enforced LLM spend limit, a cloud budget alert" instead of "a spend ceiling".
+   - **Alert delivery cannot be tested yet.** While the credit pays, the budget evaluates US$0.00. After the credit ends (2026-11-18), a temporary US$1 budget measures the real delay (R7). If Day 30 comes first, the alert is still untested at launch: the launch notes say so, or the launch waits.
+   - Owner: me, within 24 hours of an alert. Cost data is hours late, so a runaway can add about US$5 before I act. A watchdog that turns ingress off is a backlog option, not built.
+
+4. **Low: unfinished learning-log fields.** Fixed: "What became clearer" and "Sent" are filled in above.
+
+Interview answers 3 and 11 still describe the deployed Day 29 values (75 s, 180 s, the probe as a TODO). Update them after R2–R4.
 
 ### Next step
 
@@ -10686,4 +10924,10 @@ Sent:
 3. Juan implements persistent admission and control locally, then runs deterministic and real-store tests.
 4. Juan changes/reviews Azure and Vercel configuration only after Block 0 passes.
 5. Juan requests explicit paid-smoke approval after the dedicated key, caps and kill switch are verified.
-6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes.
+6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes. DONE
+7. **TODO before Week 6 closure (HER-271):** shorten the Azure startup probe's period from 15 s to 5 s, while keeping a restart budget above the measured startup. Two of three cold samples on 2026-11-02 went past the BFF's 75 s, and each lost 12–14 s waiting for the next probe. Block 6 added three direct `/health` cold samples: 71.1, 69.7 and 80.5 s. Details, the `failureThreshold` cap and a candidate setting: `docs/day-29-runbook.md` §5.4, "TODO before Week 6 closure".
+   - **2026-11-03, after the Hermes review:** the template has the candidate (25 s / 5 s / 10), uncommitted. Deploy it and re-measure: runbook R2 and R4.
+8. **Decide before Day 30's public launch (HER-271): the Azure Free Trial's credit expires 2026-11-18 15:45 UTC.** After that, the subscription is disabled unless it is upgraded to pay-as-you-go, and the hosted chat goes "Demo offline". Upgrading removes the hard spending stop, so 0.3's prices become real money, and the budget, the kill switch and the owner's action become the only guards. Re-check that the budget's evaluated spend moves once charges are real (`docs/day-29-runbook.md` §0.2, §0.3).
+   - **Decision (Juan, 2026-11-03): continue on pay-as-you-go.** Upgrade **before** 2026-11-18 15:45 UTC: Microsoft keeps the remaining credit until that date, so an early upgrade costs nothing extra and avoids the outage. Choose the free Basic support plan, since a paid plan alone breaks the US$10 ceiling. Afterwards, re-read the subscription's offer and spending limit, and the budget.
+   - **After the upgrade, once real charges appear:** test alert delivery with a temporary US$1 budget, and record the real delay (runbook R7).
+9. **Before Day 30's public switch (Hermes review, 2026-11-03):** runbook "Review follow-up", R1–R6. That is CI on portfolio PR #4, the real-store proof with the 240 s lease, the probe and portfolio deploys, three cold answered questions, the deployed race, and the switch back OFF.
