@@ -10836,13 +10836,13 @@ Write concise answers without reading the route:
 
 ### Route review questions
 
-- [ ] Answer the route's 18 interview prompts in Juan's own words.
+- [X] Answer the route's 18 interview prompts in Juan's own words.
 
 ### Three-minute walkthrough
 
-- Duration:
-- Completed without notes:
-- Notes / misses:
+- Duration: 3:02
+- Completed without notes: Yes
+- Notes / misses: all good.
 
 Walk through architecture, atomic spend controls, one answer + one honest gap + one refusal, kill switch, cold-start/lease evidence, rollback, and honest Day 30 boundary.
 
@@ -10859,7 +10859,7 @@ Sent:
 3. Juan implements persistent admission and control locally, then runs deterministic and real-store tests.
 4. Juan changes/reviews Azure and Vercel configuration only after Block 0 passes.
 5. Juan requests explicit paid-smoke approval after the dedicated key, caps and kill switch are verified.
-6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes.
+6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes. DONE
 7. **TODO before Week 6 closure (HER-271):** shorten the Azure startup probe's period from 15 s to 5 s, while keeping a restart budget above the measured startup. Two of three cold samples on 2026-11-02 went past the BFF's 75 s, and each lost 12–14 s waiting for the next probe. Block 6 added three direct `/health` cold samples: 71.1, 69.7 and 80.5 s. Details, the `failureThreshold` cap and a candidate setting: `docs/day-29-runbook.md` §5.4, "TODO before Week 6 closure".
 8. **Decide before Day 30's public launch (HER-271): the Azure Free Trial's credit expires 2026-11-18 15:45 UTC.** After that, the subscription is disabled unless it is upgraded to pay-as-you-go, and the hosted chat goes "Demo offline". Upgrading removes the hard spending stop, so 0.3's prices become real money, and the budget, the kill switch and the owner's action become the only guards. Re-check that the budget's evaluated spend moves once charges are real (`docs/day-29-runbook.md` §0.2, §0.3).
    - **Decision (Juan, 2026-11-03): continue on pay-as-you-go.** Upgrade **before** 2026-11-18 15:45 UTC: Microsoft keeps the remaining credit until that date, so an early upgrade costs nothing extra and avoids the outage. Choose the free Basic support plan, since a paid plan alone breaks the US$10 ceiling. Afterwards, re-read the subscription's offer and spending limit, and the budget.
