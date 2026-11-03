@@ -149,19 +149,30 @@ properties:
           # loading is never mistaken for a hung process. After
           # failureThreshold failures in a row, the replica is restarted.
           #
-          # Budget: first probe at 10 s, then one every 15 s, for up to 10
-          # failures, i.e. about 10 + 10 x 15 = 160 s before a restart.
-          # Measured startups: 23 s (Mac, 1 CPU), 51 s (Hermes VM, amd64),
-          # 57 s (amd64 emulated on the Mac, 1 CPU). 160 s is about 3x the
-          # slowest of them. The price of the 15 s period: a ready replica
-          # can wait up to 15 s for its first successful probe, and cold
-          # starts include that wait.
+          # Budget: first probe at 25 s, then one every 5 s, for up to 10
+          # failures, i.e. about 25 + 10 x 5 = 75 s before a restart.
+          #
+          # Why 5 s (Day 29, HER-271): a ready replica waits for the next
+          # probe before it gets traffic. With the old 15 s period that wait
+          # was 12-14 s in two of three cold samples, and it pushed both past
+          # the BFF's question timeout (docs/day-29-runbook.md §5.4). A 5 s
+          # period caps the wait at 5 s.
+          #
+          # Why the first probe at 25 s: failureThreshold is capped at 10, so
+          # a shorter period also shortens the restart budget (10 + 10 x 5
+          # would be only 60 s). On Azure, container start to "Application
+          # startup complete" measured 24-28 s (samples 1-3), so probes
+          # before 25 s would only fail. 75 s is about 2.7x that, and still
+          # above the slowest startup measured anywhere: 23 s (Mac, 1 CPU),
+          # 51 s (Hermes VM, amd64), 57 s (amd64 emulated on the Mac, 1 CPU).
+          # If a slower host ever needs more, raise initialDelaySeconds (max
+          # 60), not the period.
           - type: Startup
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 10
-            periodSeconds: 15
+            initialDelaySeconds: 25
+            periodSeconds: 5
             timeoutSeconds: 5
             failureThreshold: 10
 

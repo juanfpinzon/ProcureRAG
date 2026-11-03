@@ -301,7 +301,7 @@ jobs:
 
           # Single revision mode: the previous revision keeps all traffic
           # until the new one passes its probes. Wait up to 10 minutes (the
-          # startup probe alone allows about 160 s).
+          # startup probe alone allows about 75 s before a restart).
           for _ in $(seq 60); do
             ready=$(az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
               --query properties.latestReadyRevisionName -o tsv)

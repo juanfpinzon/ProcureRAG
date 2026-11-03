@@ -698,6 +698,7 @@ Vercel's and Azure's clocks are both synced server clocks, well within a second 
   - Container Apps caps `failureThreshold` at 10, so the period also sets the restart budget. Today it is 10 + 10 × 15 ≈ 160 s (`deploy/azure/containerapp-template.yaml`). `periodSeconds: 5` alone would cut it to about 60 s.
   - A candidate: `initialDelaySeconds: 25` and `periodSeconds: 5`, so probes run from 25 s to about 70 s, a budget of about 75 s. On Azure, container start to `Application startup complete` measured 24–28 s (samples 1–3). Three more cold samples, each a direct `/health` from the laptop with no BFF: 71.1 s (6.1), 69.7 s (6.2), and 80.5 s for the first request to the new revision `0000004` (6.3), about 2 minutes after Azure reported it ready.
   - Choose the budget, then change the template and its comment together. Redeploy through `deploy.yml` (reviewer approval), then take one cold sample as in 5.4. The wait from startup to the next probe must be ≤ 5 s.
+  - **2026-11-03, after the Hermes review:** the template now has the candidate (25 s / 5 s / 10, a budget of about 75 s). Not deployed yet. Deploying it and re-measuring are R2 and R4 in "Review follow-up" at the end of this file.
 - **Lever, not taken:** a smaller image. Every cold start pulled 698 MB, in 18–29 s.
 
 ### 5.5 Paid launch smoke (only after you approve the spend)
@@ -886,7 +887,7 @@ SCAN 0 MATCH procurerag-demo:<domain>:* COUNT 100
 TTL procurerag-demo:<domain>:chat:global:<day>
 ```
 
-Expect key names of these shapes only: `chat:enabled`, `chat:in_flight`, `chat:global:<day>`, `chat:client:<day>:<64 hex>`, `status:global:<day>`, `status:client:<day>:<64 hex>`. The 64 hex characters are the HMAC digest, never an address: do not copy them. `chat:in_flight` is missing when no lease is live, because the set expires 240 s after the last admission. The `TTL` must be under 90,000 s: a daily key lives until 00:00 UTC plus 1 hour. `<day>` is year first, as `date -u +%F` prints it (`2026-11-02`). A `TTL` of `-2` means no such key: check the date's format.
+Expect key names of these shapes only: `chat:enabled`, `chat:in_flight`, `chat:global:<day>`, `chat:client:<day>:<64 hex>`, `status:global:<day>`, `status:client:<day>:<64 hex>`. The 64 hex characters are the HMAC digest, never an address: do not copy them. `chat:in_flight` is missing when no lease is live, because the set expires a minute after its newest lease would (lease TTL + 60 s: 240 s with the 180 s lease used on 11-02, 300 s with the 240 s lease from the review follow-up). The `TTL` must be under 90,000 s: a daily key lives until 00:00 UTC plus 1 hour. `<day>` is year first, as `date -u +%F` prints it (`2026-11-02`). A `TTL` of `-2` means no such key: check the date's format.
 
 **7. GitHub Actions** (both repositories are public, so anyone can read these logs):
 
@@ -1063,3 +1064,116 @@ unset PROCURERAG_SERVICE_TOKEN ROLLBACK_IMAGE RUNNING NEW_REVISION RENDERED LIVE
 **Result (2026-11-02): pass, with one limit recorded.** All three layers turned back on their own and returned, each read back by id: the chat by its switch, Vercel by deployment id, Azure by revision and `PROCURERAG_LIVE_LLM`. The limit: that new production deploys go live again after the promote is shown only by Day 30's first `vercel deploy --prod` (6.2 row). Day 30 starts from this state: switch OFF, `0000005` live-capable, B serving.
 
 Do not rehearse by deleting resources, and do not touch `master` / Pages.
+
+## Review follow-up (Hermes, 2026-11-03): before the public switch
+
+The review found four things. The code and documents for each are changed but **not committed or deployed**. What is left is yours, in this order. Steps R4 and R5 are paid and need your approval, as in 5.5.
+
+| Finding | Changed (uncommitted) | Left for you |
+|---|---|---|
+| High: portfolio PR #4 has no CI | portfolio `.github/workflows/ci.yml`: the seven local gate commands, no secret | R1 |
+| High: a cold question can outrun the BFF's 75 s | portfolio: `UPSTREAM_TIMEOUT_MS` 75 → 90 s, `LEASE_TTL_MS` 180 → 240 s, the "up to a minute and a half" copy, two arithmetic tests, the "ask while checking" UI test, ADR §8.3.1 and §8.4. ProcureRAG: the 5 s startup probe (`deploy/azure/containerapp-template.yaml`) | R1–R6 |
+| Medium: US$10 is a target, not an enforced ceiling | portfolio: ADR §8.2 "Day 29 result", the roadmap line on `/procurerag`, the `lib/chat/status.ts` comment | R7 |
+| Low: unfinished learning-log fields | `docs/learning-log.md`: "What became clearer", "Sent", "Hermes review" | your line-by-line read |
+
+### R1. Portfolio: CI and the real-store proof (free)
+
+After you have reviewed and committed the portfolio changes on `day-29-hosting`:
+
+```bash
+cd ~/python_projects/juanfpinzon.github.io
+git push
+gh pr checks 4 --watch
+```
+
+Expect one check, `build-and-test`, passing. In its log, the Playwright step should read **199 passed, 10 skipped**: the 10 are the real-store spec, which skips itself because CI has no store variables.
+
+Then run the real-store proof once more, as in Blocks 1–2. The lease tests use `LEASE_TTL_MS`, so this shows the Lua scripts on the real store with the new 240 s lease. Expect 10 passed.
+
+### R2. Azure: deploy the 5 s startup probe (free; reviewer-gated)
+
+After PR #17 merges and CI passes on the merge commit, run `deploy.yml` from `main` with `live_llm` = `1`, as in run #6. Then read the probe back:
+
+```bash
+az containerapp show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+  --query "properties.template.containers[0].probes[?type=='Startup'] | [0].{initial:initialDelaySeconds, period:periodSeconds, failures:failureThreshold}" -o table
+```
+
+Expect `25`, `5`, `10`, on a new revision that is ready and serves 100%.
+
+### R3. Vercel: deploy the portfolio change (free)
+
+From the reviewed `day-29-hosting`, as in Block 4:
+
+```bash
+vercel deploy --prod
+vercel inspect "$SITE" 2>&1 | grep -E '^\s+(id|created)\s'
+```
+
+Expect a new deployment id. This also closes 6.2's open limit: it shows that a new production deploy goes live after the promote.
+
+### R4. Three cold questions with the LLM on (paid: your approval)
+
+**What this decides:** whether the 90 s question timeout really covers a cold start once the 5 s probe is live. With the old 15 s probe, the slowest cold path was 84 s, only 6 s under 90 s.
+
+- **Cost:** at most US$0.0031 per question (the worst case), about US$0.0002 measured. Each one uses 1 of today's 54 and 1 of your 10.
+- **Setup:** the kill switch must be ON (Upstash CLI) for these questions and R5. Turn it back OFF in R6.
+- **Each sample:** follow 5.4 steps 1–4, with one change: send a preset that is answered, e.g. Q005's exact text, instead of Q001. Wait for `0` replicas before each sample (at least 5 minutes apart).
+
+Read the same times as in 5.4, plus the first `GET /health` 200 in the console log. That line is about when the startup probe passed.
+
+| Sample | Replicas before | `curl` HTTP, time | Vercel `latency_ms`, `state`, `lease` | `ContainerStarted` (+ pull) | `Application startup complete` | first `GET /health` 200 | `POST /query` | startup → probe (≤ 5 s?) | cold path, margin to 90 s |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | | | | | | | | | |
+| 2 | | | | | | | | | |
+| 3 | | | | | | | | | |
+
+**Decide:**
+
+- **Pass:** all three are `answered` (or another API state, not `timed_out`), and the slowest cold path is ≤ 80 s, which leaves at least 10 s under the timeout.
+- **Fail:** any `timed_out`, or a cold path over 80 s. Do not turn on the public switch. The levers, in order:
+  - a smaller image (every cold start pulled 698 MB, in 18–29 s);
+  - a longer `maxDuration` (Hobby allows up to 300 s), with the BFF timeout, the browser timeout and the lease re-derived together. The timeout alone cannot grow: 90 s plus three 3 s store calls is already 99 s of the 100 s. `tests/deployment-config.spec.ts` fails until the numbers fit.
+- **Also note** the time from the probe passing to `POST /query`. It was 3.8 s in sample 3 of 5.4. If it gets close to 10 s, the readiness probe's 10 s period is the next wait to cut.
+
+### R5. The deployed race: ask while the warm-up is still checking (paid: 1 question)
+
+This is the case the review described, on the real chain. From a cold replica (`0` replicas):
+
+1. Open `$SITE/procurerag` in a new private window and scroll straight to the chat.
+2. While the line still says "Checking the live service…", click the Q005 preset and press **Ask**, within about 2 s.
+3. Expect an answer, not "Took too long". The warm-up line turns "awake" before or after the answer, in either order.
+4. Vercel logs: one `/api/chat/status` line (`ready`) and one `/api/chat` line (`answered`, `lease: released`). Record both `latency_ms`.
+
+### R6. Kill switch back OFF
+
+Upstash CLI: `SET procurerag-demo:<domain>:chat:enabled false`, then `GET` it. Day 30 turns it on.
+
+### R7. The US$10 budget target: alert delivery and the owner
+
+**The words to use** in the portfolio, the CV and interviews: "a US$10 Azure budget target with alerts and a manual shutdown procedure". Never "a hard cloud spending cap". The only enforced spend limit is the OpenRouter key's US$5. Max 1 replica bounds Azure at about US$77 a month, not US$10 (0.3).
+
+**Alert delivery can only be tested once there are real charges.** While the credit pays, the budget evaluates US$0.00 (0.3), so no alert can fire. The credit ends on 2026-11-18. After the upgrade, and once charges appear:
+
+1. Cost Management → Budgets → Add, at the same scope as `procurerag-budget`: a **temporary** budget of US$1 a month, with one alert at 50% of actual cost, emailed to you. The registry alone (about US$0.17 a day) crosses US$0.50 within about 3 days of real charges.
+2. Record the day Cost analysis shows the crossing, and when the email arrives. The gap between them is the real alert delay.
+3. Delete the temporary budget.
+
+Until then, check that Azure's emails reach an inbox you read on your phone, and are not filtered as spam.
+
+**The owner and the response:** you, within 24 hours of an alert. The kill switch takes seconds (5.2), and ingress off took 17 s in the rehearsal (Block 2). Cost data arrives hours late, so a 24/7 runaway (about US$2.58 a day) can add about US$5 before the action lands. That is why US$10 is a target, not a cap.
+
+**Not built (a backlog option, not Day 29 scope):** an automatic watchdog, such as a budget alert → action group → Automation runbook or Logic App that turns ingress off. It would remove your reaction time, but not the hours of cost-data delay. Before choosing it, check whether a budget at the billing-account scope can call an action group, or whether it needs a subscription-scope budget.
+
+**Record:**
+
+| Step | Evidence | Result |
+|---|---|---|
+| R1 CI | | |
+| R1 real-store proof | | |
+| R2 probe | | |
+| R3 Vercel | | |
+| R4 cold questions | (table above) | |
+| R5 race | | |
+| R6 switch OFF | | |
+| R7 alert delivery | | |

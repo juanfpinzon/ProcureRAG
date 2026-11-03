@@ -10611,6 +10611,8 @@ ADR/test/config updates:  none to the value. The `LEASE_TTL_MS` comment and ADR 
                           Open (HER-271): a 5 s startup probe, because 2 of 3 cold samples went past the BFF's 75 s
 ```
 
+**After the Hermes review (2026-11-03):** the question timeout is now 90 s, the lease 240 s and the startup probe 5 s, all uncommitted and not deployed. See "Hermes review round 1" below.
+
 Log/privacy proof (runbook 5.6, 2026-11-02: pass, with two limits recorded):
 
 - [x] safe request metadata only (Vercel: one BFF line per request, 10 lines for 10 requests; Azure: access lines only);
@@ -10718,7 +10720,38 @@ git diff --check:         exit 0
 
 ### What became clearer
 
-- _Fill during implementation._
+1. **One sample is a hypothesis, not a bound.**
+   - Sample 1 (55 s) made me write "a cold visitor gets an answer" and a 56% lease margin. Samples 2 and 3 (over 75 s, and 84 s) withdrew both claims.
+   - The cold path moves by about 30 s between runs: when the image pull starts (2 s or 14 s after the scale-up), how long it takes (18–29 s), and where the app lands in the probe's 15 s cycle.
+   - So a timeout or a TTL needs several samples of the slow path, and its margin is measured against the slowest one, not the first.
+
+2. **The timeouts and the lease are one system.**
+   - The lease must outlive everything an admitted question can still make Azure do, and the latest the request can reach Azure is the BFF's timeout. Raising the timeout from 75 to 90 s moved the lease's bound from 174 s to 192 s (each with 10 s for retrieval and 60 s for the provider, plus 20%), past the 180 s I had kept.
+   - I had checked the lease against the cold samples, but not the question timeout against the same samples. The review did.
+   - Now a test checks the arithmetic, so one number cannot change alone.
+
+3. **The warm-up and the question wait for the same cold start.**
+   - I designed warm on intent as if the visitor would wait for it, but the Ask button never did. A visitor who scrolls and clicks a preset at once sends the question into the cold start the check has just begun.
+   - There were two honest fixes: disable Ask while checking, or let the question's own timeout cover a cold start. I chose the second. The check stays advice, not a gate, and nobody waits up to 84 s before they can ask.
+   - The question starts after the check, so if the check finishes within 90 s, so does the question's wait. A UI test now sends a question while the check is held open.
+
+4. **"Ceiling" meant two different things.**
+   - The LLM's US$5 is enforced outside my code: OpenRouter refuses the key past it.
+   - Azure's US$10 is a target. Max 1 replica bounds compute at about US$77 a month. A budget only emails, from cost data that is hours late, and an unauthenticated request still wakes the replica.
+   - The trial's spending limit was the only hard Azure stop, and I found it only on 11-03. After pay-as-you-go there is none.
+   - So the words are "a US$10 Azure budget target with alerts and a manual shutdown procedure", and the portfolio now says "a provider-enforced LLM spend limit, a cloud budget alert".
+
+5. **Local green is a claim; CI green is evidence.**
+   - ProcureRAG has had a credential-free CI gate since Day 24. The portfolio's tests ran only on my laptop, so PR #4's reviewer could not see them pass.
+   - The new workflow runs the same seven commands with no secret. The real-store spec skips itself there and stays a hand-run proof.
+
+6. **Write evidence down when it happens.**
+   - Vercel keeps runtime logs for 1 hour. I had to rebuild 5.1's "zero upstream" and the ingress rehearsal from Azure's Activity Log and console log, days later.
+   - Azure's 30–90 days of retention saved that evidence; Vercel's would not have.
+
+7. **Git-ignored is not the same as safe.**
+   - The Vercel CLI wrote `.env.local` files holding an OIDC token in both repositories, and a `.vercel/` link in the wrong one. The dedicated OpenRouter key sat in ProcureRAG's ignored `.env` for four days.
+   - None was committed, but each one broke a rule or a test. A `git status --ignored` after any CLI session that logs in or links would have caught all three.
 
 ### What I can now explain in an interview
 
@@ -10850,7 +10883,39 @@ Walk through architecture, atomic spend controls, one answer + one honest gap + 
 
 > “Review Day 29 across ProcureRAG and the portfolio against the accepted architecture ADR and `docs/day-29-hosted-portfolio-demo.md`. Verify atomic admission across global/client/in-flight caps; lease expiry/release semantics; fail-closed store, trusted-address and kill-switch paths; no quota refund or automatic retry; no raw IP/payload/secret storage or logs; one enabled budget domain across deployments; Azure secret refs and digest-gated deployment; Vercel `dub1` and server-only settings; status-route abuse bounds; exact spend controls; deployed smoke/manual answer verdicts; measured cold-start-derived lease TTL; rollback evidence; and that Day 30 cutover/public claims remain undone. Treat faked Redis calls, green HTTP alone, unverified provider-key limits, or missing live-chain evidence as insufficient. Juan owns implementation.”
 
-Sent:
+Sent: yes, 2026-11-03 (Juan). Hermes reviewed ProcureRAG PR #17 and portfolio PR #4 and returned 4 findings (2 High, 1 Medium, 1 Low), addressed in the next section.
+
+### Hermes review round 1 (2026-11-03)
+
+Each change below is made in the working trees, **uncommitted and not deployed**. The steps left for me are R1–R7 in `docs/day-29-runbook.md`, "Review follow-up".
+
+1. **High: portfolio PR #4 had no CI.** Agreed. The workflow is written; its first run is pending.
+   - The finding was right: `gh pr checks 4` showed no checks, and every portfolio gate had run only on my laptop.
+   - Added `.github/workflows/ci.yml`: `npm ci`, `npm audit --omit=dev`, typecheck, lint, build, Playwright, `git diff --check`. It uses no secret, triggers on `pull_request` (not `pull_request_target`), has a read-only token, and pins every action by SHA.
+   - Two details differ from the review's list. Chromium is installed before `npm test`. `git diff --check` compares the change with its base (`HEAD^1`), because the whole tree fails on the legacy Jekyll files (`_config.yml`, `index.md`).
+   - In CI the real-store spec skips itself (no store variables), so its 10 tests stay a hand-run proof (R1).
+   - The same commands, run locally on 2026-11-03: all exit 0; Playwright 199 passed, 10 skipped.
+   - Side finding: a full `npm audit` now reports 16 moderate advisories, all in dev-only ESLint plugins (through `minimatch`). `--omit=dev` is clean, and none of them ships.
+
+2. **High: a cold visitor could outrun the 75 s question timeout.** Agreed. The numbers are changed; the deployed proof is pending.
+   - Right on the substance: three of six cold paths (sample 2, 80.5 s and 84 s) were past 75 s, and Ask stays enabled while the check runs. The review cited `server-config.ts`; the timeout lives in `lib/chat/bff.ts`.
+   - **Decision:** keep Ask enabled, and make the question's timeout cover a cold start: **90 s**, above all six samples. It cannot go much higher, because 90 s plus three 3 s store calls is 99 s of the 100 s `maxDuration`.
+   - **Lease re-derived:** (90 + 10 retrieval + 60 provider) × 1.2 = 192 s, so 180 s was no longer enough. Now **240 s**. The cost: after a timeout, a slot stays blocked for up to 4 minutes instead of 3.
+   - **Tests:** two arithmetic tests (the timeout against the slowest cold path and `maxDuration`; the lease against the continuation) and one UI test that asks while the check is held open. Each went red under its mutation: the timeout back to 75 s, the timeout at 95 s, the lease back to 180 s, and Ask disabled while checking.
+   - **Startup probe:** 25 s / 5 s / 10 in the template, a budget of about 75 s, above every startup measured on any host (57 s at most). Not deployed.
+   - **Copy:** "about a minute" became "up to a minute and a half", because the measured cold starts were 55–84 s.
+   - **Still open:** 90 s is only 6 s above the slowest sample. Before the public switch: deploy both changes (R2, R3), take three cold answered questions (R4), and run the real race once (R5). If the slowest cold path is over 80 s, the switch stays off.
+
+3. **Medium: the US$10 is an operational target, not an enforced ceiling.** Agreed. The words are changed.
+   - Enforced: OpenRouter's US$5 key limit, and max 1 replica, which bounds Azure at about US$77 a month, not US$10.
+   - Not enforced: the US$10. A budget emails from late cost data, and after pay-as-you-go nothing stops a resource.
+   - Changed: ADR §8.2 now says so. The `/procurerag` roadmap says "a provider-enforced LLM spend limit, a cloud budget alert" instead of "a spend ceiling".
+   - **Alert delivery cannot be tested yet.** While the credit pays, the budget evaluates US$0.00. After the credit ends (2026-11-18), a temporary US$1 budget measures the real delay (R7). If Day 30 comes first, the alert is still untested at launch: the launch notes say so, or the launch waits.
+   - Owner: me, within 24 hours of an alert. Cost data is hours late, so a runaway can add about US$5 before I act. A watchdog that turns ingress off is a backlog option, not built.
+
+4. **Low: unfinished learning-log fields.** Fixed: "What became clearer" and "Sent" are filled in above.
+
+Interview answers 3 and 11 still describe the deployed Day 29 values (75 s, 180 s, the probe as a TODO). Update them after R2–R4.
 
 ### Next step
 
@@ -10861,5 +10926,8 @@ Sent:
 5. Juan requests explicit paid-smoke approval after the dedicated key, caps and kill switch are verified.
 6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes. DONE
 7. **TODO before Week 6 closure (HER-271):** shorten the Azure startup probe's period from 15 s to 5 s, while keeping a restart budget above the measured startup. Two of three cold samples on 2026-11-02 went past the BFF's 75 s, and each lost 12–14 s waiting for the next probe. Block 6 added three direct `/health` cold samples: 71.1, 69.7 and 80.5 s. Details, the `failureThreshold` cap and a candidate setting: `docs/day-29-runbook.md` §5.4, "TODO before Week 6 closure".
+   - **2026-11-03, after the Hermes review:** the template has the candidate (25 s / 5 s / 10), uncommitted. Deploy it and re-measure: runbook R2 and R4.
 8. **Decide before Day 30's public launch (HER-271): the Azure Free Trial's credit expires 2026-11-18 15:45 UTC.** After that, the subscription is disabled unless it is upgraded to pay-as-you-go, and the hosted chat goes "Demo offline". Upgrading removes the hard spending stop, so 0.3's prices become real money, and the budget, the kill switch and the owner's action become the only guards. Re-check that the budget's evaluated spend moves once charges are real (`docs/day-29-runbook.md` §0.2, §0.3).
    - **Decision (Juan, 2026-11-03): continue on pay-as-you-go.** Upgrade **before** 2026-11-18 15:45 UTC: Microsoft keeps the remaining credit until that date, so an early upgrade costs nothing extra and avoids the outage. Choose the free Basic support plan, since a paid plan alone breaks the US$10 ceiling. Afterwards, re-read the subscription's offer and spending limit, and the budget.
+   - **After the upgrade, once real charges appear:** test alert delivery with a temporary US$1 budget, and record the real delay (runbook R7).
+9. **Before Day 30's public switch (Hermes review, 2026-11-03):** runbook "Review follow-up", R1–R6. That is CI on portfolio PR #4, the real-store proof with the 240 s lease, the probe and portfolio deploys, three cold answered questions, the deployed race, and the switch back OFF.
