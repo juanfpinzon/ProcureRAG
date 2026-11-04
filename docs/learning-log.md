@@ -10611,7 +10611,7 @@ ADR/test/config updates:  none to the value. The `LEASE_TTL_MS` comment and ADR 
                           Open (HER-271): a 5 s startup probe, because 2 of 3 cold samples went past the BFF's 75 s
 ```
 
-**After the Hermes review (2026-11-03):** the question timeout is now 90 s, the lease 240 s and the startup probe 5 s, all uncommitted and not deployed. See "Hermes review round 1" below.
+**After the Hermes review (2026-11-03):** the question timeout is now 90 s, the lease 240 s and the startup probe 5 s, deployed on 2026-11-03 (Azure `0000006`, Vercel `dpl_CNMNGCuhTVy5U3LhvuvCL4mYYbkT`). See "Hermes review round 1" below.
 
 Log/privacy proof (runbook 5.6, 2026-11-02: pass, with two limits recorded):
 
@@ -10770,10 +10770,10 @@ Write concise answers without reading the route:
    - The real-store tests prove both: a release frees only its own lease, and an expired lease is pruned while a live one stays.
 
 3. **Why a timeout does not release a lease or refund quota:** a timeout only means the BFF stopped waiting.
-   - After the BFF's 75 s, Azure may still be starting, retrieving and making its one paid provider call (60 s).
+   - After the BFF's 90 s (75 s until the Hermes review), Azure may still be starting, retrieving and making its one paid provider call (60 s).
    - Releasing the lease would let a third question start while two are still running. That breaks the in-flight cap and the spend it bounds.
    - Refunding would make failures free: a pattern that always fails or times out could loop without ever touching the daily caps. And the provider may already have been paid.
-   - Deployed proof: the 2026-11-02 canary timed out at 75 s and logged `lease: "kept_until_expiry"`. M1 (release on timeout) and M6 (refund on non-200) both turned tests red.
+   - Deployed proof: the 2026-11-02 canary timed out at 75 s, the timeout at the time, and logged `lease: "kept_until_expiry"`. M1 (release on timeout) and M6 (refund on non-200) both turned tests red.
 
 4. **Why the Vercel client address is trustworthy deployed but not in a local test:** the trust comes from who writes the header, not from its name.
    - On Vercel, the edge sets `x-vercel-forwarded-for` and overwrites whatever the client sent, so the value is the address Vercel itself saw.
@@ -10803,7 +10803,7 @@ Write concise answers without reading the route:
 8. **Why an Azure budget is not a hard spending limit:** a budget only evaluates cost data and sends email.
    - The data arrives hours late, and nothing in a budget stops a resource. A 24/7 runaway costs about US$2.58 a day, so the forecast alert fires roughly a day after the data lands, and then I still have to act.
    - Mine is US$10 a month on the billing account, alerting at 60% and 100% of actual cost and at 100% of forecast.
-   - The only hard stop I have is the trial's spending limit, which disables the subscription instead of charging. Pay-as-you-go cannot have one. Once I upgrade (before 11-18), the alert plus my action is the ceiling.
+   - The only hard stop I have is the trial's spending limit, which disables the subscription instead of charging. Pay-as-you-go cannot have one. Once I upgrade (before 11-18), the US$10 is a budget target held by the alert plus my action, not a cap.
 
 9. **Why an unauthenticated request can still cost Azure compute:** the 401 is decided by FastAPI inside the container, and with scale to zero there may be no container yet.
    - The ingress counts the request, and the HTTP scaler takes the app from 0 to 1 replica *before* my code can refuse it. Sample 1 shows it: KEDA scaled "from 0 to 1, triggered by `s0-upstream_rq_total`".
@@ -10817,10 +10817,11 @@ Write concise answers without reading the route:
     - Easy Auth is built for users signing in with an identity provider. My caller is a service, my own BFF, so a shared service token is the right tool. I am clear that it is service identity ("this came through my BFF"), not enterprise identity.
 
 11. **What work continues after a timeout, and how that set the lease TTL:** the lease must outlive everything an admitted question can still make Azure do, counted from admission, not just the function's 100 s.
-    - Continuation = cold start + retrieval + one provider call (60 s timeout, `max_retries=0`). The written margin is 20%.
-    - Sample 1 (cold, LLM off) took 55.3 s: (55.3 + 60) × 1.2 = 138 s, so 180 s looked comfortable.
-    - Samples 2 and 3 corrected that. The cold paths took more than 75 s and 84 s, mostly because of the 15 s probe cadence and slower image pulls. If the ingress still routes a held request after the BFF disconnects, the bound is (84 + 60) × 1.2 ≈ 173 s, plus retrieval.
-    - I kept 180 s, but the margin is a few seconds and rests on one untested assumption. A 5 s startup probe is my TODO before Week 6 closes.
+    - Continuation = the time until the request reaches Azure + retrieval + one provider call (60 s timeout, `max_retries=0`). The written margin is 20%.
+    - Sample 1 (cold, LLM off) took 55.3 s: (55.3 + 60) × 1.2 = 138 s, so the provisional 180 s looked comfortable.
+    - Samples 2 and 3 corrected that. The cold paths took more than 75 s and 84 s, mostly because of the 15 s probe cadence and slower image pulls. That left 180 s only a few seconds of margin.
+    - Then the Hermes review showed that a visitor can ask while the warm-up is still checking. So the question's timeout must cover a whole cold start, and I raised it to 90 s. That makes 90 s the latest a request can reach Azure: (90 + 10 retrieval + 60) × 1.2 = 192 s, past 180 s. The lease is now 240 s, and a test fails if the timeout and the lease stop fitting together.
+    - With the 5 s startup probe deployed, three cold answered questions took 59.6–65.3 s, all under 90 s. All three got the fast image pull, so the slow path is projected, not measured: about 75–81 s.
 
 12. **What the kill switch stops, what it does not cancel, and how fast it took effect:** it stops new work.
     - The BFF reads one key with one `GET` before admission, on every chat and status request, and caches nothing. Only the exact string `true` is on. A missing key, any other value or a store error is off.
@@ -10865,7 +10866,7 @@ Write concise answers without reading the route:
     - The chain runs at `procure-rag.vercel.app` with the kill switch **off**.
     - The portfolio still says "Live demo: in progress", and `juanfpinzon.github.io` still serves the legacy Jekyll site from `master`.
     - Day 30 owns the cutover: the switch on, the public URL, canonical and share metadata, redirects, and the CV and LinkedIn links.
-    - Before that, I must also upgrade the Azure trial (it ends 11-18) and decide on the 5 s startup probe.
+    - Before that, I must also upgrade the Azure trial (it ends 11-18). The 5 s startup probe is no longer open: it is deployed and re-measured (the Hermes review follow-up).
 
 ### Route review questions
 
@@ -10887,24 +10888,27 @@ Sent: yes, 2026-11-03 (Juan). Hermes reviewed ProcureRAG PR #17 and portfolio PR
 
 ### Hermes review round 1 (2026-11-03)
 
-Each change below is made in the working trees, **uncommitted and not deployed**. The steps left for me are R1–R7 in `docs/day-29-runbook.md`, "Review follow-up".
+The changes below were committed on 2026-11-03: ProcureRAG `0b33648` (merged with PR #17 as `74ec76b`), portfolio `5ffaa49` (PR #4). They were deployed the same day: Azure `procurerag-api--0000006`, Vercel `dpl_CNMNGCuhTVy5U3LhvuvCL4mYYbkT`. The steps and their evidence are R1–R7 in `docs/day-29-runbook.md`, "Review follow-up".
 
-1. **High: portfolio PR #4 had no CI.** Agreed. The workflow is written; its first run is pending.
+1. **High: portfolio PR #4 had no CI.** Agreed. Fixed: CI passes on PR #4.
    - The finding was right: `gh pr checks 4` showed no checks, and every portfolio gate had run only on my laptop.
    - Added `.github/workflows/ci.yml`: `npm ci`, `npm audit --omit=dev`, typecheck, lint, build, Playwright, `git diff --check`. It uses no secret, triggers on `pull_request` (not `pull_request_target`), has a read-only token, and pins every action by SHA.
    - Two details differ from the review's list. Chromium is installed before `npm test`. `git diff --check` compares the change with its base (`HEAD^1`), because the whole tree fails on the legacy Jekyll files (`_config.yml`, `index.md`).
-   - In CI the real-store spec skips itself (no store variables), so its 10 tests stay a hand-run proof (R1).
+   - In CI the real-store spec skips itself (no store variables), so its 10 tests stay a hand-run proof (R1). Run again on 2026-11-03 with the 240 s lease: 10 passed in 8.5 s.
    - The same commands, run locally on 2026-11-03: all exit 0; Playwright 199 passed, 10 skipped.
+   - First CI run on PR #4 (`5ffaa49`, run 41633954112): `build-and-test` passed in 2m2s, with the same counts and `npm audit --omit=dev` clean. The push run after PR #4's merge into `0ct26-overhaul` (`d59e193`) passed too.
    - Side finding: a full `npm audit` now reports 16 moderate advisories, all in dev-only ESLint plugins (through `minimatch`). `--omit=dev` is clean, and none of them ships.
 
-2. **High: a cold visitor could outrun the 75 s question timeout.** Agreed. The numbers are changed; the deployed proof is pending.
+2. **High: a cold visitor could outrun the 75 s question timeout.** Agreed. Fixed and deployed; the deployed proof passed, with one limit.
    - Right on the substance: three of six cold paths (sample 2, 80.5 s and 84 s) were past 75 s, and Ask stays enabled while the check runs. The review cited `server-config.ts`; the timeout lives in `lib/chat/bff.ts`.
    - **Decision:** keep Ask enabled, and make the question's timeout cover a cold start: **90 s**, above all six samples. It cannot go much higher, because 90 s plus three 3 s store calls is 99 s of the 100 s `maxDuration`.
    - **Lease re-derived:** (90 + 10 retrieval + 60 provider) × 1.2 = 192 s, so 180 s was no longer enough. Now **240 s**. The cost: after a timeout, a slot stays blocked for up to 4 minutes instead of 3.
    - **Tests:** two arithmetic tests (the timeout against the slowest cold path and `maxDuration`; the lease against the continuation) and one UI test that asks while the check is held open. Each went red under its mutation: the timeout back to 75 s, the timeout at 95 s, the lease back to 180 s, and Ask disabled while checking.
-   - **Startup probe:** 25 s / 5 s / 10 in the template, a budget of about 75 s, above every startup measured on any host (57 s at most). Not deployed.
+   - **Startup probe:** 25 s / 5 s / 10 in the template, a budget of about 75 s, above every startup measured on any host (57 s at most). Deployed as `0000006`, and read back.
    - **Copy:** "about a minute" became "up to a minute and a half", because the measured cold starts were 55–84 s.
-   - **Still open:** 90 s is only 6 s above the slowest sample. Before the public switch: deploy both changes (R2, R3), take three cold answered questions (R4), and run the real race once (R5). If the slowest cold path is over 80 s, the switch stays off.
+   - **Three cold answered questions (R4):** 65.0, 65.3 and 59.6 s, all `answered`, with leases released. The waits for the probe were 3.8, 3.0 and 0.4 s, where the 15 s probe had cost 12–14 s twice on 11-02.
+   - **The real race (R5):** a question sent 2.1 s after a cold check started (the check took 61.5 s) was `answered` in 62.4 s. The first attempt met a warm replica and proved nothing, so it was redone.
+   - **Limit:** all three R4 samples took the fast path: the image pull started 2.3–2.5 s after the scale-up, not 14 s as in the two slow samples of 11-02. The slow path is projected, not measured: about 75–81 s with the new probe. That is under 90 s, with about 10 s of margin. If it is ever slower, the question ends `timed_out` honestly, and the lease is kept.
 
 3. **Medium: the US$10 is an operational target, not an enforced ceiling.** Agreed. The words are changed.
    - Enforced: OpenRouter's US$5 key limit, and max 1 replica, which bounds Azure at about US$77 a month, not US$10.
@@ -10915,7 +10919,7 @@ Each change below is made in the working trees, **uncommitted and not deployed**
 
 4. **Low: unfinished learning-log fields.** Fixed: "What became clearer" and "Sent" are filled in above.
 
-Interview answers 3 and 11 still describe the deployed Day 29 values (75 s, 180 s, the probe as a TODO). Update them after R2–R4.
+Interview answers 3, 8, 11 and 18 were updated after R4 (2026-11-03): the 90 s timeout, the 240 s lease, the deployed probe, and "budget target" instead of "ceiling".
 
 ### Next step
 
@@ -10926,8 +10930,12 @@ Interview answers 3 and 11 still describe the deployed Day 29 values (75 s, 180 
 5. Juan requests explicit paid-smoke approval after the dedicated key, caps and kill switch are verified.
 6. Juan fills this evidence scaffold, answers the review questions and sends the review prompt to Hermes. DONE
 7. **TODO before Week 6 closure (HER-271):** shorten the Azure startup probe's period from 15 s to 5 s, while keeping a restart budget above the measured startup. Two of three cold samples on 2026-11-02 went past the BFF's 75 s, and each lost 12–14 s waiting for the next probe. Block 6 added three direct `/health` cold samples: 71.1, 69.7 and 80.5 s. Details, the `failureThreshold` cap and a candidate setting: `docs/day-29-runbook.md` §5.4, "TODO before Week 6 closure".
-   - **2026-11-03, after the Hermes review:** the template has the candidate (25 s / 5 s / 10), uncommitted. Deploy it and re-measure: runbook R2 and R4.
+   - **2026-11-03, after the Hermes review:** the template has the candidate (25 s / 5 s / 10), deployed as `0000006` (runbook R2). Re-measured in runbook R4: three cold answered questions, 59.6–65.3 s, all fast-path pulls (the slow path projected at 75–81 s).
 8. **Decide before Day 30's public launch (HER-271): the Azure Free Trial's credit expires 2026-11-18 15:45 UTC.** After that, the subscription is disabled unless it is upgraded to pay-as-you-go, and the hosted chat goes "Demo offline". Upgrading removes the hard spending stop, so 0.3's prices become real money, and the budget, the kill switch and the owner's action become the only guards. Re-check that the budget's evaluated spend moves once charges are real (`docs/day-29-runbook.md` §0.2, §0.3).
    - **Decision (Juan, 2026-11-03): continue on pay-as-you-go.** Upgrade **before** 2026-11-18 15:45 UTC: Microsoft keeps the remaining credit until that date, so an early upgrade costs nothing extra and avoids the outage. Choose the free Basic support plan, since a paid plan alone breaks the US$10 ceiling. Afterwards, re-read the subscription's offer and spending limit, and the budget.
    - **After the upgrade, once real charges appear:** test alert delivery with a temporary US$1 budget, and record the real delay (runbook R7).
 9. **Before Day 30's public switch (Hermes review, 2026-11-03):** runbook "Review follow-up", R1–R6. That is CI on portfolio PR #4, the real-store proof with the 240 s lease, the probe and portfolio deploys, three cold answered questions, the deployed race, and the switch back OFF.
+   - **Done on 2026-11-03:** R1–R6. The switch is OFF.
+   - The deployed key after today's 5 paid calls: `limit_remaining` 4.99750565, so US$0.0010971 in total, about US$0.00022 a call (runbook, Record: "Key spend after R4/R5").
+   - A second key, created by mistake to read that number, was deleted in OpenRouter and removed from ProcureRAG's `.env` the same day. The demo key lives only in the Azure secret.
+   - **Left from the review:** only R7, the budget-alert delivery test, which needs real charges (after 2026-11-18).
