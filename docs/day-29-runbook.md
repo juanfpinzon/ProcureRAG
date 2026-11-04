@@ -628,7 +628,7 @@ LEASE_TTL_MS               ≥ 1.2 × worst continuation      (the written margi
 
    ```bash
    az containerapp logs show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
-     --type system --tail 50 --format text       # the newest ContainerStarted (and PulledImage, if the host pulled the image)
+     --type system --tail 50 --format json       # the newest ContainerStarted (and PulledImage, if the host pulled the image)
    az containerapp logs show --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
      --type console --tail 100 --format text | grep -E 'Application startup complete|POST /query'
    ```
@@ -698,7 +698,7 @@ Vercel's and Azure's clocks are both synced server clocks, well within a second 
   - Container Apps caps `failureThreshold` at 10, so the period also sets the restart budget. Today it is 10 + 10 × 15 ≈ 160 s (`deploy/azure/containerapp-template.yaml`). `periodSeconds: 5` alone would cut it to about 60 s.
   - A candidate: `initialDelaySeconds: 25` and `periodSeconds: 5`, so probes run from 25 s to about 70 s, a budget of about 75 s. On Azure, container start to `Application startup complete` measured 24–28 s (samples 1–3). Three more cold samples, each a direct `/health` from the laptop with no BFF: 71.1 s (6.1), 69.7 s (6.2), and 80.5 s for the first request to the new revision `0000004` (6.3), about 2 minutes after Azure reported it ready.
   - Choose the budget, then change the template and its comment together. Redeploy through `deploy.yml` (reviewer approval), then take one cold sample as in 5.4. The wait from startup to the next probe must be ≤ 5 s.
-  - **2026-11-03, after the Hermes review:** the template now has the candidate (25 s / 5 s / 10, a budget of about 75 s). Not deployed yet. Deploying it and re-measuring are R2 and R4 in "Review follow-up" at the end of this file.
+  - **2026-11-03, after the Hermes review:** the template now has the candidate (25 s / 5 s / 10, a budget of about 75 s). Deployed the same day as `procurerag-api--0000006` (R2 in "Review follow-up", at the end of this file). The cold samples are R4.
 - **Lever, not taken:** a smaller image. Every cold start pulled 698 MB, in 18–29 s.
 
 ### 5.5 Paid launch smoke (only after you approve the spend)
@@ -1067,9 +1067,9 @@ Do not rehearse by deleting resources, and do not touch `master` / Pages.
 
 ## Review follow-up (Hermes, 2026-11-03): before the public switch
 
-The review found four things. The code and documents for each are changed but **not committed or deployed**. What is left is yours, in this order. Steps R4 and R5 are paid and need your approval, as in 5.5.
+The review found four things. The code and documents for each were changed, then committed on 2026-11-03: ProcureRAG `0b33648` (merged with PR #17 as `74ec76b`), portfolio `5ffaa49` (PR #4). What is left is yours, in this order. Steps R4 and R5 are paid and need your approval, as in 5.5.
 
-| Finding | Changed (uncommitted) | Left for you |
+| Finding | Changed | Left for you |
 |---|---|---|
 | High: portfolio PR #4 has no CI | portfolio `.github/workflows/ci.yml`: the seven local gate commands, no secret | R1 |
 | High: a cold question can outrun the BFF's 75 s | portfolio: `UPSTREAM_TIMEOUT_MS` 75 → 90 s, `LEASE_TTL_MS` 180 → 240 s, the "up to a minute and a half" copy, two arithmetic tests, the "ask while checking" UI test, ADR §8.3.1 and §8.4. ProcureRAG: the 5 s startup probe (`deploy/azure/containerapp-template.yaml`) | R1–R6 |
@@ -1124,9 +1124,23 @@ Read the same times as in 5.4, plus the first `GET /health` 200 in the console l
 
 | Sample | Replicas before | `curl` HTTP, time | Vercel `latency_ms`, `state`, `lease` | `ContainerStarted` (+ pull) | `Application startup complete` | first `GET /health` 200 | `POST /query` | startup → probe (≤ 5 s?) | cold path, margin to 90 s |
 |---|---|---|---|---|---|---|---|---|---|
-| 1 | | | | | | | | | |
-| 2 | | | | | | | | | |
-| 3 | | | | | | | | | |
+| 1 (2026-11-03, `0000006`, Q005) | 0: `AssigningReplica` at 15:10:56, the same second as t0 (`at` 15:10:56.069Z) | 200 in 65.88 s | 65023, `answered`, `released` | 15:11:23.984 (pull from 15:10:58.570: 698 MB in 18.26 s) | 15:11:50.156 | not read (the grep had no `GET /health`). Computed ≈ 15:11:54.0: the first probe, at 15:11:49.010, failed 1.1 s before startup, and the next comes 5 s later | 15:12:01.073 | ≈ 3.8 s: **yes** | **65.0 s**: 25.0 s under 90 s |
+| 2 (2026-11-03, `0000006`, Q005) | 0: KEDA "from 0 to 1, triggered by s0-upstream_rq_total" at 15:25:35, the same second as t0 (`at` 15:25:35.193Z) | 200 in 66.24 s | 65336, `answered`, `released` | 15:26:02.803 (pull from 15:25:37.714: 698 MB in 18.24 s) | 15:26:29.860 | not read. Computed ≈ 15:26:32.8: the first probe, at 15:26:27.835, failed 2.0 s before startup | 15:26:40.511 | ≈ 3.0 s: **yes** | **65.3 s**: 24.7 s under 90 s |
+| 3 (2026-11-03, `0000006`, Q005) | 0: KEDA 0 → 1 at 15:41:56, the same second as t0 (`at` 15:41:56.285Z) | 200 in 60.32 s | 59580, `answered`, `released` | 15:42:22.793 (pull from 15:41:58.605: 698 MB in 17.88 s) | 15:42:47.433 | not read. Computed ≈ 15:42:47.8: no `ProbeFailed`, so the first probe (container start + 25 s) passed | 15:42:55.847 | ≈ 0.4 s: **yes** | **59.6 s**: 30.4 s under 90 s |
+
+**Sample 1, from t0:** pull starts +2.5 s, image pulled +21.7 s, container started +27.9 s, first startup probe +52.9 s (it failed: the app was not listening yet, as expected with a 25 s delay and a 26.2 s startup), `Application startup complete` +54.1 s, probe passes ≈ +57.9 s, answered +65.0 s. Vercel's end (`at` + `latency_ms` = 15:12:01.092) is 19 ms after Azure's `POST /query` line, so the clocks agree.
+
+- **This was the fast path.** The pull started 2.5 s after the scale-up, as in 5.4's sample 1 (2.4 s), not 14 s as in samples 2 and 3. So it does not test the slow path. For the slow path's projection, see the result below.
+- It is 10 s slower than 5.4's sample 1 (55.3 s), not faster. That sample happened to land 0.9 s before a 15 s probe, its startup took 24.0 s (here 26.2 s), and it made no model call. The 5 s probe pays off on an unlucky landing, which is what samples 2 and 3 of 5.4 had (12–14 s waits).
+- Probe → answered ≈ 7.1 s: the readiness wait, retrieval and the model call together (a warm Q005 took 2.1 s in R5). The split cannot be read without the probe's own log line. For samples 2 and 3, read it directly: `grep -E 'Application startup complete|GET /health|POST /query'`.
+
+**Samples 2 and 3, from t0:** pull starts +2.5 s and +2.3 s, image pulled +21.4 s and +20.6 s, container started +27.6 s and +26.5 s, `Application startup complete` +54.7 s and +51.1 s (27.1 s and 24.6 s after the container started), answered +65.3 s and +59.6 s. Vercel's end is 18 ms after Azure's `POST /query` line in both. In sample 3 the app was ready 0.4 s before the first probe, so no probe failed at all.
+
+**Result (2026-11-03): pass.** All three questions were `answered`, and the slowest took 65.3 s: 24.7 s under the 90 s timeout, and inside the 80 s line. The probe waits were 3.8, 3.0 and 0.4 s, all ≤ 5 s, against 12–14 s twice on 11-02.
+
+- **Limit: all three took the fast path.** The pull started 2.3–2.5 s after the scale-up and took 17.9–18.3 s. The slow path of 11-02 (the pull starting about 14 s after the scale-up, and taking up to 29 s) did not recur. So that path is projected, not measured. In 5.4's sample 3, startup completed 68.1 s after t0. Add a probe wait of 0–5 s, then the 7.1–8.1 s measured here from probe to answer: about **75–81 s**. That is under 90 s, at the 80 s line, with about 10 s of margin on the slowest path known.
+- **Probe → answered: 7.1, 7.7 and 8.1 s.** A warm Q005 takes 2.1 s through the BFF, so about 5–6 s is the readiness wait plus whatever the first request costs on a fresh process. These samples cannot split the two, because the console grep did not include `GET /health`. If more margin is ever needed, the readiness probe's 10 s period is the next lever.
+- The samples were not taken through the browser, so no warm-up check ran before them (5.4's rule).
 
 **Decide:**
 
@@ -1144,10 +1158,42 @@ This is the case the review described, on the real chain. From a cold replica (`
 2. While the line still says "Checking the live service…", click the Q005 preset and press **Ask**, within about 2 s.
 3. Expect an answer, not "Took too long". The warm-up line turns "awake" before or after the answer, in either order.
 4. Vercel logs: one `/api/chat/status` line (`ready`) and one `/api/chat` line (`answered`, `lease: released`). Record both `latency_ms`.
+5. **The race is proven only if** the question's `at` is earlier than the check's `at` + `latency_ms`: the question started while the check was still waiting. A check `latency_ms` of tens of seconds also shows the replica was cold.
+
+**Attempt 1 (2026-11-03): not a race. Redo it.** Both lines are correct, but they show the warm path:
+
+- The check started at 15:15:41.561 and answered `ready` in **81 ms**. The replica was still warm from R4's sample 1: its work ended at 15:12:01, and the 300 s cooldown ran until about 15:17.
+- The question started at 15:16:04.782, **23.2 s after the check started and 23.1 s after it answered**. So the check was no longer running.
+- The question: `answered` in 2,109 ms, Q005, quota global 2, client 2, in-flight 1, `lease: released`. Status quota: global 1, client 1 (of 15 and 3).
+
+For attempt 2: wait until `az containerapp replica list … --query 'length(@)'` prints `0` (at least 5 minutes after the last request), and press Ask within about 2 s of the chat coming into view.
+
+**Attempt 2 (2026-11-03): pass. The race happened, on a cold replica.**
+
+- The check started at 16:08:07.001 and answered `ready` after **61,516 ms**, so the replica was cold. It ended at 16:09:08.517. Status quota: global 2, client 2.
+- The question started at 16:08:09.097: **2.1 s after the check started**, and 59.4 s before the check answered. That meets the rule in step 5.
+- The question: `answered` in 62,372 ms, Q005, quota global 5, client 5, in-flight 1, `lease: released`. It ended at 16:09:11.469, 3.0 s after the check: both waited for the same cold start, then the question ran its retrieval and model call.
+- **Limit:** this cold start (about 61 s) would also have fit inside the old 75 s. The race works on the real chain. The 90 s matters on the slow path (R4's projection, 75–81 s).
 
 ### R6. Kill switch back OFF
 
 Upstash CLI: `SET procurerag-demo:<domain>:chat:enabled false`, then `GET` it. Day 30 turns it on.
+
+Then read what the paid calls cost, **on the deployed key**: the one in the Azure secret `openrouter-api-key`. A new key from the dashboard shows only its own, empty, usage. Its value never needs to leave Azure:
+
+- **No secret at all:** openrouter.ai → **Keys**, then read the demo key's row: its usage and its limit.
+- **Or in the terminal**, read into a variable from the Azure secret, as Block 4 does with the service token:
+
+  ```bash
+  OPENROUTER_DEMO_KEY=$(az containerapp secret list --name "$CONTAINERAPP_NAME" --resource-group "$RESOURCE_GROUP" \
+    --show-values --query "[?name=='openrouter-api-key'].value | [0]" -o tsv)
+  echo "${#OPENROUTER_DEMO_KEY}"      # the length only: stop if it is 0
+  curl -s https://openrouter.ai/api/v1/key -H "Authorization: Bearer $OPENROUTER_DEMO_KEY" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print({k: d.get(k) for k in ("limit","limit_remaining","limit_reset")})'
+  unset OPENROUTER_DEMO_KEY
+  ```
+
+  The `secret list --show-values` call is a `listSecrets` read, and it shows in the Activity Log, as in 6.3 f).
 
 ### R7. The US$10 budget target: alert delivery and the owner
 
@@ -1169,11 +1215,12 @@ Until then, check that Azure's emails reach an inbox you read on your phone, and
 
 | Step | Evidence | Result |
 |---|---|---|
-| R1 CI | | |
-| R1 real-store proof | | |
-| R2 probe | | |
-| R3 Vercel | | |
-| R4 cold questions | (table above) | |
-| R5 race | | |
-| R6 switch OFF | | |
-| R7 alert delivery | | |
+| R1 CI | PR #4 @ `5ffaa49`, run 41633954112: `build-and-test` passed in 2m2s. `npm audit --omit=dev`: 0 vulnerabilities. Playwright: 199 passed, 10 skipped (the real-store spec). After PR #4 merged into `0ct26-overhaul` (`d59e193`, 14:40:51 UTC), the push run 41656087414 passed too: 199 passed, 10 skipped, in 28.1 s | pass |
+| R1 real-store proof | `day-29-hosting` @ `5ffaa49` (the code merged as `d59e193`), against the live Upstash store, 2026-11-03: **10 passed in 8.5 s**. The race test admitted exactly 2 of 10. The expired-lease and bounded-expiry tests ran with `LEASE_TTL_MS` = 240,000 | pass |
+| R2 probe | `deploy.yml` run 41656466534 on `main` @ `74ec76b` (PR #17's merge), 2026-11-03 14:43 UTC: success. New revision `procurerag-api--0000006`. Startup probe read back: initial 25, period 5, failures 10 | pass |
+| R3 Vercel | `dpl_CNMNGCuhTVy5U3LhvuvCL4mYYbkT`, created 2026-11-03 14:53:50 UTC, from `day-29-hosting` after `5ffaa49` was committed (the tree is clean, and nothing was committed after it). All three R4/R5 log lines carry this id, so the domain serves it. This closes 6.2's open limit: a new production deploy goes live after the promote | pass |
+| R4 cold questions | (table above) 65.0, 65.3 and 59.6 s, all `answered`, leases released. Probe waits 3.8, 3.0 and 0.4 s. All three were fast-path pulls; the slow path is projected at 75–81 s | pass, one limit |
+| R5 race | Attempt 1: a warm replica (check 81 ms), with the question sent 23 s after the check had answered: not the race. Attempt 2: a cold check (61.5 s), the question sent 2.1 s after it started, `answered` in 62.4 s, lease released | pass |
+| R6 switch OFF | `SET … false` in the Upstash console after R5 (Juan, 2026-11-03). OFF until Day 30 | Done |
+| Key spend after R4/R5 | The deployed key (the Azure secret `openrouter-api-key`), read from Azure on 2026-11-03: `limit` 5, `limit_remaining` **4.99750565**, `limit_reset` monthly. It was 4.99860275 after 6.4, so today's 5 paid calls (R4 ×3, R5 ×2) cost US$0.0010971: about US$0.00022 each, 13.9 times under the worst case (5 × US$0.0030525). The key's total since it was created: US$0.00249435 for 12 calls. A first attempt read a **new** key instead, created that day and saved in ProcureRAG's git-ignored `.env`. That key was deleted in OpenRouter and removed from `.env` the same day | pass |
+| R7 alert delivery | | Delayed till 18 Nov, record that this has not been tested yet |
